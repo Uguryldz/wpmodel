@@ -1059,6 +1059,7 @@ const swaggerSpec = {
           },
         },
       },
+    },
     "/{sessionId}/messages/read": {
       post: {
         tags: ["Messages"],
@@ -1836,7 +1837,6 @@ const swaggerSpec = {
         },
       },
     },
-  },
   },
 };
 
