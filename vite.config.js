@@ -25,12 +25,21 @@ export default defineConfig({
       '/sessions': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        ws: true,
       },
-      '/docs': {
+      '/health': {
         target: 'http://localhost:3000',
         changeOrigin: true,
       },
+      // SessionId ile başlayan route'lar (örn: /default/chats, /test/chats)
+      '^/([a-zA-Z0-9_-]+)/(chats|contacts|groups|messages)': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        rewrite: (path) => path, // Path'i olduğu gibi bırak
+      },
     },
+    // /docs route'unu yakalayıp direkt backend'e yönlendir
+    middlewareMode: false,
   },
 });
 

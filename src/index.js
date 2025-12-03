@@ -55,6 +55,24 @@ import {
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
+// CORS middleware - Tüm route'lardan önce
+app.use((req, res, next) => {
+  // Tüm origin'lere izin ver
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // OPTIONS isteği için hemen cevap ver
+  if (req.method === 'OPTIONS') {
+    res.header('Content-Length', '0');
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 app.use(express.json({ limit: "20mb" }));
 
 const asyncHandler =
@@ -74,7 +92,9 @@ app.get("/health", (_req, res) => {
 app.get(
   "/sessions",
   asyncHandler((_req, res) => {
-    res.json(listSessions());
+    const sessions = listSessions();
+    console.log('[GET /sessions] Sessions:', JSON.stringify(sessions, null, 2));
+    res.json(sessions);
   })
 );
 
@@ -173,7 +193,9 @@ app.get(
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
 
+    console.log(`[GET /${sessionId}/chats] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     const result = await listChats(sessionId, cursor, Number(limit) || 25);
+    console.log(`[GET /${sessionId}/chats] Result:`, JSON.stringify(result, null, 2));
     res.json(result);
   })
 );
@@ -409,7 +431,9 @@ app.get(
   "/api/chats",
   asyncHandler(async (req, res) => {
     const accountId = req.query.accountId;
+    console.log(`[GET /api/chats] AccountId: ${accountId}`);
     const result = await listChats(accountId, null, 100);
+    console.log(`[GET /api/chats] Result:`, JSON.stringify(result, null, 2));
     res.json(result);
   })
 );
@@ -863,6 +887,11 @@ app.post(
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((err, _req, res, _next) => {
+  // CORS header'larını error response'a da ekle
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  
   console.error(err);
   const status = err.status || 500;
   res.status(status).json({

@@ -575,7 +575,28 @@ export const getLastQr = (accountId) => {
 export const listChats = async (accountId, cursor, limit = 25) => {
   const sessionId = getAccountId(accountId);
   
+  // Önce memory store'dan al (en güncel veri)
+  const instance = getOrCreateInstance(accountId);
+  const memoryChats = Array.from(instance.chatsStore.values());
+  
+  console.log(`[listChats] SessionId: ${sessionId}, Memory chats count: ${memoryChats.length}`);
+  
+  // Eğer memory store'da chat varsa, onları kullan
+  if (memoryChats.length > 0) {
+    console.log(`[listChats] Memory store'dan ${memoryChats.length} chat bulundu`);
+    const formatted = memoryChats
+      .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0))
+      .slice(0, limit)
+      .map(formatChat);
+    return {
+      data: formatted,
+      cursor: null,
+    };
+  }
+  
+  // Memory store boşsa database'den al
   try {
+    console.log(`[listChats] Memory store boş, database'den alınıyor...`);
     const chats = await prisma.chat.findMany({
       cursor: cursor ? { pkId: Number(cursor) } : undefined,
       take: Number(limit),
@@ -584,6 +605,7 @@ export const listChats = async (accountId, cursor, limit = 25) => {
       orderBy: { conversationTimestamp: "desc" },
     });
 
+    console.log(`[listChats] Database'den ${chats.length} chat bulundu`);
     const serialized = chats.map((c) => serializePrisma(c));
     const nextCursor =
       serialized.length !== 0 && serialized.length === Number(limit)
@@ -596,8 +618,8 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     };
   } catch (error) {
     logger.error({ error, sessionId }, "Chat listesi alınamadı");
-    // Fallback to memory store
-    const instance = getOrCreateInstance(accountId);
+    console.error(`[listChats] Database hatası:`, error);
+    // Fallback to memory store (zaten boş ama yine de dene)
     return {
       data: Array.from(instance.chatsStore.values()).map(formatChat),
       cursor: null,
