@@ -1,5 +1,7 @@
 import express from "express";
 import swaggerUi from "swagger-ui-express";
+import { WebSocketServer } from "ws";
+import { createServer } from "http";
 
 import swaggerSpec from "./swagger.js";
 import {
@@ -50,10 +52,58 @@ import {
   sendLocation,
   sendContactCard,
   createPoll,
+  setWebSocketBroadcast,
+  restoreSessions,
 } from "./baileysClient.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+
+// HTTP server oluştur (WebSocket için gerekli)
+const server = createServer(app);
+
+// WebSocket server oluştur
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+// WebSocket bağlantılarını sakla
+const wsClients = new Set();
+
+wss.on("connection", (ws, req) => {
+  console.log("[WebSocket] Yeni bağlantı:", req.socket.remoteAddress);
+  wsClients.add(ws);
+
+  ws.on("close", () => {
+    console.log("[WebSocket] Bağlantı kapandı");
+    wsClients.delete(ws);
+  });
+
+  ws.on("error", (error) => {
+    console.error("[WebSocket] Hata:", error);
+  });
+
+  // İlk bağlantıda mevcut session'ları gönder
+  ws.send(JSON.stringify({
+    type: "connected",
+    message: "WebSocket bağlantısı kuruldu"
+  }));
+});
+
+// WebSocket'e mesaj gönderme fonksiyonu
+const broadcastToWebSocket = (data) => {
+  const message = JSON.stringify(data);
+  wsClients.forEach((client) => {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      try {
+        client.send(message);
+      } catch (error) {
+        console.error("[WebSocket] Mesaj gönderilemedi:", error);
+      }
+    }
+  });
+};
+
+// Baileys'e WebSocket broadcast fonksiyonunu set et
+setWebSocketBroadcast(broadcastToWebSocket);
 
 // CORS middleware - Tüm route'lardan önce
 app.use((req, res, next) => {
@@ -136,6 +186,38 @@ app.post(
 
     await initBaileys(sessionId);
     res.json(getConnectionState(sessionId));
+  })
+);
+
+// === REST tarzı Chats API (/api/chats) ===
+// DİKKAT: Bunu dinamik "/:sessionId/chats" rotasından ÖNCE tanımlıyoruz ki
+// "/api/chats" isteği yanlışlıkla sessionId="api" olarak eşleşmesin.
+app.get(
+  "/api/chats",
+  asyncHandler(async (req, res) => {
+    const accountId = req.query.accountId;
+    const limit = Number(req.query.limit) || 50;
+    console.log(`[GET /api/chats] AccountId: ${accountId}, Limit: ${limit}`);
+
+    const result = await listChats(accountId, null, limit);
+    console.log(`[GET /api/chats] Result:`, JSON.stringify(result, null, 2));
+    res.json(result);
+  })
+);
+
+// === REST tarzı Contacts API (/api/contacts) ===
+// DİKKAT: Bunu dinamik "/:sessionId/contacts" rotasından ÖNCE tanımlıyoruz ki
+// "/api/contacts" isteği yanlışlıkla sessionId="api" olarak eşleşmesin.
+app.get(
+  "/api/contacts",
+  asyncHandler(async (req, res) => {
+    const accountId = req.query.accountId;
+    const limit = Number(req.query.limit) || 50;
+    console.log(`[GET /api/contacts] AccountId: ${accountId}, Limit: ${limit}`);
+
+    const result = await listContacts(accountId, null, limit);
+    console.log(`[GET /api/contacts] Result:`, JSON.stringify(result, null, 2));
+    res.json(result);
   })
 );
 
@@ -222,7 +304,9 @@ app.get(
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
+    console.log(`[GET /${sessionId}/contacts] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     const result = await listContacts(sessionId, cursor, Number(limit) || 50);
+    console.log(`[GET /${sessionId}/contacts] Result:`, JSON.stringify(result, null, 2));
     res.json(result);
   })
 );
@@ -424,17 +508,6 @@ app.get(
       qr,
       message: "Bu QR'ı WhatsApp uygulamasından tarayarak oturum açabilirsiniz.",
     });
-  })
-);
-
-app.get(
-  "/api/chats",
-  asyncHandler(async (req, res) => {
-    const accountId = req.query.accountId;
-    console.log(`[GET /api/chats] AccountId: ${accountId}`);
-    const result = await listChats(accountId, null, 100);
-    console.log(`[GET /api/chats] Result:`, JSON.stringify(result, null, 2));
-    res.json(result);
   })
 );
 
@@ -900,11 +973,16 @@ app.use((err, _req, res, _next) => {
 });
 
 const start = async () => {
+  // Mevcut session'ları restore et (backend restart sonrası)
+  console.log("[start] Mevcut session'lar restore ediliyor...");
+  await restoreSessions();
+  
   // Uygulama başlatılırken varsayılan session oluşturulmaz
   // Session'lar kullanıcı tarafından POST /sessions/add ile oluşturulur
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`API hazır: http://localhost:${PORT}`);
     console.log(`Swagger dokümanı: http://localhost:${PORT}/docs`);
+    console.log(`WebSocket hazır: ws://localhost:${PORT}/ws`);
   });
 };
 

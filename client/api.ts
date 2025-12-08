@@ -95,21 +95,21 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
 };
 
 // Chats API
-export const getChats = async (sessionId: string): Promise<Chat[]> => {
+export const getChats = async (sessionId: string, limit: number = 50): Promise<Chat[]> => {
   try {
-    console.log('🔵 [API] getChats çağrılıyor, sessionId:', sessionId);
+    console.log('🔵 [API] getChats çağrılıyor, sessionId:', sessionId, 'limit:', limit);
     console.log('🔵 [API] API_BASE:', API_BASE);
     
-    // Önce /:sessionId/chats endpoint'ini dene (baileys-api-master formatı)
-    let url = `${API_BASE}/${sessionId}/chats`;
+    // Önce /:sessionId/chats endpoint'ini dene (baileys-api-master formatı, limit ile)
+    let url = `${API_BASE}/${sessionId}/chats?limit=${limit}`;
     console.log('🔵 [API] Chats API çağrısı (1. deneme):', url);
     let response = await fetch(url);
     console.log('🔵 [API] Chats API response status (1. deneme):', response.status);
     console.log('🔵 [API] Response ok (1. deneme):', response.ok);
     
-    // Eğer başarısız ise /api/chats endpoint'ini dene
+    // Eğer başarısız ise /api/chats endpoint'ini dene (limit ile)
     if (!response.ok) {
-      url = `${API_BASE}/api/chats?accountId=${sessionId}`;
+      url = `${API_BASE}/api/chats?accountId=${sessionId}&limit=${limit}`;
       console.log('🔵 [API] Chats API çağrısı (2. deneme):', url);
       response = await fetch(url);
       console.log('🔵 [API] Chats API response status (2. deneme):', response.status);
@@ -150,19 +150,80 @@ export const getChats = async (sessionId: string): Promise<Chat[]> => {
 };
 
 // Contacts API
-export const getContacts = async (sessionId: string): Promise<Contact[]> => {
-  const response = await fetch(`${API_BASE}/${sessionId}/contacts`);
-  if (!response.ok) throw new Error('Kişiler alınamadı');
-  const data = await response.json();
-  return data.data || [];
+export const getContacts = async (sessionId: string, limit: number = 500): Promise<Contact[]> => {
+  try {
+    const response = await fetch(`${API_BASE}/${sessionId}/contacts?limit=${limit}`);
+    if (!response.ok) {
+      console.warn('Contact\'lar alınamadı:', response.status);
+      return [];
+    }
+    const data = await response.json();
+    // Response formatı: { data: [...] } veya direkt array
+    if (Array.isArray(data)) {
+      return data;
+    } else if (data.data && Array.isArray(data.data)) {
+      return data.data;
+    }
+    return [];
+  } catch (error) {
+    console.error('Contact\'lar yüklenirken hata:', error);
+    return [];
+  }
 };
 
 // Messages API
 export const getMessages = async (sessionId: string, jid: string, limit: number = 20): Promise<any[]> => {
-  const response = await fetch(`${API_BASE}/${sessionId}/chats/${jid}?limit=${limit}`);
-  if (!response.ok) throw new Error('Mesajlar alınamadı');
-  const data = await response.json();
-  return data.data || [];
+  try {
+    console.log('🔵 [API] getMessages çağrılıyor, sessionId:', sessionId, 'jid:', jid, 'limit:', limit);
+    console.log('🔵 [API] API_BASE:', API_BASE);
+
+    // 1. tercih: /:sessionId/messages?jid=... (cursor destekli endpoint)
+    let url = `${API_BASE}/${sessionId}/messages?jid=${encodeURIComponent(jid)}&limit=${limit}`;
+    console.log('🔵 [API] Messages API çağrısı (1. deneme):', url);
+    let response = await fetch(url);
+    console.log('🔵 [API] Messages response status (1. deneme):', response.status, 'ok:', response.ok);
+
+    // 2. tercih: /:sessionId/chats/:jid (eski cursor endpoint’i)
+    if (!response.ok) {
+      url = `${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}?limit=${limit}`;
+      console.log('🔵 [API] Messages API çağrısı (2. deneme):', url);
+      response = await fetch(url);
+      console.log('🔵 [API] Messages response status (2. deneme):', response.status, 'ok:', response.ok);
+    }
+
+    // 3. tercih: /api/messages/:jid?accountId=...
+    if (!response.ok) {
+      url = `${API_BASE}/api/messages/${encodeURIComponent(jid)}?accountId=${sessionId}&limit=${limit}`;
+      console.log('🔵 [API] Messages API çağrısı (3. deneme):', url);
+      response = await fetch(url);
+      console.log('🔵 [API] Messages response status (3. deneme):', response.status, 'ok:', response.ok);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('🔴 [API] Messages API error:', errorText);
+      throw new Error(`Mesajlar alınamadı: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('🟢 [API] Messages API data (ham):', data);
+
+    let messages: any[] = [];
+    if (Array.isArray(data)) {
+      messages = data;
+    } else if (data.data && Array.isArray(data.data)) {
+      messages = data.data;
+    } else {
+      console.warn('🟡 [API] Beklenmeyen messages response formatı:', data);
+      messages = [];
+    }
+
+    console.log('🟢 [API] Messages (işlenmiş) count:', messages.length);
+    return messages;
+  } catch (error: any) {
+    console.error('🔴 [API] Messages API catch error:', error);
+    throw error;
+  }
 };
 
 export const sendMessage = async (sessionId: string, jid: string, message: string): Promise<void> => {

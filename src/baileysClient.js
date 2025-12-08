@@ -9,12 +9,22 @@ import makeWASocket, {
 } from "baileys";
 import Boom from "@hapi/boom";
 import qrcode from "qrcode-terminal";
+import { readdir, rm } from "fs/promises";
+import { existsSync } from "fs";
+import { join } from "path";
 import { prisma, logger } from "./shared.js";
 import { serializePrisma } from "./utils.js";
 import { findSessionByWhatsAppJid, migrateSessionData } from "./sessionMapper.js";
 
 const AUTH_FOLDER = "./auth_info";
 const DEFAULT_ACCOUNT_ID = "default";
+
+// WebSocket broadcast fonksiyonu (index.js'den set edilecek)
+let wsBroadcastFn = null;
+
+export const setWebSocketBroadcast = (fn) => {
+  wsBroadcastFn = fn;
+};
 
 /**
  * Her hesap için ayrı soket, store ve durum bilgisi tutuyoruz
@@ -99,7 +109,7 @@ const normalizeJid = (value) => {
 
 const formatChat = (chat) => ({
   id: chat.id,
-  name: chat.name || chat.subject || chat.id,
+  name: chat.name || chat.displayName || chat.subject || chat.id,
   unreadCount: chat.unreadCount ?? 0,
   conversationTimestamp: chat.conversationTimestamp ?? null,
   isMuted: Boolean(chat.isMuted),
@@ -220,9 +230,48 @@ const bindSocketEvents = (instance) => {
             participant: chat.participants ? JSON.stringify(chat.participants) : undefined,
           },
         });
+
+        // Grup değilse (bireysel sohbet), chat'ten contact oluştur
+        if (!chat.id.includes('@g.us')) {
+          try {
+            await prisma.contact.upsert({
+              where: {
+                sessionId_id: {
+                  sessionId,
+                  id: chat.id,
+                },
+              },
+              create: {
+                sessionId,
+                id: chat.id,
+                name: chat.name || chat.displayName || null,
+                notify: chat.name || null,
+                verifiedName: null,
+                imgUrl: null,
+                status: null,
+              },
+              update: {
+                name: chat.name || chat.displayName || undefined,
+                notify: chat.name || undefined,
+              },
+            });
+          } catch (error) {
+            // Contact kaydetme hatası kritik değil, devam et
+            logger.debug({ error, sessionId, chatId: chat.id }, "Chat'ten contact oluşturulamadı");
+          }
+        }
       } catch (error) {
         logger.error({ error, sessionId, chatId: chat.id }, "Chat kaydedilemedi");
       }
+    }
+    console.log(`[${sessionId}] chats.set: ${chats.length} chat kaydedildi, contact'lar oluşturuldu`);
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "chats.set",
+        sessionId,
+        chats: chats.map(formatChat),
+      });
     }
   });
 
@@ -263,9 +312,47 @@ const bindSocketEvents = (instance) => {
             pinned: chat.pinned !== undefined ? chat.pinned : undefined,
           },
         });
+
+        // Grup değilse (bireysel sohbet), chat'ten contact oluştur
+        if (!chat.id.includes('@g.us')) {
+          try {
+            await prisma.contact.upsert({
+              where: {
+                sessionId_id: {
+                  sessionId,
+                  id: chat.id,
+                },
+              },
+              create: {
+                sessionId,
+                id: chat.id,
+                name: chat.name || chat.displayName || null,
+                notify: chat.name || null,
+                verifiedName: null,
+                imgUrl: null,
+                status: null,
+              },
+              update: {
+                name: chat.name || chat.displayName || undefined,
+                notify: chat.name || undefined,
+              },
+            });
+          } catch (error) {
+            // Contact kaydetme hatası kritik değil, devam et
+            logger.debug({ error, sessionId, chatId: chat.id }, "Chat'ten contact oluşturulamadı");
+          }
+        }
       } catch (error) {
         logger.error({ error, sessionId, chatId: chat.id }, "Chat kaydedilemedi");
       }
+    }
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "chats.upsert",
+        sessionId,
+        chats: chats.map(formatChat),
+      });
     }
   });
 
@@ -297,10 +384,61 @@ const bindSocketEvents = (instance) => {
         logger.error({ error, sessionId, chatId: update.id }, "Chat güncellenemedi");
       }
     }
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "chats.update",
+        sessionId,
+        updates,
+      });
+    }
   });
 
   // Contacts - Prisma'ya kaydet
+  // contacts.set: Tüm contact'lar bir kerede gelir (bağlantı açıldığında)
+  sock.ev.on("contacts.set", async ({ contacts }) => {
+    console.log(`[${sessionId}] contacts.set event: ${contacts?.length || 0} contact alındı`);
+    if (contacts && Array.isArray(contacts)) {
+      for (const contact of contacts) {
+        try {
+          await prisma.contact.upsert({
+            where: {
+              sessionId_id: {
+                sessionId,
+                id: contact.id,
+              },
+            },
+            create: {
+              sessionId,
+              id: contact.id,
+              name: contact.name || null,
+              notify: contact.notify || null,
+              verifiedName: contact.verifiedName || null,
+              imgUrl: contact.imgUrl || null,
+              status: contact.status || null,
+            },
+            update: {
+              name: contact.name || undefined,
+              notify: contact.notify || undefined,
+              verifiedName: contact.verifiedName || undefined,
+              imgUrl: contact.imgUrl || undefined,
+              status: contact.status || undefined,
+            },
+          });
+        } catch (error) {
+          logger.error({ error, sessionId, contactId: contact.id }, "Contact kaydedilemedi");
+        }
+      }
+      console.log(`[${sessionId}] ${contacts.length} contact veritabanına kaydedildi`);
+    }
+  });
+
+  // contacts.upsert: Yeni veya güncellenmiş contact'lar
   sock.ev.on("contacts.upsert", async (contacts) => {
+    console.log(`[${sessionId}] contacts.upsert event: ${contacts?.length || 0} contact alındı`);
+    if (!Array.isArray(contacts)) {
+      contacts = [contacts];
+    }
     for (const contact of contacts) {
       const existing = instance.chatsStore.get(contact.id);
       if (existing) {
@@ -357,6 +495,17 @@ const bindSocketEvents = (instance) => {
 
     if (type === "notify") {
       logger.info({ sessionId, count: messages.length }, "Yeni mesajlar alındı");
+      
+      // WebSocket'e bildir - yeni mesajlar geldi
+      if (wsBroadcastFn) {
+        const formattedMessages = messages.map(formatMessage);
+        wsBroadcastFn({
+          type: "messages.upsert",
+          sessionId,
+          messages: formattedMessages,
+          eventType: type,
+        });
+      }
     }
   });
 
@@ -481,6 +630,21 @@ const bindSocketEvents = (instance) => {
                 data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
               },
             });
+
+            // Bağlantı açıldığında contact'ları yükle
+            // Baileys otomatik olarak contacts.set event'ini gönderir, ama emin olmak için
+            // birkaç saniye bekleyip contact sayısını kontrol edelim
+            setTimeout(async () => {
+              try {
+                const contactCount = await prisma.contact.count({ where: { sessionId } });
+                console.log(`[${sessionId}] Veritabanında ${contactCount} contact var`);
+                if (contactCount === 0) {
+                  console.log(`[${sessionId}] Contact bulunamadı, contacts.set event'i bekleniyor...`);
+                }
+              } catch (error) {
+                logger.error({ error, sessionId }, "Contact sayısı kontrol edilemedi");
+              }
+            }, 5000);
           }
         } catch (error) {
           logger.error({ error, sessionId }, "WhatsApp numarası eşleştirilemedi");
@@ -556,6 +720,41 @@ export const initBaileys = async (accountId) => {
   startSocket(instance);
 
   return instance.sock;
+};
+
+// Mevcut session'ları restore et (backend restart sonrası)
+export const restoreSessions = async () => {
+  try {
+    // auth_info klasörünün varlığını kontrol et
+    if (!existsSync(AUTH_FOLDER)) {
+      console.log("[restoreSessions] auth_info klasörü bulunamadı, restore edilecek session yok");
+      return;
+    }
+
+    // auth_info klasöründeki tüm session klasörlerini listele
+    const sessionDirs = await readdir(AUTH_FOLDER, { withFileTypes: true });
+    const sessionIds = sessionDirs
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => dirent.name);
+
+    console.log(`[restoreSessions] ${sessionIds.length} session klasörü bulundu:`, sessionIds);
+
+    // Her session için initBaileys çağır
+    for (const sessionId of sessionIds) {
+      try {
+        console.log(`[restoreSessions] Session restore ediliyor: ${sessionId}`);
+        await initBaileys(sessionId);
+        console.log(`[restoreSessions] ✅ Session restore edildi: ${sessionId}`);
+      } catch (error) {
+        console.error(`[restoreSessions] ❌ Session restore edilemedi (${sessionId}):`, error);
+        // Hata olsa bile diğer session'ları restore etmeye devam et
+      }
+    }
+
+    console.log(`[restoreSessions] Tüm session'lar restore edildi`);
+  } catch (error) {
+    console.error("[restoreSessions] Restore hatası:", error);
+  }
 };
 
 export const getConnectionState = (accountId) => {
@@ -796,6 +995,17 @@ export const deleteSession = async (accountId) => {
     ]);
   } catch (error) {
     logger.error({ error, sessionId }, "Session verileri silinemedi");
+  }
+
+  // auth_info klasöründeki session dosyalarını sil
+  try {
+    const authDir = `${AUTH_FOLDER}/${sessionId}`;
+    if (existsSync(authDir)) {
+      await rm(authDir, { recursive: true, force: true });
+      console.log(`[deleteSession] Auth klasörü silindi: ${authDir}`);
+    }
+  } catch (error) {
+    logger.error({ error, sessionId }, "Auth klasörü silinemedi");
   }
 
   removeInstance(accountId);
