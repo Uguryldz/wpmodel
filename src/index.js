@@ -135,6 +135,17 @@ const asyncHandler =
     }
   };
 
+const waitForQrOrStatus = async (sessionId, { timeoutMs = 8000, intervalMs = 300 } = {}) => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const state = getConnectionState(sessionId);
+    if (!state) break;
+    if (state.lastQr || state.status === "open") return state;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return getConnectionState(sessionId);
+};
+
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
@@ -185,7 +196,8 @@ app.post(
     }
 
     await initBaileys(sessionId);
-    res.json(getConnectionState(sessionId));
+    const state = await waitForQrOrStatus(sessionId);
+    res.json(state || { error: "Session could not be initialized" });
   })
 );
 
