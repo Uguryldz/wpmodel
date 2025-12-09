@@ -666,6 +666,65 @@ const bindSocketEvents = (instance) => {
               }
             }, 5000);
 
+            // Bağlantı açıldığında chats'in gelmesini bekle ve kontrol et
+            // chats.set event'i genellikle bağlantı açıldıktan sonra gelir
+            // Ama bazen gelmeyebilir, bu durumda veritabanından yüklemek gerekebilir
+            setTimeout(async () => {
+              try {
+                const memoryChatsCount = instance.chatsStore.size;
+                console.log(`[${sessionId}] Memory store'da ${memoryChatsCount} chat var (2 saniye sonra kontrol)`);
+                
+                if (memoryChatsCount === 0) {
+                  console.log(`[${sessionId}] ⚠️ Memory store'da chat yok, chats.set event'i bekleniyor...`);
+                  
+                  // Daha uzun süre bekle (chats.set event'i geç gelebilir)
+                  setTimeout(async () => {
+                    const memoryChatsCountAfter = instance.chatsStore.size;
+                    if (memoryChatsCountAfter === 0) {
+                      console.log(`[${sessionId}] ⚠️ Hala memory store'da chat yok (7 saniye sonra)`);
+                      // Veritabanından kontrol et ve eğer varsa memory store'a yükle
+                      try {
+                        const dbChats = await prisma.chat.findMany({
+                          where: { sessionId },
+                          take: 100,
+                          orderBy: { conversationTimestamp: "desc" },
+                        });
+                        
+                        if (dbChats.length > 0) {
+                          console.log(`[${sessionId}] Veritabanında ${dbChats.length} chat var, memory store'a yükleniyor...`);
+                          for (const dbChat of dbChats) {
+                            const serialized = serializePrisma(dbChat);
+                            // Memory store formatına çevir
+                            instance.chatsStore.set(serialized.id, {
+                              id: serialized.id,
+                              name: serialized.name,
+                              displayName: serialized.displayName,
+                              unreadCount: serialized.unreadCount || 0,
+                              conversationTimestamp: Number(serialized.conversationTimestamp || 0),
+                              lastMsgTimestamp: Number(serialized.lastMsgTimestamp || 0),
+                              archived: serialized.archived || false,
+                              pinned: serialized.pinned || null,
+                            });
+                          }
+                          console.log(`[${sessionId}] ✅ ${dbChats.length} chat veritabanından memory store'a yüklendi`);
+                        } else {
+                          console.log(`[${sessionId}] Veritabanında da chat yok`);
+                        }
+                      } catch (dbError) {
+                        logger.error({ error: dbError, sessionId }, "Veritabanından chat yüklenemedi");
+                      }
+                    } else {
+                      console.log(`[${sessionId}] ✅ Memory store'da ${memoryChatsCountAfter} chat bulundu (WhatsApp cihazından)`);
+                    }
+                  }, 5000); // Toplam 7 saniye bekle
+                } else {
+                  console.log(`[${sessionId}] ✅ Memory store'da ${memoryChatsCount} chat var (WhatsApp cihazından)`);
+                }
+              } catch (error) {
+                logger.error({ error, sessionId }, "Chat sayısı kontrol edilemedi");
+              }
+            }, 2000); // 2 saniye bekle, chats.set event'i gelsin
+
             // Bağlantı açıldığında grupları senkronize et
             setTimeout(async () => {
               try {
@@ -876,11 +935,48 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     console.log(`[listChats] WhatsApp cihazından chat listesi çekiliyor (sessionId: ${sessionId})...`);
     const instance = getOrCreateInstance(accountId);
     
+    // Bağlantı durumunu kontrol et
+    console.log(`[listChats] Connection state: ${instance.connectionState.status}`);
+    
+    if (instance.connectionState.status !== "open") {
+      console.log(`[listChats] ⚠️ Bağlantı açık değil! Status: ${instance.connectionState.status}`);
+      // Bağlantı açık değilse veritabanından çek (fallback)
+      console.log(`[listChats] Veritabanından chat listesi çekiliyor (fallback)...`);
+      try {
+        const chats = await prisma.chat.findMany({
+          cursor: cursor ? { pkId: Number(cursor) } : undefined,
+          take: Number(limit),
+          skip: cursor ? 1 : 0,
+          where: { sessionId },
+          orderBy: { conversationTimestamp: "desc" },
+        });
+
+        console.log(`[listChats] Veritabanından ${chats.length} chat bulundu`);
+        const serialized = chats.map((c) => serializePrisma(c));
+        const nextCursor =
+          serialized.length !== 0 && serialized.length === Number(limit)
+            ? serialized[serialized.length - 1].pkId
+            : null;
+
+        return {
+          data: serialized.map(formatChat),
+          cursor: nextCursor,
+        };
+      } catch (dbError) {
+        logger.error({ error: dbError, sessionId }, "Veritabanından chat listesi alınamadı");
+        return {
+          data: [],
+          cursor: null,
+        };
+      }
+    }
+    
     // Memory store'dan al (WhatsApp'tan gelen en güncel veriler)
     const memoryChats = Array.from(instance.chatsStore.values());
+    console.log(`[listChats] Memory store'da ${memoryChats.length} chat var`);
     
     if (memoryChats.length > 0) {
-      console.log(`[listChats] Memory store'dan ${memoryChats.length} chat bulundu (WhatsApp cihazından)`);
+      console.log(`[listChats] ✅ Memory store'dan ${memoryChats.length} chat bulundu (WhatsApp cihazından)`);
       const sorted = memoryChats.sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
       const slice = sorted.slice(0, limit);
       return {
@@ -889,25 +985,110 @@ export const listChats = async (accountId, cursor, limit = 25) => {
       };
     }
     
-    // Memory store boşsa, bağlantı henüz açılmamış veya chats.set event'i henüz gelmemiş
-    console.log(`[listChats] Memory store boş - bağlantı açık mı kontrol ediliyor...`);
-    const sock = ensureSocket(accountId);
+    // Memory store boşsa, chats.set event'i henüz gelmemiş olabilir
+    // Önce veritabanından chats'i yükle ve memory store'a ekle
+    // Böylece en azından önceki chats'ler görünebilir
+    console.log(`[listChats] Memory store boş - veritabanından chats yükleniyor ve memory store'a ekleniyor...`);
     
-    // Bağlantı açıksa ama chats henüz gelmemişse, bir süre bekle
-    // (chats.set event'i genellikle bağlantı açıldıktan sonra gelir)
-    if (instance.connectionState.status === "open") {
-      console.log(`[listChats] Bağlantı açık ama chats henüz gelmemiş, boş liste döndürülüyor`);
+    try {
+      // Veritabanından chats'i çek
+      const dbChats = await prisma.chat.findMany({
+        where: { sessionId },
+        take: Number(limit) || 50,
+        orderBy: { conversationTimestamp: "desc" },
+      });
+      
+      if (dbChats.length > 0) {
+        console.log(`[listChats] Veritabanından ${dbChats.length} chat bulundu, memory store'a yükleniyor...`);
+        
+        // Veritabanından chats'i memory store'a yükle
+        for (const dbChat of dbChats) {
+          const serialized = serializePrisma(dbChat);
+          // Memory store formatına çevir (Baileys chat formatı)
+          instance.chatsStore.set(serialized.id, {
+            id: serialized.id,
+            name: serialized.name,
+            displayName: serialized.displayName,
+            unreadCount: serialized.unreadCount || 0,
+            conversationTimestamp: Number(serialized.conversationTimestamp || 0),
+            lastMsgTimestamp: Number(serialized.lastMsgTimestamp || 0),
+            archived: serialized.archived || false,
+            pinned: serialized.pinned || null,
+            participants: serialized.participant ? JSON.parse(serialized.participant) : undefined,
+          });
+        }
+        
+        console.log(`[listChats] ✅ ${dbChats.length} chat veritabanından memory store'a yüklendi`);
+        
+        // Şimdi memory store'dan çek ve döndür
+        const memoryChatsAfterLoad = Array.from(instance.chatsStore.values());
+        const sorted = memoryChatsAfterLoad.sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
+        const slice = sorted.slice(0, limit);
+        
+        return {
+          data: slice.map(formatChat),
+          cursor: null,
+        };
+      } else {
+        console.log(`[listChats] Veritabanında da chat yok`);
+      }
+    } catch (dbError) {
+      console.error(`[listChats] Veritabanından chat yüklenirken hata:`, dbError);
+      logger.error({ error: dbError, sessionId }, "Veritabanından chat yüklenemedi");
+    }
+    
+    // Eğer veritabanında da yoksa, chats.set event'ini bekle
+    console.log(`[listChats] chats.set event'ini bekliyoruz (max 2 saniye)...`);
+    for (let i = 0; i < 4; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500)); // 500ms bekle
+      
+      const memoryChatsAfterWait = Array.from(instance.chatsStore.values());
+      if (memoryChatsAfterWait.length > 0) {
+        console.log(`[listChats] ✅ Bekleme sonrası memory store'da ${memoryChatsAfterWait.length} chat bulundu (WhatsApp cihazından)`);
+        const sorted = memoryChatsAfterWait.sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
+        const slice = sorted.slice(0, limit);
+        return {
+          data: slice.map(formatChat),
+          cursor: null,
+        };
+      }
+    }
+    
+    console.log(`[listChats] ⚠️ chats.set event'i gelmedi ve veritabanında da chat yok`);
+    
+    // fetchChats yoksa veya başarısız olduysa, veritabanından çek (fallback)
+    console.log(`[listChats] Veritabanından chat listesi çekiliyor (fallback)...`);
+    try {
+      const chats = await prisma.chat.findMany({
+        cursor: cursor ? { pkId: Number(cursor) } : undefined,
+        take: Number(limit),
+        skip: cursor ? 1 : 0,
+        where: { sessionId },
+        orderBy: { conversationTimestamp: "desc" },
+      });
+
+      console.log(`[listChats] Veritabanından ${chats.length} chat bulundu`);
+      const serialized = chats.map((c) => serializePrisma(c));
+      const nextCursor =
+        serialized.length !== 0 && serialized.length === Number(limit)
+          ? serialized[serialized.length - 1].pkId
+          : null;
+
+      return {
+        data: serialized.map(formatChat),
+        cursor: nextCursor,
+      };
+    } catch (dbError) {
+      logger.error({ error: dbError, sessionId }, "Veritabanından chat listesi alınamadı");
       return {
         data: [],
         cursor: null,
       };
     }
-    
-    // Bağlantı açık değilse hata
-    throw new Error("WhatsApp bağlantısı açık değil");
   } catch (error) {
     logger.error({ error, sessionId }, "Chat listesi alınamadı");
-    console.error(`[listChats] Hata:`, error);
+    console.error(`[listChats] ❌ Hata:`, error.message);
+    console.error(`[listChats] Stack:`, error.stack);
     return {
       data: [],
       cursor: null,
@@ -920,6 +1101,96 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
   const normalizedJid = jidNormalizedUser(normalizeJid(jid));
 
   try {
+    // Önce WhatsApp cihazından (memory store - messages.set/messages.upsert event'leri ile gelen veriler)
+    console.log(`[listMessages] WhatsApp cihazından mesaj listesi çekiliyor (sessionId: ${sessionId}, jid: ${normalizedJid})...`);
+    const instance = getOrCreateInstance(accountId);
+    
+    // Memory store'dan al (WhatsApp'tan gelen en güncel veriler)
+    const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+    
+    if (memoryMessages.length > 0) {
+      console.log(`[listMessages] Memory store'dan ${memoryMessages.length} mesaj bulundu (WhatsApp cihazından)`);
+      // En yeniden eskiye doğru sırala ve limit uygula
+      const sorted = memoryMessages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      const slice = sorted.slice(0, limit);
+      return {
+        data: slice,
+        cursor: null,
+      };
+    }
+    
+    // Memory store boşsa, WhatsApp'tan fetch et
+    console.log(`[listMessages] Memory store boş - WhatsApp'tan mesaj fetch ediliyor...`);
+    const sock = ensureSocket(accountId);
+    
+    // Bağlantı kontrolü
+    if (instance.connectionState.status !== "open") {
+      console.log(`[listMessages] ⚠️ Bağlantı açık değil! Status: ${instance.connectionState.status}`);
+      // Bağlantı açık değilse veritabanından çek (fallback)
+      console.log(`[listMessages] Veritabanından mesajlar çekiliyor (fallback)...`);
+      const messages = await prisma.message.findMany({
+        cursor: cursor ? { pkId: Number(cursor) } : undefined,
+        take: Number(limit),
+        skip: cursor ? 1 : 0,
+        where: {
+          sessionId,
+          remoteJid: normalizedJid,
+        },
+        orderBy: { messageTimestamp: "desc" },
+      });
+
+      const serialized = messages.map((m) => serializePrisma(m));
+      const nextCursor =
+        serialized.length !== 0 && serialized.length === Number(limit)
+          ? serialized[serialized.length - 1].pkId
+          : null;
+
+      return {
+        data: serialized.map((m) => ({
+          id: m.id,
+          from: m.remoteJid,
+          fromMe: m.key?.fromMe || false,
+          participant: m.participant || null,
+          timestamp: Number(m.messageTimestamp || 0),
+          type: m.messageStubType || Object.keys(m.message || {})[0] || "unknown",
+          text: extractText(m.message),
+        })),
+        cursor: nextCursor,
+      };
+    }
+    
+    // Baileys'te mesajları fetch etmek için loadMessages kullan
+    // Eğer loadMessages yoksa, veritabanından çek
+    if (typeof sock.loadMessages === 'function') {
+      try {
+        console.log(`[listMessages] sock.loadMessages çağrılıyor...`);
+        const fetchedMessages = await sock.loadMessages(normalizedJid, Number(limit) || 25);
+        console.log(`[listMessages] WhatsApp'tan ${fetchedMessages?.length || 0} mesaj fetch edildi`);
+        
+        if (fetchedMessages && fetchedMessages.length > 0) {
+          // Memory store'a kaydet
+          for (const msg of fetchedMessages) {
+            saveMessages(instance, normalizedJid, [msg]);
+          }
+          
+          // Formatla ve döndür
+          const formatted = fetchedMessages.map(formatMessage);
+          const sorted = formatted.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          const slice = sorted.slice(0, limit);
+          
+          return {
+            data: slice,
+            cursor: null,
+          };
+        }
+      } catch (fetchError) {
+        console.error(`[listMessages] WhatsApp'tan mesaj fetch edilemedi:`, fetchError);
+        logger.error({ error: fetchError, sessionId, jid: normalizedJid }, "Mesaj fetch edilemedi");
+      }
+    }
+    
+    // loadMessages yoksa veya başarısız olduysa, veritabanından çek (fallback)
+    console.log(`[listMessages] Veritabanından mesajlar çekiliyor (fallback)...`);
     const messages = await prisma.message.findMany({
       cursor: cursor ? { pkId: Number(cursor) } : undefined,
       take: Number(limit),
@@ -951,7 +1222,8 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     };
   } catch (error) {
     logger.error({ error, sessionId, jid: normalizedJid }, "Mesaj listesi alınamadı");
-    // Fallback to memory store
+    console.error(`[listMessages] Hata:`, error);
+    // Son fallback: memory store
     const instance = getOrCreateInstance(accountId);
     const messages = instance.messagesStore.get(normalizedJid) || [];
     const safeLimit = Math.min(Number(limit) || 20, 100);

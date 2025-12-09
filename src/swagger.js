@@ -69,142 +69,6 @@ const swaggerSpec = {
         },
       },
     },
-    "/api/chats": {
-      get: {
-        tags: ["Messages"],
-        summary: "Sohbet listesini getir",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        responses: {
-          200: {
-            description: "Sohbetler",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    data: {
-                      type: "array",
-                      items: { $ref: "#/components/schemas/Chat" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    "/api/messages/{jid}": {
-      get: {
-        tags: ["Messages"],
-        summary: "Belirli bir sohbetin son mesajlarını getir",
-        parameters: [
-          {
-            in: "path",
-            name: "jid",
-            required: true,
-            schema: { type: "string" },
-            description: "Kişi veya grup JID değeri",
-          },
-          {
-            in: "query",
-            name: "limit",
-            schema: { type: "integer", default: 20, maximum: 100 },
-          },
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        responses: {
-          200: {
-            description: "Mesaj listesi",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    data: {
-                      type: "array",
-                      items: { $ref: "#/components/schemas/Message" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    "/api/messages/text": {
-      post: {
-        tags: ["Messages"],
-        summary: "Metin mesajı gönder",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/SendTextRequest" },
-            },
-          },
-        },
-        responses: {
-          202: {
-            description: "Mesaj kuyruğa alındı",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/MessageResponse" },
-              },
-            },
-          },
-        },
-      },
-    },
-    "/api/messages/media": {
-      post: {
-        tags: ["Messages"],
-        summary: "Medya mesajı gönder",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/SendMediaRequest" },
-            },
-          },
-        },
-        responses: {
-          202: {
-            description: "Medya kuyruğa alındı",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/MessageResponse" },
-              },
-            },
-          },
-        },
-      },
-    },
     "/api/groups": {
       post: {
         tags: ["Groups"],
@@ -947,33 +811,41 @@ const swaggerSpec = {
       get: {
         tags: ["Messages"],
         summary: "Belirli bir sohbetin mesajlarını listele",
+        description: "Belirli bir kişi veya grubun mesaj geçmişini getirir. Mesajlar en yeniden eskiye doğru sıralanır.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
           },
           {
             in: "query",
             name: "jid",
             required: true,
             schema: { type: "string" },
+            description: "Kişi veya grup JID'i (örn: '905551234567@s.whatsapp.net' veya '120363123456789012@g.us')",
+            example: "905551234567@s.whatsapp.net",
           },
           {
             in: "query",
             name: "cursor",
             schema: { type: "string", nullable: true },
+            description: "Sayfalama için cursor (şu an kullanılmıyor)",
           },
           {
             in: "query",
             name: "limit",
-            schema: { type: "integer", default: 20 },
+            schema: { type: "integer", default: 20, maximum: 100 },
+            description: "Maksimum döndürülecek mesaj sayısı (1-100 arası)",
+            example: 20,
           },
         ],
         responses: {
           200: {
-            description: "Mesaj listesi",
+            description: "Mesaj listesi başarıyla döndürüldü",
             content: {
               "application/json": {
                 schema: {
@@ -982,11 +854,43 @@ const swaggerSpec = {
                     data: {
                       type: "array",
                       items: { $ref: "#/components/schemas/Message" },
+                      description: "Mesaj listesi (en yeniden eskiye doğru)",
+                    },
+                    cursor: {
+                      type: "string",
+                      nullable: true,
+                      description: "Sayfalama için cursor (sonraki sayfa için kullanılır)",
                     },
                   },
                 },
+                example: {
+                  data: [
+                    {
+                      id: "3EB0123456789ABCDEF",
+                      from: "905551234567@s.whatsapp.net",
+                      fromMe: false,
+                      participant: null,
+                      timestamp: 1704067200000,
+                      type: "conversation",
+                      text: "Merhaba, nasılsın?",
+                    },
+                    {
+                      id: "3EB0123456789ABCDEE",
+                      from: "905551234567@s.whatsapp.net",
+                      fromMe: true,
+                      participant: null,
+                      timestamp: 1704067100000,
+                      type: "conversation",
+                      text: "İyiyim, teşekkürler!",
+                    },
+                  ],
+                  cursor: null,
+                },
               },
             },
+          },
+          400: {
+            description: "Geçersiz parametreler (jid eksik veya geçersiz)",
           },
         },
       },
@@ -995,12 +899,15 @@ const swaggerSpec = {
       post: {
         tags: ["Messages"],
         summary: "Mesaj gönder",
+        description: "Kişi veya gruba mesaj gönderir. Metin mesajı, medya, konum, kişi kartı, anket gibi farklı mesaj tiplerini destekler. Baileys API'ye göre mesaj formatı: https://baileys.wiki/docs/api/",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
           },
         ],
         requestBody: {
@@ -1008,15 +915,105 @@ const swaggerSpec = {
           content: {
             "application/json": {
               schema: { $ref: "#/components/schemas/SendMessageRequest" },
+              examples: {
+                textMessage: {
+                  summary: "Metin mesajı gönder",
+                  description: "Basit bir metin mesajı gönderir",
+                  value: {
+                    jid: "905551234567@s.whatsapp.net",
+                    type: "text",
+                    message: "Merhaba! Bu bir test mesajıdır.",
+                    options: {},
+                  },
+                },
+                mediaMessage: {
+                  summary: "Medya mesajı gönder",
+                  description: "Resim, video, ses veya dosya gönderir",
+                  value: {
+                    jid: "905551234567@s.whatsapp.net",
+                    type: "image",
+                    message: {
+                      image: { url: "https://example.com/image.jpg" },
+                      caption: "Bu bir resim",
+                    },
+                    options: {},
+                  },
+                },
+                locationMessage: {
+                  summary: "Konum mesajı gönder",
+                  description: "Konum bilgisi gönderir",
+                  value: {
+                    jid: "905551234567@s.whatsapp.net",
+                    message: {
+                      location: {
+                        degreesLatitude: 41.0082,
+                        degreesLongitude: 28.9784,
+                        name: "İstanbul",
+                      },
+                    },
+                  },
+                },
+                contactCard: {
+                  summary: "Kişi kartı gönder",
+                  description: "vCard formatında kişi bilgisi gönderir",
+                  value: {
+                    jid: "905551234567@s.whatsapp.net",
+                    message: {
+                      contacts: {
+                        contacts: [
+                          {
+                            displayName: "Ahmet Yılmaz",
+                            vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:Ahmet Yılmaz\nTEL:905551234567\nEND:VCARD",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+                pollMessage: {
+                  summary: "Anket mesajı gönder",
+                  description: "Anket oluşturur ve gönderir",
+                  value: {
+                    jid: "120363123456789012@g.us",
+                    message: {
+                      poll: {
+                        name: "Hangi renk daha güzel?",
+                        values: ["Kırmızı", "Mavi", "Yeşil"],
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
         responses: {
           202: {
-            description: "Mesaj kuyruğa alındı",
+            description: "Mesaj başarıyla kuyruğa alındı ve gönderiliyor",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/MessageResponse" },
+                example: {
+                  accountId: "ugur",
+                  jid: "905551234567@s.whatsapp.net",
+                  status: "queued",
+                },
+              },
+            },
+          },
+          400: {
+            description: "Geçersiz istek (jid veya message eksik)",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string" },
+                  },
+                },
+                example: {
+                  error: "jid ve message alanları zorunludur",
+                },
               },
             },
           },
@@ -1027,12 +1024,15 @@ const swaggerSpec = {
       post: {
         tags: ["Messages"],
         summary: "Toplu mesaj gönder",
+        description: "Birden fazla mesajı aynı anda gönderir. Her mesaj için ayrı bir istek gönderilir. Maksimum 100 mesaj gönderilebilir.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
           },
         ],
         requestBody: {
@@ -1042,13 +1042,58 @@ const swaggerSpec = {
               schema: {
                 type: "array",
                 items: { $ref: "#/components/schemas/SendMessageRequest" },
+                maxItems: 100,
+                description: "Gönderilecek mesajların listesi (maksimum 100)",
               },
+              example: [
+                {
+                  jid: "905551234567@s.whatsapp.net",
+                  type: "text",
+                  message: "Merhaba!",
+                },
+                {
+                  jid: "905559876543@s.whatsapp.net",
+                  type: "text",
+                  message: "Nasılsın?",
+                },
+              ],
             },
           },
         },
         responses: {
           202: {
-            description: "Toplu mesaj kuyruğa alındı",
+            description: "Toplu mesajlar kuyruğa alındı",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/MessageResponse" },
+                      description: "Her mesaj için gönderim sonucu",
+                    },
+                  },
+                },
+                example: {
+                  data: [
+                    {
+                      accountId: "ugur",
+                      jid: "905551234567@s.whatsapp.net",
+                      status: "queued",
+                    },
+                    {
+                      accountId: "ugur",
+                      jid: "905559876543@s.whatsapp.net",
+                      status: "queued",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          400: {
+            description: "Geçersiz istek (boş liste veya çok fazla mesaj)",
           },
         },
       },
@@ -1057,12 +1102,15 @@ const swaggerSpec = {
       post: {
         tags: ["Messages"],
         summary: "Mesaj medyasını indir",
+        description: "Mesajdaki medya içeriğini (resim, video, ses, dosya) Base64 formatında indirir. Baileys downloadContentFromMessage fonksiyonunu kullanır.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
           },
         ],
         requestBody: {
@@ -1070,22 +1118,41 @@ const swaggerSpec = {
           content: {
             "application/json": {
               schema: { $ref: "#/components/schemas/DownloadMediaRequest" },
+              example: {
+                message: {
+                  imageMessage: {
+                    url: "https://mmg.whatsapp.net/...",
+                    mimetype: "image/jpeg",
+                  },
+                },
+                mediaType: "image",
+              },
             },
           },
         },
         responses: {
           200: {
-            description: "Base64 medya çıktısı",
+            description: "Medya başarıyla indirildi (Base64 formatında)",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
-                    data: { type: "string", description: "Base64 içerik" },
+                    data: {
+                      type: "string",
+                      description: "Base64 kodlanmış medya içeriği",
+                      example: "/9j/4AAQSkZJRgABAQAAAQ...",
+                    },
                   },
+                },
+                example: {
+                  data: "/9j/4AAQSkZJRgABAQAAAQ...",
                 },
               },
             },
+          },
+          400: {
+            description: "Geçersiz istek (message veya mediaType eksik)",
           },
         },
       },
@@ -1993,14 +2060,54 @@ const swaggerSpec = {
       },
       Message: {
         type: "object",
+        description: "WhatsApp mesajı bilgisi",
         properties: {
-          id: { type: "string" },
-          from: { type: "string" },
-          fromMe: { type: "boolean" },
-          participant: { type: "string", nullable: true },
-          timestamp: { type: "number" },
-          type: { type: "string" },
-          text: { type: "string", nullable: true },
+          id: {
+            type: "string",
+            description: "Mesaj ID'si (WhatsApp tarafından oluşturulan benzersiz ID)",
+            example: "3EB0123456789ABCDEF",
+          },
+          from: {
+            type: "string",
+            description: "Gönderen JID'i (kişi veya grup)",
+            example: "905551234567@s.whatsapp.net",
+          },
+          fromMe: {
+            type: "boolean",
+            description: "Mesajın sizin tarafınızdan gönderilip gönderilmediği",
+            example: false,
+          },
+          participant: {
+            type: "string",
+            nullable: true,
+            description: "Grup mesajlarında gerçek gönderen (grup içinde kim gönderdi)",
+            example: "905559876543@s.whatsapp.net",
+          },
+          timestamp: {
+            type: "number",
+            description: "Mesaj zamanı (Unix timestamp - milisaniye)",
+            example: 1704067200000,
+          },
+          type: {
+            type: "string",
+            description: "Mesaj tipi (conversation, imageMessage, videoMessage, audioMessage, documentMessage, locationMessage, vb.)",
+            example: "conversation",
+          },
+          text: {
+            type: "string",
+            nullable: true,
+            description: "Mesaj metni (metin mesajları için). Medya mesajlarında caption olabilir",
+            example: "Merhaba, nasılsın?",
+          },
+        },
+        example: {
+          id: "3EB0123456789ABCDEF",
+          from: "905551234567@s.whatsapp.net",
+          fromMe: false,
+          participant: null,
+          timestamp: 1704067200000,
+          type: "conversation",
+          text: "Merhaba, nasılsın?",
         },
       },
       SendTextRequest: {
@@ -2092,9 +2199,29 @@ const swaggerSpec = {
       },
       MessageResponse: {
         type: "object",
+        description: "Mesaj gönderim sonucu",
         properties: {
-          jid: { type: "string" },
-          status: { type: "string", example: "queued" },
+          accountId: {
+            type: "string",
+            description: "Session ID (accountId)",
+            example: "ugur",
+          },
+          jid: {
+            type: "string",
+            description: "Alıcı JID'i (mesajın gönderildiği kişi veya grup)",
+            example: "905551234567@s.whatsapp.net",
+          },
+          status: {
+            type: "string",
+            description: "Mesaj durumu. 'queued' = kuyruğa alındı ve gönderiliyor",
+            enum: ["queued", "sent", "delivered", "read", "error"],
+            example: "queued",
+          },
+        },
+        example: {
+          accountId: "ugur",
+          jid: "905551234567@s.whatsapp.net",
+          status: "queued",
         },
       },
       AddSessionRequest: {
@@ -2132,32 +2259,76 @@ const swaggerSpec = {
         type: "object",
         required: ["jid", "message"],
         properties: {
-          jid: { type: "string" },
+          jid: {
+            type: "string",
+            description: "Alıcı JID'i (kişi veya grup). Telefon numarası veya tam JID formatında olabilir",
+            example: "905551234567@s.whatsapp.net",
+          },
           type: {
             type: "string",
-            description: 'Mesaj tipi, "text" ise message alanı string olmalıdır',
+            description: 'Mesaj tipi. "text" ise message alanı string olmalıdır. Diğer tipler için message object olmalıdır. Baileys API dokümantasyonuna bakın: https://baileys.wiki/docs/api/',
+            enum: ["text", "image", "video", "audio", "document", "location", "contact", "poll", "sticker"],
+            example: "text",
           },
           message: {
-            description: "Metin veya ham Baileys message içeriği",
+            description: "Mesaj içeriği. type='text' ise string, diğer durumlarda Baileys message object formatında olmalıdır. Örnekler: {text: 'Merhaba'}, {image: {url: '...'}}, {location: {...}}, {poll: {...}}",
+            oneOf: [
+              { type: "string", description: "Metin mesajı için", example: "Merhaba!" },
+              {
+                type: "object",
+                description: "Diğer mesaj tipleri için Baileys message object",
+                example: {
+                  image: { url: "https://example.com/image.jpg" },
+                  caption: "Bu bir resim",
+                },
+              },
+            ],
           },
           options: {
             type: "object",
             additionalProperties: true,
             nullable: true,
+            description: "Ek mesaj seçenekleri (Baileys sendMessage options). Örn: {quoted: {...}, mentions: [...]}",
+            example: {},
           },
+        },
+        example: {
+          jid: "905551234567@s.whatsapp.net",
+          type: "text",
+          message: "Merhaba! Bu bir test mesajıdır.",
+          options: {},
         },
       },
       DownloadMediaRequest: {
         type: "object",
         required: ["message", "mediaType"],
+        description: "Medya indirme isteği. Baileys message object ve medya tipi gereklidir.",
         properties: {
           message: {
-            description: "Baileys message nesnesi",
+            description: "Baileys message nesnesi (mesaj içeriği). Örn: {imageMessage: {...}}, {videoMessage: {...}}, {audioMessage: {...}}, {documentMessage: {...}}",
+            example: {
+              imageMessage: {
+                url: "https://mmg.whatsapp.net/...",
+                mimetype: "image/jpeg",
+                fileLength: 12345,
+              },
+            },
           },
           mediaType: {
             type: "string",
-            description: "image, video, audio, document vb.",
+            enum: ["image", "video", "audio", "document", "sticker"],
+            description: "İndirilecek medya tipi. Baileys downloadContentFromMessage fonksiyonuna geçirilir.",
+            example: "image",
           },
+        },
+        example: {
+          message: {
+            imageMessage: {
+              url: "https://mmg.whatsapp.net/...",
+              mimetype: "image/jpeg",
+            },
+          },
+          mediaType: "image",
         },
       },
     },
