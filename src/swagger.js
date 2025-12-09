@@ -286,43 +286,6 @@ const swaggerSpec = {
         },
       },
     },
-    "/api/contacts/block": {
-      post: {
-        tags: ["Contacts"],
-        summary: "Kişiyi engelle veya engeli kaldır",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/BlockContactRequest" },
-            },
-          },
-        },
-        responses: {
-          200: {
-            description: "İşlem sonucu",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    status: { type: "string" },
-                  },
-                  additionalProperties: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
     // === Sessions (baileys-api-master benzeri) ===
     "/sessions": {
       get: {

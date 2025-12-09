@@ -586,16 +586,6 @@ app.patch(
   })
 );
 
-app.post(
-  "/api/contacts/block",
-  asyncHandler(async (req, res) => {
-    const accountId = req.query.accountId;
-    const { jid, action } = req.body;
-    const result = await blockContact(accountId, jid, action !== "unblock");
-    res.json(result);
-  })
-);
-
 // ========== MESAJ YÖNETİMİ ==========
 
 // Mesajları okundu olarak işaretle
