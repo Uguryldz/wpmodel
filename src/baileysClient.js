@@ -665,6 +665,77 @@ const bindSocketEvents = (instance) => {
                 logger.error({ error, sessionId }, "Contact sayısı kontrol edilemedi");
               }
             }, 5000);
+
+            // Bağlantı açıldığında grupları senkronize et
+            setTimeout(async () => {
+              try {
+                const groupCount = await prisma.groupMetadata.count({ where: { sessionId } });
+                console.log(`[${sessionId}] Veritabanında ${groupCount} grup var`);
+                
+                if (groupCount === 0) {
+                  console.log(`[${sessionId}] Grup bulunamadı, Baileys API'den çekiliyor...`);
+                  try {
+                    const groups = await sock.groupFetchAllParticipating();
+                    const all = Object.values(groups || {});
+                    
+                    if (all.length > 0) {
+                      for (const group of all) {
+                        try {
+                          await prisma.groupMetadata.upsert({
+                            where: {
+                              sessionId_id: {
+                                sessionId,
+                                id: group.id,
+                              },
+                            },
+                            create: {
+                              sessionId,
+                              id: group.id,
+                              subject: group.subject || "",
+                              owner: group.owner || null,
+                              subjectOwner: group.subjectOwner || null,
+                              subjectTime: group.subjectTime || null,
+                              creation: group.creation || null,
+                              desc: group.desc || null,
+                              descOwner: group.descOwner || null,
+                              descId: group.descId || null,
+                              restrict: group.restrict || false,
+                              announce: group.announce || false,
+                              size: group.participants?.length || 0,
+                              participants: JSON.stringify(group.participants || []),
+                              ephemeralDuration: group.ephemeralDuration || null,
+                              inviteCode: group.inviteCode || null,
+                            },
+                            update: {
+                              subject: group.subject || undefined,
+                              owner: group.owner || undefined,
+                              subjectOwner: group.subjectOwner || undefined,
+                              subjectTime: group.subjectTime || undefined,
+                              desc: group.desc || undefined,
+                              descOwner: group.descOwner || undefined,
+                              descId: group.descId || undefined,
+                              restrict: group.restrict !== undefined ? group.restrict : undefined,
+                              announce: group.announce !== undefined ? group.announce : undefined,
+                              size: group.participants?.length || undefined,
+                              participants: JSON.stringify(group.participants || []),
+                              ephemeralDuration: group.ephemeralDuration || undefined,
+                              inviteCode: group.inviteCode || undefined,
+                            },
+                          });
+                        } catch (dbError) {
+                          logger.error({ error: dbError, sessionId, groupId: group.id }, "Grup veritabanına kaydedilemedi");
+                        }
+                      }
+                      console.log(`[${sessionId}] ${all.length} grup veritabanına kaydedildi`);
+                    }
+                  } catch (groupError) {
+                    logger.error({ error: groupError, sessionId }, "Gruplar senkronize edilemedi");
+                  }
+                }
+              } catch (error) {
+                logger.error({ error, sessionId }, "Grup sayısı kontrol edilemedi");
+              }
+            }, 3000); // 3 saniye bekle, bağlantı tamamen hazır olsun
           }
         } catch (error) {
           logger.error({ error, sessionId }, "WhatsApp numarası eşleştirilemedi");
@@ -800,56 +871,45 @@ export const getLastQr = (accountId) => {
 export const listChats = async (accountId, cursor, limit = 25) => {
   const sessionId = getAccountId(accountId);
   
-  // Önce memory store'dan al (en güncel veri)
-  const instance = getOrCreateInstance(accountId);
-  if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = DEFAULT_DB_URL;
-  }
-  const memoryChats = Array.from(instance.chatsStore.values());
-  
-  console.log(`[listChats] SessionId: ${sessionId}, Memory chats count: ${memoryChats.length}`);
-  
-  // Eğer memory store'da chat varsa, onları kullan
-  if (memoryChats.length > 0) {
-    console.log(`[listChats] Memory store'dan ${memoryChats.length} chat bulundu`);
-    const formatted = memoryChats
-      .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0))
-      .slice(0, limit)
-      .map(formatChat);
-    return {
-      data: formatted,
-      cursor: null,
-    };
-  }
-  
-  // Memory store boşsa database'den al
   try {
-    console.log(`[listChats] Memory store boş, database'den alınıyor...`);
-    const chats = await prisma.chat.findMany({
-      cursor: cursor ? { pkId: Number(cursor) } : undefined,
-      take: Number(limit),
-      skip: cursor ? 1 : 0,
-      where: { sessionId },
-      orderBy: { conversationTimestamp: "desc" },
-    });
-
-    console.log(`[listChats] Database'den ${chats.length} chat bulundu`);
-    const serialized = chats.map((c) => serializePrisma(c));
-    const nextCursor =
-      serialized.length !== 0 && serialized.length === Number(limit)
-        ? serialized[serialized.length - 1].pkId
-        : null;
-
-    return {
-      data: serialized.map(formatChat),
-      cursor: nextCursor,
-    };
+    // Her zaman WhatsApp cihazından (memory store - chats.set event'i ile gelen veriler)
+    console.log(`[listChats] WhatsApp cihazından chat listesi çekiliyor (sessionId: ${sessionId})...`);
+    const instance = getOrCreateInstance(accountId);
+    
+    // Memory store'dan al (WhatsApp'tan gelen en güncel veriler)
+    const memoryChats = Array.from(instance.chatsStore.values());
+    
+    if (memoryChats.length > 0) {
+      console.log(`[listChats] Memory store'dan ${memoryChats.length} chat bulundu (WhatsApp cihazından)`);
+      const sorted = memoryChats.sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
+      const slice = sorted.slice(0, limit);
+      return {
+        data: slice.map(formatChat),
+        cursor: null,
+      };
+    }
+    
+    // Memory store boşsa, bağlantı henüz açılmamış veya chats.set event'i henüz gelmemiş
+    console.log(`[listChats] Memory store boş - bağlantı açık mı kontrol ediliyor...`);
+    const sock = ensureSocket(accountId);
+    
+    // Bağlantı açıksa ama chats henüz gelmemişse, bir süre bekle
+    // (chats.set event'i genellikle bağlantı açıldıktan sonra gelir)
+    if (instance.connectionState.status === "open") {
+      console.log(`[listChats] Bağlantı açık ama chats henüz gelmemiş, boş liste döndürülüyor`);
+      return {
+        data: [],
+        cursor: null,
+      };
+    }
+    
+    // Bağlantı açık değilse hata
+    throw new Error("WhatsApp bağlantısı açık değil");
   } catch (error) {
     logger.error({ error, sessionId }, "Chat listesi alınamadı");
-    console.error(`[listChats] Database hatası:`, error);
-    // Fallback to memory store (zaten boş ama yine de dene)
+    console.error(`[listChats] Hata:`, error);
     return {
-      data: Array.from(instance.chatsStore.values()).map(formatChat),
+      data: [],
       cursor: null,
     };
   }
@@ -1127,56 +1187,229 @@ export const listGroups = async (accountId, cursor, limit = 50) => {
   const sessionId = getAccountId(accountId);
 
   try {
-    const groups = await prisma.groupMetadata.findMany({
-      cursor: cursor ? { pkId: Number(cursor) } : undefined,
-      take: Number(limit),
-      skip: cursor ? 1 : 0,
-      where: { sessionId },
-      orderBy: { creation: "desc" },
-    });
+    // Her zaman WhatsApp cihazından (Baileys API) çek
+    console.log(`[listGroups] WhatsApp cihazından grup listesi çekiliyor (sessionId: ${sessionId})...`);
+    
+    // Socket bağlantısını kontrol et
+    const instance = getOrCreateInstance(accountId);
+    console.log(`[listGroups] Connection state: ${instance.connectionState.status}`);
+    
+    if (instance.connectionState.status !== "open") {
+      console.log(`[listGroups] ⚠️ Bağlantı açık değil! Status: ${instance.connectionState.status}`);
+      throw new Error(`WhatsApp bağlantısı açık değil. Mevcut durum: ${instance.connectionState.status}`);
+    }
+    
+    const sock = ensureSocket(accountId);
+    console.log(`[listGroups] Socket hazır, groupFetchAllParticipating çağrılıyor...`);
+    
+    const groups = await sock.groupFetchAllParticipating();
+    console.log(`[listGroups] groupFetchAllParticipating sonucu:`, groups ? Object.keys(groups).length : 0, "grup");
+    
+    const all = Object.values(groups || {});
+    console.log(`[listGroups] Toplam ${all.length} grup bulundu`);
+    
+    if (all.length === 0) {
+      console.log(`[listGroups] ⚠️ Hiç grup bulunamadı!`);
+      return { data: [], cursor: null };
+    }
 
-    const serialized = groups.map((g) => serializePrisma(g));
-    const nextCursor =
-      serialized.length !== 0 && serialized.length === Number(limit)
-        ? serialized[serialized.length - 1].pkId
-        : null;
+    // Tüm grupları veritabanına kaydet (cache için)
+    for (const group of all) {
+      try {
+        await prisma.groupMetadata.upsert({
+          where: {
+            sessionId_id: {
+              sessionId,
+              id: group.id,
+            },
+          },
+          create: {
+            sessionId,
+            id: group.id,
+            subject: group.subject || "",
+            owner: group.owner || null,
+            subjectOwner: group.subjectOwner || null,
+            subjectTime: group.subjectTime || null,
+            creation: group.creation || null,
+            desc: group.desc || null,
+            descOwner: group.descOwner || null,
+            descId: group.descId || null,
+            restrict: group.restrict || false,
+            announce: group.announce || false,
+            size: group.participants?.length || 0,
+            participants: JSON.stringify(group.participants || []),
+            ephemeralDuration: group.ephemeralDuration || null,
+            inviteCode: group.inviteCode || null,
+          },
+          update: {
+            subject: group.subject || undefined,
+            owner: group.owner || undefined,
+            subjectOwner: group.subjectOwner || undefined,
+            subjectTime: group.subjectTime || undefined,
+            desc: group.desc || undefined,
+            descOwner: group.descOwner || undefined,
+            descId: group.descId || undefined,
+            restrict: group.restrict !== undefined ? group.restrict : undefined,
+            announce: group.announce !== undefined ? group.announce : undefined,
+            size: group.participants?.length || undefined,
+            participants: JSON.stringify(group.participants || []),
+            ephemeralDuration: group.ephemeralDuration || undefined,
+            inviteCode: group.inviteCode || undefined,
+          },
+        });
+      } catch (dbError) {
+        logger.error({ error: dbError, sessionId, groupId: group.id }, "Grup veritabanına kaydedilemedi");
+      }
+    }
 
-    return {
-      data: serialized.map((g) => ({
+    console.log(`[listGroups] ${all.length} grup WhatsApp cihazından çekildi ve veritabanına kaydedildi`);
+
+    // Sırala ve limit uygula
+    all.sort((a, b) => (b.creation || 0) - (a.creation || 0));
+    const slice = all.slice(0, limit);
+
+    const result = {
+      data: slice.map((g) => ({
         id: g.id,
         subject: g.subject,
+        size: g.size || g.participants?.length || 0,
+        creation: g.creation,
         owner: g.owner || null,
-        size: g.size || 0,
-        creation: g.creation || null,
         desc: g.desc || null,
         restrict: g.restrict || false,
         announce: g.announce || false,
         participants: g.participants || [],
       })),
-      cursor: nextCursor,
+      cursor: null,
+    };
+    
+    console.log(`[listGroups] ✅ Başarılı: ${result.data.length} grup döndürülüyor`);
+    return result;
+  } catch (error) {
+    console.error(`[listGroups] ❌ Hata oluştu:`, error.message);
+    console.error(`[listGroups] Stack trace:`, error.stack);
+    logger.error({ error, sessionId }, "Grup listesi alınamadı");
+    
+    // Hata durumunda boş liste döndür ama hata mesajını logla
+    return { data: [], cursor: null };
+  }
+};
+
+// Belirli bir grubun metadata'sını getir
+export const getGroupMetadata = async (accountId, groupJid) => {
+  const sessionId = getAccountId(accountId);
+  const normalizedJid = normalizeJid(groupJid);
+  
+  try {
+    // Önce database'den kontrol et
+    const dbGroup = await prisma.groupMetadata.findFirst({
+      where: {
+        sessionId,
+        id: normalizedJid,
+      },
+    });
+
+    if (dbGroup) {
+      const serialized = serializePrisma(dbGroup);
+      let participants = [];
+      try {
+        participants = typeof serialized.participants === "string" 
+          ? JSON.parse(serialized.participants) 
+          : (serialized.participants || []);
+      } catch {
+        participants = [];
+      }
+
+      return {
+        id: serialized.id,
+        subject: serialized.subject,
+        owner: serialized.owner || null,
+        subjectOwner: serialized.subjectOwner || null,
+        subjectTime: serialized.subjectTime || null,
+        creation: serialized.creation || null,
+        desc: serialized.desc || null,
+        descOwner: serialized.descOwner || null,
+        descId: serialized.descId || null,
+        restrict: serialized.restrict || false,
+        announce: serialized.announce || false,
+        size: serialized.size || 0,
+        participants: participants,
+        ephemeralDuration: serialized.ephemeralDuration || null,
+        inviteCode: serialized.inviteCode || null,
+      };
+    }
+
+    // Database'de yoksa Baileys API'den çek
+    const sock = ensureSocket(accountId);
+    const metadata = await sock.groupMetadata(normalizedJid);
+    
+    // Database'e kaydet
+    try {
+      await prisma.groupMetadata.upsert({
+        where: {
+          sessionId_id: {
+            sessionId,
+            id: metadata.id,
+          },
+        },
+        create: {
+          sessionId,
+          id: metadata.id,
+          subject: metadata.subject || "",
+          owner: metadata.owner || null,
+          subjectOwner: metadata.subjectOwner || null,
+          subjectTime: metadata.subjectTime || null,
+          creation: metadata.creation || null,
+          desc: metadata.desc || null,
+          descOwner: metadata.descOwner || null,
+          descId: metadata.descId || null,
+          restrict: metadata.restrict || false,
+          announce: metadata.announce || false,
+          size: metadata.participants?.length || 0,
+          participants: JSON.stringify(metadata.participants || []),
+          ephemeralDuration: metadata.ephemeralDuration || null,
+          inviteCode: metadata.inviteCode || null,
+        },
+        update: {
+          subject: metadata.subject || undefined,
+          owner: metadata.owner || undefined,
+          subjectOwner: metadata.subjectOwner || undefined,
+          subjectTime: metadata.subjectTime || undefined,
+          desc: metadata.desc || undefined,
+          descOwner: metadata.descOwner || undefined,
+          descId: metadata.descId || undefined,
+          restrict: metadata.restrict !== undefined ? metadata.restrict : undefined,
+          announce: metadata.announce !== undefined ? metadata.announce : undefined,
+          size: metadata.participants?.length || undefined,
+          participants: JSON.stringify(metadata.participants || []),
+          ephemeralDuration: metadata.ephemeralDuration || undefined,
+          inviteCode: metadata.inviteCode || undefined,
+        },
+      });
+    } catch (dbError) {
+      logger.error({ error: dbError, sessionId, groupId: metadata.id }, "Grup metadata kaydedilemedi");
+    }
+
+    return {
+      id: metadata.id,
+      subject: metadata.subject,
+      owner: metadata.owner || null,
+      subjectOwner: metadata.subjectOwner || null,
+      subjectTime: metadata.subjectTime || null,
+      creation: metadata.creation || null,
+      desc: metadata.desc || null,
+      descOwner: metadata.descOwner || null,
+      descId: metadata.descId || null,
+      restrict: metadata.restrict || false,
+      announce: metadata.announce || false,
+      size: metadata.participants?.length || 0,
+      participants: metadata.participants || [],
+      ephemeralDuration: metadata.ephemeralDuration || null,
+      inviteCode: metadata.inviteCode || null,
     };
   } catch (error) {
-    logger.error({ error, sessionId }, "Grup listesi alınamadı");
-    // Fallback to API call
-    try {
-      const sock = ensureSocket(accountId);
-      const groups = await sock.groupFetchAllParticipating();
-      const all = Object.values(groups || {});
-      all.sort((a, b) => (b.creation || 0) - (a.creation || 0));
-      const slice = all.slice(0, limit);
-      return {
-        data: slice.map((g) => ({
-          id: g.id,
-          subject: g.subject,
-          size: g.size,
-          creation: g.creation,
-        })),
-        cursor: null,
-      };
-    } catch (fallbackError) {
-      logger.error({ error: fallbackError, sessionId }, "Grup listesi fallback başarısız");
-      return { data: [], cursor: null };
-    }
+    logger.error({ error, sessionId, groupJid: normalizedJid }, "Grup metadata alınamadı");
+    throw error;
   }
 };
 

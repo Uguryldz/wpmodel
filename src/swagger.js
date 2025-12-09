@@ -209,11 +209,14 @@ const swaggerSpec = {
       post: {
         tags: ["Groups"],
         summary: "Yeni grup oluştur",
+        description: "Yeni bir WhatsApp grubu oluşturur. İlk katılımcıları da ekleyebilirsiniz (minimum 1 kişi gerekir).",
         parameters: [
           {
             in: "query",
             name: "accountId",
             schema: { type: "string", default: "default" },
+            description: "Session ID (accountId)",
+            example: "ugur",
           },
         ],
         requestBody: {
@@ -221,21 +224,47 @@ const swaggerSpec = {
           content: {
             "application/json": {
               schema: { $ref: "#/components/schemas/CreateGroupRequest" },
+              example: {
+                subject: "Yeni Proje Ekibi",
+                participants: ["905551234567@s.whatsapp.net", "905559876543@s.whatsapp.net"],
+              },
             },
           },
         },
         responses: {
           201: {
-            description: "Grup oluşturuldu",
+            description: "Grup başarıyla oluşturuldu",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
-                    id: { type: "string" },
-                    subject: { type: "string" },
+                    id: {
+                      type: "string",
+                      description: "Oluşturulan grubun JID'i",
+                      example: "120363123456789012@g.us",
+                    },
+                    subject: {
+                      type: "string",
+                      description: "Grup adı",
+                      example: "Yeni Proje Ekibi",
+                    },
+                    creation: {
+                      type: "integer",
+                      description: "Grup oluşturulma zamanı (Unix timestamp)",
+                    },
+                    size: {
+                      type: "integer",
+                      description: "Grup üye sayısı",
+                    },
                   },
                   additionalProperties: true,
+                },
+                example: {
+                  id: "120363123456789012@g.us",
+                  subject: "Yeni Proje Ekibi",
+                  creation: 1234567890,
+                  size: 3,
                 },
               },
             },
@@ -246,18 +275,23 @@ const swaggerSpec = {
     "/api/groups/{jid}/participants": {
       patch: {
         tags: ["Groups"],
-        summary: "Grup katılımcılarını güncelle",
+        summary: "Grup katılımcılarını güncelle (ekle/çıkar/yönetici yap)",
+        description: "Grup katılımcılarını yönetir: ekleme, çıkarma, yönetici yapma veya yöneticilikten çıkarma. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
           {
             in: "path",
             name: "jid",
             required: true,
             schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
           },
           {
             in: "query",
             name: "accountId",
             schema: { type: "string", default: "default" },
+            description: "Session ID (accountId)",
+            example: "ugur",
           },
         ],
         requestBody: {
@@ -265,20 +299,68 @@ const swaggerSpec = {
           content: {
             "application/json": {
               schema: { $ref: "#/components/schemas/GroupParticipantRequest" },
+              examples: {
+                add: {
+                  summary: "Katılımcı ekle",
+                  value: {
+                    participants: ["905551234567@s.whatsapp.net"],
+                    action: "add",
+                  },
+                },
+                remove: {
+                  summary: "Katılımcı çıkar",
+                  value: {
+                    participants: ["905551234567@s.whatsapp.net"],
+                    action: "remove",
+                  },
+                },
+                promote: {
+                  summary: "Yönetici yap",
+                  value: {
+                    participants: ["905551234567@s.whatsapp.net"],
+                    action: "promote",
+                  },
+                },
+                demote: {
+                  summary: "Yöneticilikten çıkar",
+                  value: {
+                    participants: ["905551234567@s.whatsapp.net"],
+                    action: "demote",
+                  },
+                },
+              },
             },
           },
         },
         responses: {
           200: {
-            description: "İşlem sonucu",
+            description: "İşlem başarıyla tamamlandı",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
-                    status: { type: "string" },
+                    status: {
+                      type: "string",
+                      description: "İşlem durumu",
+                      example: "success",
+                    },
+                    participants: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "İşlem yapılan katılımcılar",
+                    },
+                    action: {
+                      type: "string",
+                      description: "Yapılan işlem (add, remove, promote, demote)",
+                    },
                   },
                   additionalProperties: true,
+                },
+                example: {
+                  status: "success",
+                  participants: ["905551234567@s.whatsapp.net"],
+                  action: "add",
                 },
               },
             },
@@ -704,27 +786,33 @@ const swaggerSpec = {
       get: {
         tags: ["Groups"],
         summary: "Grup listesini getir",
+        description: "WhatsApp hesabınızdaki tüm grupları listeler. Veriler WhatsApp cihazından direkt çekilir.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID (örn: 'ugur', 'default')",
+            example: "ugur",
           },
           {
             in: "query",
             name: "cursor",
             schema: { type: "string", nullable: true },
+            description: "Sayfalama için cursor (şu an kullanılmıyor)",
           },
           {
             in: "query",
             name: "limit",
             schema: { type: "integer", default: 50 },
+            description: "Maksimum döndürülecek grup sayısı",
+            example: 50,
           },
         ],
         responses: {
           200: {
-            description: "Grup listesi",
+            description: "Grup listesi başarıyla döndürüldü",
             content: {
               "application/json": {
                 schema: {
@@ -733,8 +821,25 @@ const swaggerSpec = {
                     data: {
                       type: "array",
                       items: { $ref: "#/components/schemas/GroupItem" },
+                      description: "Grup listesi",
                     },
                     nextCursor: { type: "string", nullable: true },
+                  },
+                  example: {
+                    data: [
+                      {
+                        id: "120363123456789012@g.us",
+                        subject: "Proje Ekibi",
+                        owner: "905551234567@s.whatsapp.net",
+                        size: 15,
+                        creation: 1234567890,
+                        desc: "Proje ile ilgili görüşmeler",
+                        restrict: false,
+                        announce: false,
+                        participants: [],
+                      },
+                    ],
+                    nextCursor: null,
                   },
                 },
               },
@@ -746,27 +851,53 @@ const swaggerSpec = {
     "/{sessionId}/groups/{jid}": {
       get: {
         tags: ["Groups"],
-        summary: "Belirli bir grubun bilgisini getir",
+        summary: "Belirli bir grubun detaylı bilgisini getir",
+        description: "Grup JID'i ile belirli bir grubun tüm bilgilerini (katılımcılar, ayarlar, vb.) getirir.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
           },
           {
             in: "path",
             name: "jid",
             required: true,
             schema: { type: "string" },
+            description: "Grup JID'i (örn: '120363123456789012@g.us' veya sadece '120363123456789012')",
+            example: "120363123456789012@g.us",
           },
         ],
         responses: {
           200: {
-            description: "Grup bilgisi",
+            description: "Grup bilgisi başarıyla döndürüldü",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/GroupItem" },
+                example: {
+                  id: "120363123456789012@g.us",
+                  subject: "Proje Ekibi",
+                  owner: "905551234567@s.whatsapp.net",
+                  subjectOwner: "905551234567@s.whatsapp.net",
+                  subjectTime: 1234567890,
+                  creation: 1234567890,
+                  desc: "Proje ile ilgili görüşmeler",
+                  descOwner: "905551234567@s.whatsapp.net",
+                  restrict: false,
+                  announce: false,
+                  size: 15,
+                  participants: [
+                    {
+                      id: "905551234567@s.whatsapp.net",
+                      admin: "admin",
+                    },
+                  ],
+                  ephemeralDuration: null,
+                  inviteCode: "ABC123XYZ",
+                },
               },
             },
           },
@@ -1220,9 +1351,24 @@ const swaggerSpec = {
       patch: {
         tags: ["Groups"],
         summary: "Grup ayarlarını güncelle",
+        description: "Grup ayarlarını (restrict, announce) günceller. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
         ],
         requestBody: {
           required: true,
@@ -1231,37 +1377,121 @@ const swaggerSpec = {
               schema: {
                 type: "object",
                 properties: {
-                  restrict: { type: "boolean", description: "Sadece adminler mesaj gönderebilir" },
-                  announce: { type: "boolean", description: "Sadece adminler duyuru yapabilir" },
+                  restrict: {
+                    type: "boolean",
+                    description: "Mesaj gönderme kısıtlaması: true = Sadece adminler mesaj gönderebilir, false = Herkes mesaj gönderebilir. Bu ayar açıkken normal üyeler sadece mesaj okuyabilir, gönderemez.",
+                    example: true,
+                  },
+                  announce: {
+                    type: "boolean",
+                    description: "Duyuru kısıtlaması: true = Sadece adminler duyuru yapabilir, false = Herkes duyuru yapabilir. Duyurular grup içinde özel bir mesaj tipidir.",
+                    example: false,
+                  },
+                },
+                example: {
+                  restrict: true,
+                  announce: false,
                 },
               },
             },
           },
         },
-        responses: { 200: { description: "Grup ayarları güncellendi" } },
+        responses: {
+          200: {
+            description: "Grup ayarları başarıyla güncellendi",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: {
+                      type: "string",
+                      example: "settings_updated",
+                      description: "İşlem durumu - 'settings_updated' = ayarlar başarıyla güncellendi",
+                    },
+                    groupJid: {
+                      type: "string",
+                      example: "120363123456789012@g.us",
+                      description: "Güncellenen grubun JID'i (WhatsApp grup kimliği)",
+                    },
+                    updates: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "Güncellenen ayarların listesi. Her eleman 'ayar_adı: yeni_değer' formatındadır.",
+                      example: ["restrict: true", "announce: false"],
+                    },
+                  },
+                },
+                example: {
+                  status: "settings_updated",
+                  groupJid: "120363123456789012@g.us",
+                  updates: ["restrict: true", "announce: false"],
+                },
+              },
+            },
+          },
+        },
       },
     },
     "/{sessionId}/groups/{jid}/invite-link": {
       get: {
         tags: ["Groups"],
         summary: "Grup davet linki al",
+        description: "Grup için davet linki alır veya mevcut linki döndürür. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
-          { in: "query", name: "reset", schema: { type: "boolean" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
+          {
+            in: "query",
+            name: "reset",
+            schema: { type: "boolean" },
+            description: "true: Mevcut linki sıfırlayıp yeni link oluştur, false: Mevcut linki döndür",
+            example: false,
+          },
         ],
         responses: {
           200: {
-            description: "Davet linki",
+            description: "Davet linki başarıyla döndürüldü",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
-                    inviteLink: { type: "string" },
-                    code: { type: "string" },
-                    groupJid: { type: "string" },
+                    inviteLink: {
+                      type: "string",
+                      description: "Tam davet linki URL'i",
+                      example: "https://chat.whatsapp.com/ABC123XYZ",
+                    },
+                    code: {
+                      type: "string",
+                      description: "Davet linki kodu",
+                      example: "ABC123XYZ",
+                    },
+                    groupJid: {
+                      type: "string",
+                      description: "Grup JID'i",
+                      example: "120363123456789012@g.us",
+                    },
                   },
+                },
+                example: {
+                  inviteLink: "https://chat.whatsapp.com/ABC123XYZ",
+                  code: "ABC123XYZ",
+                  groupJid: "120363123456789012@g.us",
                 },
               },
             },
@@ -1273,20 +1503,71 @@ const swaggerSpec = {
       post: {
         tags: ["Groups"],
         summary: "Grup davet linkini sıfırla",
+        description: "Mevcut davet linkini iptal eder ve yeni bir link oluşturur. Eski link artık çalışmaz. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
         ],
-        responses: { 200: { description: "Davet linki sıfırlandı" } },
+        responses: {
+          200: {
+            description: "Davet linki başarıyla sıfırlandı",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    inviteLink: { type: "string" },
+                    code: { type: "string" },
+                    groupJid: { type: "string" },
+                  },
+                },
+                example: {
+                  inviteLink: "https://chat.whatsapp.com/NEW123XYZ",
+                  code: "NEW123XYZ",
+                  groupJid: "120363123456789012@g.us",
+                },
+              },
+            },
+          },
+        },
       },
     },
     "/{sessionId}/groups/{jid}/description": {
       patch: {
         tags: ["Groups"],
         summary: "Grup açıklamasını güncelle",
+        description: "Grup açıklamasını (description) değiştirir. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
         ],
         requestBody: {
           required: true,
@@ -1296,22 +1577,65 @@ const swaggerSpec = {
                 type: "object",
                 required: ["description"],
                 properties: {
-                  description: { type: "string" },
+                  description: {
+                    type: "string",
+                    description: "Yeni grup açıklaması",
+                    example: "Bu grup proje ekibimiz için oluşturulmuştur.",
+                  },
+                },
+              },
+              example: {
+                description: "Bu grup proje ekibimiz için oluşturulmuştur.",
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Grup açıklaması başarıyla güncellendi",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", example: "description_updated" },
+                    groupJid: { type: "string" },
+                    description: { type: "string" },
+                  },
+                },
+                example: {
+                  status: "description_updated",
+                  groupJid: "120363123456789012@g.us",
+                  description: "Bu grup proje ekibimiz için oluşturulmuştur.",
                 },
               },
             },
           },
         },
-        responses: { 200: { description: "Grup açıklaması güncellendi" } },
       },
     },
     "/{sessionId}/groups/{jid}/subject": {
       patch: {
         tags: ["Groups"],
-        summary: "Grup adını güncelle",
+        summary: "Grup adını (başlığını) güncelle",
+        description: "Grup adını değiştirir. Sadece grup adminleri bu işlemi yapabilir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
         ],
         requestBody: {
           required: true,
@@ -1321,22 +1645,65 @@ const swaggerSpec = {
                 type: "object",
                 required: ["subject"],
                 properties: {
-                  subject: { type: "string" },
+                  subject: {
+                    type: "string",
+                    description: "Yeni grup adı (maksimum 25 karakter)",
+                    example: "Yeni Proje Ekibi",
+                  },
+                },
+              },
+              example: {
+                subject: "Yeni Proje Ekibi",
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Grup adı başarıyla güncellendi",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", example: "subject_updated" },
+                    groupJid: { type: "string" },
+                    subject: { type: "string" },
+                  },
+                },
+                example: {
+                  status: "subject_updated",
+                  groupJid: "120363123456789012@g.us",
+                  subject: "Yeni Proje Ekibi",
                 },
               },
             },
           },
         },
-        responses: { 200: { description: "Grup adı güncellendi" } },
       },
     },
     "/{sessionId}/groups/{jid}/picture": {
       post: {
         tags: ["Groups"],
         summary: "Grup fotoğrafını güncelle",
+        description: "Grup profil fotoğrafını değiştirir. Sadece grup adminleri bu işlemi yapabilir. Resim Base64 formatında gönderilmelidir.",
         parameters: [
-          { in: "path", name: "sessionId", required: true, schema: { type: "string" } },
-          { in: "path", name: "jid", required: true, schema: { type: "string" } },
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+            example: "ugur",
+          },
+          {
+            in: "path",
+            name: "jid",
+            required: true,
+            schema: { type: "string" },
+            description: "Grup JID'i",
+            example: "120363123456789012@g.us",
+          },
         ],
         requestBody: {
           required: true,
@@ -1346,13 +1713,39 @@ const swaggerSpec = {
                 type: "object",
                 required: ["image"],
                 properties: {
-                  image: { type: "string", description: "Base64 kodlanmış resim" },
+                  image: {
+                    type: "string",
+                    description: "Base64 kodlanmış resim (data:image/jpeg;base64,... formatında veya sadece base64 string)",
+                    example: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
+                  },
+                },
+              },
+              example: {
+                image: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Grup fotoğrafı başarıyla güncellendi",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", example: "picture_updated" },
+                    groupJid: { type: "string" },
+                  },
+                },
+                example: {
+                  status: "picture_updated",
+                  groupJid: "120363123456789012@g.us",
                 },
               },
             },
           },
         },
-        responses: { 200: { description: "Grup fotoğrafı güncellendi" } },
       },
     },
     "/{sessionId}/chats/{jid}/archive": {
@@ -1644,11 +2037,21 @@ const swaggerSpec = {
         type: "object",
         required: ["subject"],
         properties: {
-          subject: { type: "string", description: "Grup adı" },
+          subject: {
+            type: "string",
+            description: "Grup adı (maksimum 25 karakter)",
+            example: "Yeni Proje Ekibi",
+          },
           participants: {
             type: "array",
-            items: { type: "string" },
-            description: "İlk katılımcılar",
+            items: {
+              type: "string",
+              description: "Katılımcı JID'i veya telefon numarası (örn: '905551234567' veya '905551234567@s.whatsapp.net')",
+            },
+            description: "İlk katılımcılar (en az 1 kişi gerekir, maksimum 256 kişi)",
+            example: ["905551234567", "905559876543"],
+            minItems: 1,
+            maxItems: 256,
           },
         },
       },
@@ -1658,13 +2061,20 @@ const swaggerSpec = {
         properties: {
           participants: {
             type: "array",
-            items: { type: "string" },
-            description: "Güncellenecek katılımcılar",
+            items: {
+              type: "string",
+              description: "Katılımcı JID'i veya telefon numarası",
+            },
+            description: "Güncellenecek katılımcılar (en az 1 kişi)",
+            example: ["905551234567", "905559876543"],
+            minItems: 1,
           },
           action: {
             type: "string",
             enum: ["add", "remove", "promote", "demote"],
             default: "add",
+            description: "Yapılacak işlem: 'add' = ekle, 'remove' = çıkar, 'promote' = yönetici yap, 'demote' = yöneticilikten çıkar",
+            example: "add",
           },
         },
       },
@@ -1699,8 +2109,23 @@ const swaggerSpec = {
         properties: {
           id: { type: "string" },
           subject: { type: "string" },
+          owner: { type: "string", nullable: true },
+          subjectOwner: { type: "string", nullable: true },
+          subjectTime: { type: "integer", nullable: true },
+          creation: { type: "integer", nullable: true },
+          desc: { type: "string", nullable: true },
+          descOwner: { type: "string", nullable: true },
+          descId: { type: "string", nullable: true },
+          restrict: { type: "boolean" },
+          announce: { type: "boolean" },
           size: { type: "integer" },
-          creation: { type: "integer" },
+          participants: {
+            type: "array",
+            items: { type: "object" },
+            description: "Grup katılımcıları",
+          },
+          ephemeralDuration: { type: "integer", nullable: true },
+          inviteCode: { type: "string", nullable: true },
         },
       },
       SendMessageRequest: {

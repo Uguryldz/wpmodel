@@ -14,6 +14,7 @@ import {
   listChats,
   listContacts,
   listGroups,
+  getGroupMetadata,
   listMessages,
   listMessagesWithCursor,
   listBlockedNumbers,
@@ -399,8 +400,17 @@ app.get(
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
-    const result = await listGroups(sessionId, cursor, Number(limit) || 50);
-    res.json(result);
+    console.log(`[GET /${sessionId}/groups] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
+    
+    try {
+      const result = await listGroups(sessionId, cursor, Number(limit) || 50);
+      console.log(`[GET /${sessionId}/groups] ✅ Başarılı: ${result.data?.length || 0} grup bulundu`);
+      res.json(result);
+    } catch (error) {
+      console.error(`[GET /${sessionId}/groups] ❌ Hata:`, error.message);
+      console.error(`[GET /${sessionId}/groups] Stack:`, error.stack);
+      throw error;
+    }
   })
 );
 
@@ -408,15 +418,16 @@ app.get(
   "/:sessionId/groups/:jid",
   asyncHandler(async (req, res) => {
     const { sessionId, jid } = req.params;
-    const groups = await listGroups(sessionId, null, 500);
-    const found =
-      groups.data.find((g) => String(g.id) === String(jid)) || null;
-
-    if (!found) {
-      return res.status(404).json({ error: "Group not found" });
+    
+    try {
+      const group = await getGroupMetadata(sessionId, jid);
+      res.json(group);
+    } catch (error) {
+      if (error.message?.includes("not found") || error?.output?.statusCode === 404) {
+        return res.status(404).json({ error: "Group not found" });
+      }
+      throw error;
     }
-
-    res.json(found);
   })
 );
 
