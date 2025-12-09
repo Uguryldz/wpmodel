@@ -567,15 +567,6 @@ app.post(
   })
 );
 
-app.post(
-  "/api/logout",
-  asyncHandler(async (_req, res) => {
-    const accountId = _req.query.accountId;
-    await performLogout(accountId);
-    res.json({ status: "logged_out" });
-  })
-);
-
 // ========== MESAJ YÖNETİMİ ==========
 
 // Mesajları okundu olarak işaretle

@@ -323,35 +323,6 @@ const swaggerSpec = {
         },
       },
     },
-    "/api/logout": {
-      post: {
-        tags: ["Status"],
-        summary: "WhatsApp oturumunu kapat",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-          },
-        ],
-        responses: {
-          200: {
-            description: "Oturum kapatıldı",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    status: { type: "string", example: "logged_out" },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-
     // === Sessions (baileys-api-master benzeri) ===
     "/sessions": {
       get: {
