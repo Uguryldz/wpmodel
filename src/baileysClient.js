@@ -19,6 +19,8 @@ import { findSessionByWhatsAppJid, migrateSessionData } from "./sessionMapper.js
 
 const AUTH_FOLDER = "./auth_info";
 const DEFAULT_ACCOUNT_ID = "default";
+const DEFAULT_DB_URL = `file:${process.cwd()}/prisma/dev.db`;
+const CONTACT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 saat
 
 // WebSocket broadcast fonksiyonu (index.js'den set edilecek)
 let wsBroadcastFn = null;
@@ -31,8 +33,22 @@ export const setWebSocketBroadcast = (fn) => {
  * Her hesap için ayrı soket, store ve durum bilgisi tutuyoruz
  */
 const instances = new Map();
+// Basit contact cache: sessionId -> { ts, payload }
+const contactsCache = new Map();
 
 const getAccountId = (accountId) => accountId || DEFAULT_ACCOUNT_ID;
+
+const formatContactName = (c) => {
+  const fallbackFromJid = c.id ? String(c.id).split("@")[0] : "";
+  return (
+    c.verifiedName ||
+    c.name ||
+    c.notify ||
+    fallbackFromJid ||
+    c.id ||
+    ""
+  );
+};
 
 const getOrCreateInstance = (accountId) => {
   const id = getAccountId(accountId);
@@ -45,6 +61,7 @@ const getOrCreateInstance = (accountId) => {
       waVersion: null,
       reconnectTimer: null,
       chatsStore: new Map(),
+      contactsStore: new Map(),
       messagesStore: new Map(),
       connectionState: {
         status: "initializing",
@@ -86,6 +103,10 @@ export const sessionExists = (accountId) => {
 
 const ensureSocket = (accountId) => {
   const instance = getOrCreateInstance(accountId);
+  // Prisma varsayılanı yoksa güvence altına al (process-wide)
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = DEFAULT_DB_URL;
+  }
   if (!instance.sock) {
     throw new Error(
       `WhatsApp soketi (${instance.id}) henüz hazır değil. Lütfen birkaç saniye sonra tekrar deneyin.`
@@ -399,8 +420,10 @@ const bindSocketEvents = (instance) => {
   // contacts.set: Tüm contact'lar bir kerede gelir (bağlantı açıldığında)
   sock.ev.on("contacts.set", async ({ contacts }) => {
     console.log(`[${sessionId}] contacts.set event: ${contacts?.length || 0} contact alındı`);
+    contactsCache.delete(sessionId);
     if (contacts && Array.isArray(contacts)) {
       for (const contact of contacts) {
+        instance.contactsStore.set(contact.id, contact);
         try {
           await prisma.contact.upsert({
             where: {
@@ -441,12 +464,8 @@ const bindSocketEvents = (instance) => {
       contacts = [contacts];
     }
     for (const contact of contacts) {
-      const existing = instance.chatsStore.get(contact.id);
-      if (existing) {
-        instance.chatsStore.set(contact.id, { ...existing, ...contact });
-      } else {
-        instance.chatsStore.set(contact.id, contact);
-      }
+      const existing = instance.contactsStore.get(contact.id);
+      instance.contactsStore.set(contact.id, { ...existing, ...contact });
 
       try {
         await prisma.contact.upsert({
@@ -694,7 +713,8 @@ const startSocket = (instance) => {
     auth: authState,
     version: waVersion,
     printQRInTerminal: false,
-    syncFullHistory: false,
+    // Tüm contact/sohbet senkronu için history sync açık
+    syncFullHistory: true,
   });
 
   bindSocketEvents(instance);
@@ -782,6 +802,9 @@ export const listChats = async (accountId, cursor, limit = 25) => {
   
   // Önce memory store'dan al (en güncel veri)
   const instance = getOrCreateInstance(accountId);
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = DEFAULT_DB_URL;
+  }
   const memoryChats = Array.from(instance.chatsStore.values());
   
   console.log(`[listChats] SessionId: ${sessionId}, Memory chats count: ${memoryChats.length}`);
@@ -1019,7 +1042,51 @@ export const deleteSession = async (accountId) => {
 
 export const listContacts = async (accountId, cursor, limit = 50) => {
   const sessionId = getAccountId(accountId);
+  const instance = instances.get(sessionId);
 
+  // Cache (sadece cursor yokken ve önceden dolu veri varsa)
+  if (!cursor) {
+    const cached = contactsCache.get(sessionId);
+    if (cached && cached.payload?.data?.length && Date.now() - cached.ts < CONTACT_CACHE_TTL_MS) {
+      return cached.payload;
+    }
+  }
+
+  // Önce memory store (oturum açıksa)
+  if (instance) {
+    const memoryContacts = Array.from(instance.contactsStore.values()).filter(
+      (c) => c.id && !c.id.endsWith("@g.us") && !isJidBroadcast(c.id)
+    );
+    const chatAsContacts =
+      memoryContacts.length === 0
+        ? Array.from(instance.chatsStore.values()).filter(
+            (c) => c.id && !c.id.endsWith("@g.us") && !isJidBroadcast(c.id)
+          )
+        : [];
+
+    const source = memoryContacts.length > 0 ? memoryContacts : chatAsContacts;
+
+    if (source.length > 0) {
+      const formatted = source
+        .sort((a, b) => (a.name || a.notify || a.id).localeCompare(b.name || b.notify || b.id))
+        .slice(0, limit)
+        .map((c) => ({
+          id: c.id,
+          name: formatContactName(c),
+          notify: c.notify || null,
+          verifiedName: c.verifiedName || null,
+          imgUrl: c.imgUrl || null,
+          status: c.status || null,
+        }));
+      const payload = { data: formatted, cursor: null };
+      if (!cursor && formatted.length > 0) {
+        contactsCache.set(sessionId, { ts: Date.now(), payload });
+      }
+      return payload;
+    }
+  }
+
+  // Database fallback (oturum kapalı olsa da)
   try {
     const contacts = await prisma.contact.findMany({
       cursor: cursor ? { pkId: Number(cursor) } : undefined,
@@ -1035,10 +1102,10 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
         ? serialized[serialized.length - 1].pkId
         : null;
 
-    return {
+    const payload = {
       data: serialized.map((c) => ({
         id: c.id,
-        name: c.name || c.notify || c.id,
+        name: formatContactName(c),
         notify: c.notify || null,
         verifiedName: c.verifiedName || null,
         imgUrl: c.imgUrl || null,
@@ -1046,6 +1113,10 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
       })),
       cursor: nextCursor,
     };
+    if (!cursor && payload.data.length > 0) {
+      contactsCache.set(sessionId, { ts: Date.now(), payload });
+    }
+    return payload;
   } catch (error) {
     logger.error({ error, sessionId }, "Contact listesi alınamadı");
     return { data: [], cursor: null };
@@ -1119,8 +1190,17 @@ export const checkNumber = async (accountId, jidOrNumber) => {
 export const getProfilePicture = async (accountId, jid) => {
   const sock = ensureSocket(accountId);
   const normalized = normalizeJid(jid);
-  const url = await sock.profilePictureUrl(normalized, "image");
-  return url || null;
+  try {
+    const url = await sock.profilePictureUrl(normalized, "image");
+    return url || null;
+  } catch (error) {
+    // Baileys item-not-found -> 404
+    if (error?.data === 404 || error?.output?.statusCode === 404) {
+      return null;
+    }
+    logger.error({ error, accountId, jid }, "Profil fotoğrafı alınamadı");
+    throw error;
+  }
 };
 
 export const listBlockedNumbers = async (accountId) => {
@@ -1143,6 +1223,37 @@ export const sendRawMessage = async (accountId, jid, message, options) => {
   await sock.sendMessage(normalized, message, options);
 
   return { accountId: getAccountId(accountId), jid: normalized, status: "queued" };
+};
+
+export const refreshContacts = async (accountId, { clearDb = true } = {}) => {
+  const sessionId = getAccountId(accountId);
+  const instance = getOrCreateInstance(accountId);
+
+  // Cache ve memory store temizle
+  contactsCache.delete(sessionId);
+  instance.contactsStore.clear();
+
+  // İstenirse DB de temizle
+  if (clearDb) {
+    try {
+      await prisma.contact.deleteMany({ where: { sessionId } });
+    } catch (error) {
+      logger.error({ error, sessionId }, "Contact tablosu temizlenemedi");
+    }
+  }
+
+  // Soketi yeniden senkrona zorla
+  if (instance.sock) {
+    try {
+      instance.sock.ws.close();
+    } catch (error) {
+      logger.error({ error, sessionId }, "Socket kapatılamadı (contacts refresh)");
+    }
+  } else {
+    await initBaileys(sessionId);
+  }
+
+  return { status: "refreshing" };
 };
 
 export const sendBulkMessages = async (accountId, items = []) => {

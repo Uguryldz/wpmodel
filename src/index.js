@@ -54,6 +54,7 @@ import {
   createPoll,
   setWebSocketBroadcast,
   restoreSessions,
+  refreshContacts,
 } from "./baileysClient.js";
 
 const app = express();
@@ -228,6 +229,9 @@ app.get(
     console.log(`[GET /api/contacts] AccountId: ${accountId}, Limit: ${limit}`);
 
     const result = await listContacts(accountId, null, limit);
+    if (result === null) {
+      return res.status(404).json({ error: "Session not found" });
+    }
     console.log(`[GET /api/contacts] Result:`, JSON.stringify(result, null, 2));
     res.json(result);
   })
@@ -318,6 +322,9 @@ app.get(
     const { cursor, limit } = req.query;
     console.log(`[GET /${sessionId}/contacts] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     const result = await listContacts(sessionId, cursor, Number(limit) || 50);
+    if (result === null) {
+      return res.status(404).json({ error: "Session not found" });
+    }
     console.log(`[GET /${sessionId}/contacts] Result:`, JSON.stringify(result, null, 2));
     res.json(result);
   })
@@ -373,6 +380,16 @@ app.get(
     }
 
     res.json({ url });
+  })
+);
+
+app.post(
+  "/:sessionId/contacts/refresh",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { clearDb } = req.query;
+    const result = await refreshContacts(sessionId, { clearDb: clearDb !== "false" });
+    res.json(result);
   })
 );
 
