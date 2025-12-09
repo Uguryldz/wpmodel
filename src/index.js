@@ -500,18 +500,8 @@ app.get(
 app.get(
   "/api/qr",
   asyncHandler((req, res) => {
-    const accountId = req.query.accountId;
-    const qr = getLastQr(accountId);
-    if (!qr) {
-      return res.status(404).json({
-        error: "Aktif bir QR kodu yok. Cihaz zaten bağlı olabilir veya henüz QR üretilmemiştir.",
-      });
-    }
-
-    res.json({
-      qr,
-      message: "Bu QR'ı WhatsApp uygulamasından tarayarak oturum açabilirsiniz.",
-    });
+    // Güvenlik/istek gereği devre dışı
+    return res.status(410).json({ error: "QR endpoint devre dışı bırakıldı." });
   })
 );
 

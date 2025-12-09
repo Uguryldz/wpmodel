@@ -69,45 +69,6 @@ const swaggerSpec = {
         },
       },
     },
-    "/api/qr": {
-      get: {
-        tags: ["Status"],
-        summary: "Güncel QR kodunu getir",
-        parameters: [
-          {
-            in: "query",
-            name: "accountId",
-            schema: { type: "string", default: "default" },
-            description: "Hesap kimliği (varsayılan: default)",
-          },
-        ],
-        description:
-          "Baileys tarafından en son üretilen oturum açma QR kodunu döner. Aktif QR yoksa 404 döner.",
-        responses: {
-          200: {
-            description: "Aktif QR bulundu",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/QrResponse" },
-              },
-            },
-          },
-          404: {
-            description: "Aktif QR yok",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: {
-                    error: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
     "/api/chats": {
       get: {
         tags: ["Messages"],
