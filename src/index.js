@@ -489,7 +489,11 @@ app.get(
   "/api/status",
   asyncHandler((req, res) => {
     const accountId = req.query.accountId;
-    res.json(getConnectionState(accountId));
+    const state = getConnectionState(accountId);
+    if (!state) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    res.json(state);
   })
 );
 

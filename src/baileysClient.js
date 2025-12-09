@@ -1,3 +1,4 @@
+import "./webcrypto-polyfill.js";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -758,7 +759,10 @@ export const restoreSessions = async () => {
 };
 
 export const getConnectionState = (accountId) => {
-  const instance = getOrCreateInstance(accountId);
+  const id = getAccountId(accountId);
+  const instance = instances.get(id);
+  if (!instance) return null;
+
   return {
     accountId: instance.id,
     ...instance.connectionState,
@@ -767,7 +771,9 @@ export const getConnectionState = (accountId) => {
 };
 
 export const getLastQr = (accountId) => {
-  const instance = getOrCreateInstance(accountId);
+  const id = getAccountId(accountId);
+  const instance = instances.get(id);
+  if (!instance) return null;
   return instance.connectionState.lastQr;
 };
 

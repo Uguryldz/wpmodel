@@ -8,6 +8,10 @@ const swaggerSpec = {
   },
   servers: [
     {
+      url: "/",
+      description: "Geçerli origin (varsayılan)",
+    },
+    {
       url: "http://localhost:3000",
       description: "Yerel geliştirme sunucusu",
     },
