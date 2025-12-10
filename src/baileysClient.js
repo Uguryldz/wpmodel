@@ -63,6 +63,8 @@ const getOrCreateInstance = (accountId) => {
       chatsStore: new Map(),
       contactsStore: new Map(),
       messagesStore: new Map(),
+      chatsSetReceived: false, // chats.set event'i alındı mı?
+      chatsUpsertTimer: null, // chats.upsert event'lerini toplamak için timer
       connectionState: {
         status: "initializing",
         version: null,
@@ -85,6 +87,11 @@ const removeInstance = (accountId) => {
 
   if (instance.reconnectTimer) {
     clearTimeout(instance.reconnectTimer);
+  }
+  
+  if (instance.chatsUpsertTimer) {
+    clearTimeout(instance.chatsUpsertTimer);
+    instance.chatsUpsertTimer = null;
   }
 
   instances.delete(id);
@@ -129,13 +136,36 @@ const normalizeJid = (value) => {
   return `${value}${suffix}`;
 };
 
-const formatChat = (chat) => ({
-  id: chat.id,
-  name: chat.name || chat.displayName || chat.subject || chat.id,
-  unreadCount: chat.unreadCount ?? 0,
-  conversationTimestamp: chat.conversationTimestamp ?? null,
-  isMuted: Boolean(chat.isMuted),
-});
+const formatChat = (chat, sessionId = null) => {
+  // Contact'tan veya grup metadata'sından profil resmini al (eğer varsa)
+  let imgUrl = null;
+  if (sessionId) {
+    const instance = instances.get(sessionId);
+    if (instance) {
+      if (chat.id.includes('@g.us')) {
+        // Grup için: chat objesinde imgUrl varsa kullan, yoksa null (lazy load yapılacak)
+        // Grup resimleri async olarak yüklenecek (frontend'de veya başka bir yerde)
+        imgUrl = chat.imgUrl || null;
+      } else {
+        // Bireysel sohbet için contact'tan imgUrl al
+        const contact = instance.contactsStore.get(chat.id);
+        if (contact && contact.imgUrl) {
+          imgUrl = contact.imgUrl;
+        }
+      }
+    }
+  }
+  
+  return {
+    id: chat.id,
+    name: chat.name || chat.displayName || chat.subject || chat.id,
+    unreadCount: chat.unreadCount ?? 0,
+    conversationTimestamp: chat.conversationTimestamp ?? null,
+    isMuted: Boolean(chat.isMuted),
+    archived: chat.archived ?? false,
+    imgUrl: imgUrl,
+  };
+};
 
 const extractText = (message) =>
   message?.conversation ||
@@ -214,6 +244,8 @@ const bindSocketEvents = (instance) => {
 
   // Chats - Prisma'ya kaydet
   sock.ev.on("chats.set", async ({ chats }) => {
+    console.log(`[${sessionId}] chats.set event geldi: ${chats.length} chat`);
+    
     for (const chat of chats) {
       instance.chatsStore.set(chat.id, chat);
       try {
@@ -287,12 +319,80 @@ const bindSocketEvents = (instance) => {
       }
     }
     console.log(`[${sessionId}] chats.set: ${chats.length} chat kaydedildi, contact'lar oluşturuldu`);
+    
+    // chats.set event'i genellikle tüm sohbetleri göndermez (WhatsApp limitasyonu ~50-100 sohbet)
+    // chats.upsert event'leri ile eksik sohbetler gelecek
+    // Bir süre bekleyip chats.upsert event'lerini toplayalım ve sonra DB'den kontrol edelim
+    if (!instance.chatsSetReceived) {
+      instance.chatsSetReceived = true;
+      const initialChatCount = chats.length;
+      console.log(`[${sessionId}] chats.set alındı (${initialChatCount} chat), chats.upsert event'leri bekleniyor (15 saniye)...`);
+      
+      // Önceki timer'ı temizle
+      if (instance.chatsUpsertTimer) {
+        clearTimeout(instance.chatsUpsertTimer);
+      }
+      
+      // 15 saniye boyunca chats.upsert event'lerini dinle
+      instance.chatsUpsertTimer = setTimeout(async () => {
+        const totalChats = instance.chatsStore.size;
+        console.log(`[${sessionId}] Toplam ${totalChats} chat toplandı (chats.set: ${initialChatCount} + chats.upsert: ${totalChats - initialChatCount})`);
+        
+        // Eğer hala az sohbet varsa, DB'den kontrol et ve eksikleri yükle
+        const dbChatCount = await prisma.chat.count({ where: { sessionId } });
+        if (dbChatCount > totalChats) {
+          console.log(`[${sessionId}] ⚠️ Veritabanında ${dbChatCount} chat var ama memory store'da ${totalChats} chat var. Eksik sohbetler yükleniyor...`);
+          
+          // DB'den tüm sohbetleri yükle
+          const dbChats = await prisma.chat.findMany({
+            where: { sessionId },
+            orderBy: { conversationTimestamp: "desc" },
+          });
+          
+          let addedCount = 0;
+          for (const dbChat of dbChats) {
+            if (!instance.chatsStore.has(dbChat.id)) {
+              const serialized = serializePrisma(dbChat);
+              instance.chatsStore.set(serialized.id, {
+                id: serialized.id,
+                name: serialized.name,
+                displayName: serialized.displayName,
+                unreadCount: serialized.unreadCount || 0,
+                conversationTimestamp: Number(serialized.conversationTimestamp || 0),
+                lastMsgTimestamp: Number(serialized.lastMsgTimestamp || 0),
+                archived: serialized.archived || false,
+                pinned: serialized.pinned || null,
+                participants: serialized.participant ? JSON.parse(serialized.participant) : undefined,
+              });
+              addedCount++;
+            }
+          }
+          
+          if (addedCount > 0) {
+            console.log(`[${sessionId}] ✅ ${addedCount} eksik sohbet veritabanından memory store'a eklendi`);
+            
+            // WebSocket'e bildir
+            if (wsBroadcastFn) {
+              wsBroadcastFn({
+                type: "chats.set",
+                sessionId,
+                chats: Array.from(instance.chatsStore.values()).map(chat => formatChat(chat, sessionId)),
+              });
+            }
+          }
+        }
+        
+        instance.chatsSetReceived = false; // Reset for next time
+        instance.chatsUpsertTimer = null;
+      }, 15000); // 15 saniye bekle
+    }
+    
     // WebSocket'e bildir
     if (wsBroadcastFn) {
       wsBroadcastFn({
         type: "chats.set",
         sessionId,
-        chats: chats.map(formatChat),
+        chats: chats.map(chat => formatChat(chat, sessionId)),
       });
     }
   });
@@ -373,7 +473,7 @@ const bindSocketEvents = (instance) => {
       wsBroadcastFn({
         type: "chats.upsert",
         sessionId,
-        chats: chats.map(formatChat),
+        chats: chats.map(chat => formatChat(chat, sessionId)),
       });
     }
   });
@@ -454,6 +554,78 @@ const bindSocketEvents = (instance) => {
         }
       }
       console.log(`[${sessionId}] ${contacts.length} contact veritabanına kaydedildi`);
+      
+      // Contact'ların tamamının gelip gelmediğini kontrol et (15 saniye sonra)
+      setTimeout(async () => {
+        try {
+          const memoryContactCount = instance.contactsStore.size;
+          const dbContactCount = await prisma.contact.count({ where: { sessionId } });
+          console.log(`[${sessionId}] Contact kontrolü: Memory store: ${memoryContactCount}, DB: ${dbContactCount}`);
+          
+          // Eğer DB'de daha fazla contact varsa, memory store'a yükle
+          if (dbContactCount > memoryContactCount) {
+            console.log(`[${sessionId}] ⚠️ Veritabanında ${dbContactCount} contact var ama memory store'da ${memoryContactCount} contact var. Eksik contact'lar yükleniyor...`);
+            
+            const dbContacts = await prisma.contact.findMany({
+              where: { sessionId },
+            });
+            
+            let addedCount = 0;
+            for (const dbContact of dbContacts) {
+              if (!instance.contactsStore.has(dbContact.id)) {
+                instance.contactsStore.set(dbContact.id, {
+                  id: dbContact.id,
+                  name: dbContact.name,
+                  notify: dbContact.notify,
+                  verifiedName: dbContact.verifiedName,
+                  imgUrl: dbContact.imgUrl,
+                  status: dbContact.status,
+                });
+                addedCount++;
+              }
+            }
+            
+            if (addedCount > 0) {
+              console.log(`[${sessionId}] ✅ ${addedCount} eksik contact veritabanından memory store'a eklendi`);
+              
+              // WebSocket'e bildir
+              if (wsBroadcastFn) {
+                const allContacts = Array.from(instance.contactsStore.values());
+                wsBroadcastFn({
+                  type: "contacts.set",
+                  sessionId,
+                  contacts: allContacts.map((c) => ({
+                    id: c.id,
+                    name: formatContactName(c),
+                    notify: c.notify || null,
+                    verifiedName: c.verifiedName || null,
+                    imgUrl: c.imgUrl || null,
+                    status: c.status || null,
+                  })),
+                });
+              }
+            }
+          }
+        } catch (error) {
+          logger.error({ error, sessionId }, "Contact kontrolü yapılamadı");
+        }
+      }, 15000); // 15 saniye bekle
+      
+      // WebSocket'e bildir (contact'lar ve profil resimleri ile)
+      if (wsBroadcastFn) {
+        wsBroadcastFn({
+          type: "contacts.set",
+          sessionId,
+          contacts: contacts.map((c) => ({
+            id: c.id,
+            name: formatContactName(c),
+            notify: c.notify || null,
+            verifiedName: c.verifiedName || null,
+            imgUrl: c.imgUrl || null,
+            status: c.status || null,
+          })),
+        });
+      }
     }
   });
 
@@ -495,6 +667,22 @@ const bindSocketEvents = (instance) => {
       } catch (error) {
         logger.error({ error, sessionId, contactId: contact.id }, "Contact kaydedilemedi");
       }
+    }
+    
+    // WebSocket'e bildir (contact'lar ve profil resimleri ile)
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "contacts.upsert",
+        sessionId,
+        contacts: contacts.map((c) => ({
+          id: c.id,
+          name: formatContactName(c),
+          notify: c.notify || null,
+          verifiedName: c.verifiedName || null,
+          imgUrl: c.imgUrl || null,
+          status: c.status || null,
+        })),
+      });
     }
   });
 
@@ -651,79 +839,107 @@ const bindSocketEvents = (instance) => {
               },
             });
 
-            // Bağlantı açıldığında contact'ları yükle
-            // Baileys otomatik olarak contacts.set event'ini gönderir, ama emin olmak için
-            // birkaç saniye bekleyip contact sayısını kontrol edelim
-            setTimeout(async () => {
+            // Bağlantı açıldığında contact'ları DB'den yükle (uygulama yeniden başladığında contact'lar görünsün)
+            (async () => {
               try {
-                const contactCount = await prisma.contact.count({ where: { sessionId } });
-                console.log(`[${sessionId}] Veritabanında ${contactCount} contact var`);
-                if (contactCount === 0) {
-                  console.log(`[${sessionId}] Contact bulunamadı, contacts.set event'i bekleniyor...`);
-                }
-              } catch (error) {
-                logger.error({ error, sessionId }, "Contact sayısı kontrol edilemedi");
-              }
-            }, 5000);
-
-            // Bağlantı açıldığında chats'in gelmesini bekle ve kontrol et
-            // chats.set event'i genellikle bağlantı açıldıktan sonra gelir
-            // Ama bazen gelmeyebilir, bu durumda veritabanından yüklemek gerekebilir
-            setTimeout(async () => {
-              try {
-                const memoryChatsCount = instance.chatsStore.size;
-                console.log(`[${sessionId}] Memory store'da ${memoryChatsCount} chat var (2 saniye sonra kontrol)`);
+                console.log(`[${sessionId}] Veritabanından contact'lar yükleniyor...`);
+                const dbContacts = await prisma.contact.findMany({
+                  where: { sessionId },
+                });
                 
-                if (memoryChatsCount === 0) {
-                  console.log(`[${sessionId}] ⚠️ Memory store'da chat yok, chats.set event'i bekleniyor...`);
+                if (dbContacts.length > 0) {
+                  console.log(`[${sessionId}] Veritabanında ${dbContacts.length} contact bulundu, memory store'a yükleniyor...`);
                   
-                  // Daha uzun süre bekle (chats.set event'i geç gelebilir)
-                  setTimeout(async () => {
-                    const memoryChatsCountAfter = instance.chatsStore.size;
-                    if (memoryChatsCountAfter === 0) {
-                      console.log(`[${sessionId}] ⚠️ Hala memory store'da chat yok (7 saniye sonra)`);
-                      // Veritabanından kontrol et ve eğer varsa memory store'a yükle
-                      try {
-                        const dbChats = await prisma.chat.findMany({
-                          where: { sessionId },
-                          take: 100,
-                          orderBy: { conversationTimestamp: "desc" },
-                        });
-                        
-                        if (dbChats.length > 0) {
-                          console.log(`[${sessionId}] Veritabanında ${dbChats.length} chat var, memory store'a yükleniyor...`);
-                          for (const dbChat of dbChats) {
-                            const serialized = serializePrisma(dbChat);
-                            // Memory store formatına çevir
-                            instance.chatsStore.set(serialized.id, {
-                              id: serialized.id,
-                              name: serialized.name,
-                              displayName: serialized.displayName,
-                              unreadCount: serialized.unreadCount || 0,
-                              conversationTimestamp: Number(serialized.conversationTimestamp || 0),
-                              lastMsgTimestamp: Number(serialized.lastMsgTimestamp || 0),
-                              archived: serialized.archived || false,
-                              pinned: serialized.pinned || null,
-                            });
-                          }
-                          console.log(`[${sessionId}] ✅ ${dbChats.length} chat veritabanından memory store'a yüklendi`);
-                        } else {
-                          console.log(`[${sessionId}] Veritabanında da chat yok`);
-                        }
-                      } catch (dbError) {
-                        logger.error({ error: dbError, sessionId }, "Veritabanından chat yüklenemedi");
-                      }
-                    } else {
-                      console.log(`[${sessionId}] ✅ Memory store'da ${memoryChatsCountAfter} chat bulundu (WhatsApp cihazından)`);
-                    }
-                  }, 5000); // Toplam 7 saniye bekle
+                  for (const dbContact of dbContacts) {
+                    instance.contactsStore.set(dbContact.id, {
+                      id: dbContact.id,
+                      name: dbContact.name,
+                      notify: dbContact.notify,
+                      verifiedName: dbContact.verifiedName,
+                      imgUrl: dbContact.imgUrl,
+                      status: dbContact.status,
+                    });
+                  }
+                  
+                  console.log(`[${sessionId}] ✅ ${dbContacts.length} contact veritabanından memory store'a yüklendi`);
+                  
+                  // WebSocket'e bildir
+                  if (wsBroadcastFn) {
+                    wsBroadcastFn({
+                      type: "contacts.set",
+                      sessionId,
+                      contacts: dbContacts.map((c) => ({
+                        id: c.id,
+                        name: formatContactName(c),
+                        notify: c.notify || null,
+                        verifiedName: c.verifiedName || null,
+                        imgUrl: c.imgUrl || null,
+                        status: c.status || null,
+                      })),
+                    });
+                  }
                 } else {
-                  console.log(`[${sessionId}] ✅ Memory store'da ${memoryChatsCount} chat var (WhatsApp cihazından)`);
+                  console.log(`[${sessionId}] Veritabanında contact yok, contacts.set event'i bekleniyor...`);
                 }
               } catch (error) {
-                logger.error({ error, sessionId }, "Chat sayısı kontrol edilemedi");
+                logger.error({ error, sessionId }, "Veritabanından contact yüklenemedi");
               }
-            }, 2000); // 2 saniye bekle, chats.set event'i gelsin
+            })();
+
+            // Bağlantı açıldığında DB'den sohbetleri hemen yükle (uygulama yeniden başladığında sohbetler görünsün)
+            // chats.set event'i geldiğinde zaten upsert yapılacak, bu yüzden çakışma olmaz
+            (async () => {
+              try {
+                console.log(`[${sessionId}] Veritabanından sohbetler yükleniyor...`);
+                const dbChats = await prisma.chat.findMany({
+                  where: { sessionId },
+                  orderBy: { conversationTimestamp: "desc" },
+                });
+                
+                if (dbChats.length > 0) {
+                  console.log(`[${sessionId}] Veritabanında ${dbChats.length} chat bulundu, memory store'a yükleniyor...`);
+                  for (const dbChat of dbChats) {
+                    const serialized = serializePrisma(dbChat);
+                    // Memory store formatına çevir
+                    instance.chatsStore.set(serialized.id, {
+                      id: serialized.id,
+                      name: serialized.name,
+                      displayName: serialized.displayName,
+                      unreadCount: serialized.unreadCount || 0,
+                      conversationTimestamp: Number(serialized.conversationTimestamp || 0),
+                      lastMsgTimestamp: Number(serialized.lastMsgTimestamp || 0),
+                      archived: serialized.archived || false,
+                      pinned: serialized.pinned || null,
+                      participants: serialized.participant ? JSON.parse(serialized.participant) : undefined,
+                    });
+                  }
+                  console.log(`[${sessionId}] ✅ ${dbChats.length} chat veritabanından memory store'a yüklendi`);
+                  
+                  // WebSocket'e bildir (frontend'e sohbetlerin yüklendiğini bildir)
+                  if (wsBroadcastFn) {
+                    wsBroadcastFn({
+                      type: "chats.set",
+                      sessionId,
+                      chats: dbChats.map((c) => {
+                        const serialized = serializePrisma(c);
+                        return formatChat({
+                          id: serialized.id,
+                          name: serialized.name,
+                          displayName: serialized.displayName,
+                          unreadCount: serialized.unreadCount || 0,
+                          conversationTimestamp: Number(serialized.conversationTimestamp || 0),
+                          archived: serialized.archived || false,
+                        }, sessionId);
+                      }),
+                    });
+                  }
+                } else {
+                  console.log(`[${sessionId}] Veritabanında chat yok, chats.set event'i bekleniyor...`);
+                }
+              } catch (dbError) {
+                logger.error({ error: dbError, sessionId }, "Veritabanından chat yüklenemedi");
+              }
+            })();
 
             // Bağlantı açıldığında grupları senkronize et
             setTimeout(async () => {
@@ -986,15 +1202,13 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     }
     
     // Memory store boşsa, chats.set event'i henüz gelmemiş olabilir
-    // Önce veritabanından chats'i yükle ve memory store'a ekle
-    // Böylece en azından önceki chats'ler görünebilir
-    console.log(`[listChats] Memory store boş - veritabanından chats yükleniyor ve memory store'a ekleniyor...`);
+    // Veritabanından tüm chats'i yükle ve memory store'a ekle
+    console.log(`[listChats] Memory store boş - veritabanından tüm chats yükleniyor ve memory store'a ekleniyor...`);
     
     try {
-      // Veritabanından chats'i çek
+      // Veritabanından tüm chats'i çek (limit olmadan)
       const dbChats = await prisma.chat.findMany({
         where: { sessionId },
-        take: Number(limit) || 50,
         orderBy: { conversationTimestamp: "desc" },
       });
       
@@ -1149,11 +1363,12 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
         data: serialized.map((m) => ({
           id: m.id,
           from: m.remoteJid,
-          fromMe: m.key?.fromMe || false,
+          fromMe: Boolean(m.key?.fromMe),
           participant: m.participant || null,
           timestamp: Number(m.messageTimestamp || 0),
           type: m.messageStubType || Object.keys(m.message || {})[0] || "unknown",
           text: extractText(m.message),
+          key: m.key, // key objesini de ekle (frontend'de kullanılabilir)
         })),
         cursor: nextCursor,
       };
@@ -1212,11 +1427,12 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
       data: serialized.map((m) => ({
         id: m.id,
         from: m.remoteJid,
-        fromMe: m.key?.fromMe || false,
+        fromMe: Boolean(m.key?.fromMe),
         participant: m.participant || null,
         timestamp: Number(m.messageTimestamp || 0),
         type: m.messageStubType || Object.keys(m.message || {})[0] || "unknown",
         text: extractText(m.message),
+        key: m.key, // key objesini de ekle (frontend'de kullanılabilir)
       })),
       cursor: nextCursor,
     };
@@ -1401,7 +1617,7 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
     if (source.length > 0) {
       const formatted = source
         .sort((a, b) => (a.name || a.notify || a.id).localeCompare(b.name || b.notify || b.id))
-        .slice(0, limit)
+        .slice(0, limit === undefined || limit === null ? source.length : limit)
         .map((c) => ({
           id: c.id,
           name: formatContactName(c),
@@ -1420,17 +1636,20 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
 
   // Database fallback (oturum kapalı olsa da)
   try {
+    // Limit çok yüksekse (100000 gibi) tüm contact'ları çek
+    const takeLimit = limit && limit < 100000 ? Number(limit) : undefined;
     const contacts = await prisma.contact.findMany({
       cursor: cursor ? { pkId: Number(cursor) } : undefined,
-      take: Number(limit),
+      take: takeLimit,
       skip: cursor ? 1 : 0,
       where: { sessionId },
       orderBy: { pkId: "desc" },
     });
 
     const serialized = contacts.map((c) => serializePrisma(c));
+    // Limit belirtilmemişse veya çok yüksekse cursor döndürme (tüm contact'lar zaten geldi)
     const nextCursor =
-      serialized.length !== 0 && serialized.length === Number(limit)
+      takeLimit && serialized.length !== 0 && serialized.length === Number(limit)
         ? serialized[serialized.length - 1].pkId
         : null;
 
@@ -1695,16 +1914,69 @@ export const checkNumber = async (accountId, jidOrNumber) => {
 export const getProfilePicture = async (accountId, jid) => {
   const sock = ensureSocket(accountId);
   const normalized = normalizeJid(jid);
+  const isGroup = normalized.includes('@g.us');
+  
   try {
+    // Bağlantı durumunu kontrol et
+    const instance = getOrCreateInstance(accountId);
+    if (instance.connectionState.status !== "open") {
+      console.log(`[getProfilePicture] Bağlantı açık değil (${instance.connectionState.status}), DB'den kontrol ediliyor...`);
+      // DB'den kontrol et
+      const sessionId = getAccountId(accountId);
+      if (isGroup) {
+        // Grup için groupMetadata kontrol et (eğer imgUrl field'ı varsa)
+        // Şimdilik null döndür, çünkü schema'da imgUrl yok
+        return null;
+      } else {
+        // Bireysel sohbet için contact kontrol et
+        const contact = await prisma.contact.findUnique({
+          where: {
+            sessionId_id: {
+              sessionId,
+              id: normalized,
+            },
+          },
+        });
+        return contact?.imgUrl || null;
+      }
+    }
+    
+    // Baileys API'den profil resmini al (hem bireysel hem grup için çalışır)
     const url = await sock.profilePictureUrl(normalized, "image");
     return url || null;
   } catch (error) {
-    // Baileys item-not-found -> 404
-    if (error?.data === 404 || error?.output?.statusCode === 404) {
-      return null;
+    // Baileys item-not-found -> 404, not-authorized -> 401
+    if (error?.data === 404 || error?.output?.statusCode === 404 || 
+        error?.data === 401 || error?.output?.statusCode === 401 ||
+        error?.message?.includes('not-authorized')) {
+      console.log(`[getProfilePicture] Profil fotoğrafı alınamadı (${error?.data || error?.output?.statusCode || 'not-authorized'}), DB'den kontrol ediliyor...`);
+      // DB'den kontrol et
+      try {
+        const sessionId = getAccountId(accountId);
+        if (isGroup) {
+          // Grup için groupMetadata kontrol et (eğer imgUrl field'ı varsa)
+          // Şimdilik null döndür
+          return null;
+        } else {
+          // Bireysel sohbet için contact kontrol et
+          const contact = await prisma.contact.findUnique({
+            where: {
+              sessionId_id: {
+                sessionId,
+                id: normalized,
+              },
+            },
+          });
+          return contact?.imgUrl || null;
+        }
+      } catch (dbError) {
+        logger.debug({ error: dbError, accountId, jid }, "DB'den profil fotoğrafı alınamadı");
+        return null;
+      }
     }
     logger.error({ error, accountId, jid }, "Profil fotoğrafı alınamadı");
-    throw error;
+    // Hata fırlatmak yerine null döndür
+    return null;
   }
 };
 
@@ -2409,11 +2681,12 @@ export const searchMessages = async (
     data: serialized.map((m) => ({
       id: m.id,
       from: m.remoteJid,
-      fromMe: m.key?.fromMe || false,
+      fromMe: Boolean(m.key?.fromMe),
       participant: m.participant || null,
       timestamp: Number(m.messageTimestamp || 0),
       type: m.messageStubType || Object.keys(m.message || {})[0] || "unknown",
       text: extractText(m.message),
+      key: m.key, // key objesini de ekle (frontend'de kullanılabilir)
     })),
     count: serialized.length,
     query,

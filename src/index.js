@@ -322,7 +322,9 @@ app.get(
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
     console.log(`[GET /${sessionId}/contacts] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
-    const result = await listContacts(sessionId, cursor, Number(limit) || 50);
+    // Limit belirtilmediyse çok yüksek bir limit kullan (tüm contact'ları çekmek için)
+    const contactLimit = limit ? Number(limit) : 100000;
+    const result = await listContacts(sessionId, cursor, contactLimit);
     if (result === null) {
       return res.status(404).json({ error: "Session not found" });
     }
