@@ -177,7 +177,7 @@ export default function MessageList({
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]" 
         style={{
-          backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
+        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
         }}
       >
         <div className="space-y-2">
@@ -257,19 +257,19 @@ export default function MessageList({
                   )}
                   
                   <div
-                    className={`flex w-full ${
-                      isProtocol 
-                        ? 'justify-center' 
-                        : fromMe ? 'justify-end' : 'justify-start'
-                    } mb-0.5 group relative`}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      if (!isProtocol) {
-                        onSelectMessage(msg);
-                        onShowMessageMenu(true);
-                      }
-                    }}
-                  >
+                  className={`flex w-full ${
+                    isProtocol 
+                      ? 'justify-center' 
+                      : fromMe ? 'justify-end' : 'justify-start'
+                  } mb-0.5 group relative`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    if (!isProtocol) {
+                      onSelectMessage(msg);
+                      onShowMessageMenu(true);
+                    }
+                  }}
+                >
                   <div
                     className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm relative ${
                       isProtocol

@@ -67,13 +67,9 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
                 setThumbnailUrl(thumbnailBlobUrl);
                 
                 if (process.env.NODE_ENV === 'development') {
-                  console.log('Thumbnail oluşturuldu:', { blobSize: blob.size, messageId: message.id });
+                  // Thumbnail oluşturuldu
                 }
               } catch (decodeError) {
-                console.error('Thumbnail decode hatası:', decodeError, { 
-                  base64Length: base64String.length,
-                  messageId: message.id 
-                });
                 // Thumbnail decode edilemezse null bırak, tam resim yüklenecek
                 setThumbnailUrl(null);
               }
@@ -82,7 +78,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
             }
           }
         } catch (error) {
-          console.error('Thumbnail oluşturulamadı:', error);
+          // Thumbnail oluşturulamadı (sessizce handle edildi)
           setThumbnailUrl(null);
         }
       } else {
@@ -128,15 +124,13 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
       setIsLoading(true);
       
       // Gelişmiş medya indirme kullan (zaten decrypt edilmiş medya döner)
-      console.log('Medya indiriliyor:', { sessionId, messageType, messageId: message.id });
       api.downloadMediaMessageAdvanced(sessionId, message)
         .then(url => {
-          console.log('Medya indirme sonucu:', { url: url ? 'başarılı' : 'başarısız', messageId: message.id });
           if (url) {
             setMediaUrl(url);
             setImageLoaded(false); // Reset image loaded state
           } else {
-            console.error('Medya URL alınamadı:', message.id);
+            // Medya URL alınamadı (sessizce handle edildi)
             if (isImageMessage) setImageError(true);
             if (isOtherMedia) {
               setVideoError(true);
@@ -145,7 +139,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
           }
         })
         .catch((error) => {
-          console.error('Medya indirme hatası:', error, { messageId: message.id });
+          // Medya indirme hatası (sessizce handle edildi)
           if (isImageMessage) setImageError(true);
           if (isOtherMedia) {
             setVideoError(true);
@@ -184,17 +178,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
     const caption = mediaData?.caption || message.caption || '';
     const mimetype = mediaData?.mimetype || message.message?.imageMessage?.mimetype || 'image/jpeg';
     
-    // Debug: Mesaj objesi bilgilerini logla
-    if (process.env.NODE_ENV === 'development') {
-      console.log('ImageMessage işleniyor:', {
-        hasThumbnail: !!thumbnailUrl,
-        hasMediaUrl: !!mediaUrl,
-        imageLoaded,
-        isLoading,
-        mimetype,
-        messageId: message.id
-      });
-    }
+    // Debug log kaldırıldı (performans için)
     
     // Thumbnail varsa önce onu göster, yoksa tam resmi göster
     const displayImage = thumbnailUrl && !imageLoaded ? thumbnailUrl : mediaUrl;
@@ -213,7 +197,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
             }
           })
           .catch((error) => {
-            console.error('Tam resim yükleme hatası:', error);
+            // Tam resim yükleme hatası (sessizce handle edildi)
             setImageError(true);
           })
           .finally(() => {
@@ -240,7 +224,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
         };
         reader.readAsDataURL(blob);
       } catch (error) {
-        console.error('Resim açılamadı:', error);
+        // Resim açılamadı (sessizce handle edildi)
         // Fallback: blob URL'i direkt kullan
         setModalImageUrl(imageToOpen);
         setShowImageModal(true);
@@ -303,7 +287,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
                   // Thumbnail hata verirse direkt tam resmi yükle
                   handleThumbnailClick();
                 } else {
-                  console.error('Resim yüklenemedi');
+                  // Resim yüklenemedi (sessizce handle edildi)
                   setImageError(true);
                 }
               }}
@@ -512,7 +496,7 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
         };
         reader.readAsDataURL(blob);
       } catch (error) {
-        console.error('Sticker açılamadı:', error);
+        // Sticker açılamadı (sessizce handle edildi)
         window.open(mediaUrl, '_blank');
       }
     };

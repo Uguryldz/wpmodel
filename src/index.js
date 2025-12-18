@@ -1449,10 +1449,40 @@ app.post(
   "/:sessionId/messages/download-advanced",
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
-    const { message } = req.body;
+    let { message } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    // Mesaj yapısını kontrol et ve düzelt (Baileys'in beklediği formata çevir)
+    const messageType = message.type || (message.message ? Object.keys(message.message)[0] : null);
+    
+    // Eğer message.message yoksa ve sadece type varsa, message.message yapısını oluştur
+    if (!message.message && messageType) {
+      // Frontend'den gelen mesaj yapısını Baileys formatına çevir
+      if (messageType === 'audioMessage' || messageType === 'audio' || messageType === 'ptt') {
+        // Eğer audioMessage objesi varsa onu kullan, yoksa boş obje oluştur
+        message.message = {
+          audioMessage: message.message?.audioMessage || message.audioMessage || {}
+        };
+      } else if (messageType === 'imageMessage' || messageType === 'image') {
+        message.message = {
+          imageMessage: message.message?.imageMessage || message.imageMessage || {}
+        };
+      } else if (messageType === 'videoMessage' || messageType === 'video') {
+        message.message = {
+          videoMessage: message.message?.videoMessage || message.videoMessage || {}
+        };
+      } else if (messageType === 'documentMessage' || messageType === 'document') {
+        message.message = {
+          documentMessage: message.message?.documentMessage || message.documentMessage || {}
+        };
+      } else if (messageType === 'stickerMessage' || messageType === 'sticker') {
+        message.message = {
+          stickerMessage: message.message?.stickerMessage || message.stickerMessage || {}
+        };
+      }
     }
 
     const result = await downloadMediaMessageAdvanced(sessionId, message);

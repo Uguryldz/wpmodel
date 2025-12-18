@@ -193,12 +193,21 @@ export const sendMediaMessage = async (
     ptt?: boolean; // Push to Talk (sesli mesaj)
   }
 ): Promise<any> => {
-  // File veya Blob ise base64'e çevir
+  // File veya Blob ise base64'e çevir (tarayıcı uyumlu - FileReader kullan)
   let mediaBase64: string;
   if (media instanceof File || media instanceof Blob) {
-    const arrayBuffer = await media.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    mediaBase64 = buffer.toString('base64');
+    // FileReader API kullan (büyük dosyalar için daha güvenli)
+    mediaBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        // data:audio/webm;base64, prefix'ini kaldır
+        const base64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(media);
+    });
   } else {
     mediaBase64 = media;
   }

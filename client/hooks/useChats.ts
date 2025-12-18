@@ -27,6 +27,7 @@ export function useChats({
   const selectedChatRef = useRef<Chat | null>(null);
   const contactsMapRef = useRef<Map<string, any>>(contactsMap);
   const lastContactsMapSizeRef = useRef<number>(contactsMap.size);
+  const chatsProfilePicturesLoadedRef = useRef<Map<string, boolean>>(new Map()); // Hangi session için profil fotoğrafları yüklendi
 
   // contactsMap'i ref'te tut - her zaman güncel değeri kullan
   useEffect(() => {
@@ -93,6 +94,9 @@ export function useChats({
       
       chatsLoadedRef.current.set(sessionId, true);
       
+      // Bu session için profil fotoğrafları zaten yüklendiyse tekrar yükleme
+      const alreadyLoaded = chatsProfilePicturesLoadedRef.current.get(sessionId);
+      
       const sortedChats = [...chatsData].sort((a, b) => {
         const aTime = a.conversationTimestamp || (a as any).lastMsgTimestamp || 0;
         const bTime = b.conversationTimestamp || (b as any).lastMsgTimestamp || 0;
@@ -126,7 +130,8 @@ export function useChats({
               if (!chatProfilePictures.has(chat.id)) {
                 setChatProfilePictures(prev => new Map(prev).set(chat.id, contact.imgUrl));
               }
-            } else if (!chatProfilePictures.has(chat.id)) {
+            } else if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
+              // Sadece ilk yüklemede profil fotoğraflarını çek
               queueProfilePicture(sessionId, chat.id);
             } else {
               const cached = chatProfilePictures.get(chat.id);
@@ -138,7 +143,8 @@ export function useChats({
               displayName = phoneMatch[1];
             }
             
-            if (!chatProfilePictures.has(chat.id)) {
+            if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
+              // Sadece ilk yüklemede profil fotoğraflarını çek
               queueProfilePicture(sessionId, chat.id);
             } else {
               const cached = chatProfilePictures.get(chat.id);
@@ -146,7 +152,8 @@ export function useChats({
             }
           }
         } else {
-          if (!chatProfilePictures.has(chat.id)) {
+          if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
+            // Sadece ilk yüklemede profil fotoğraflarını çek
             queueProfilePicture(sessionId, chat.id);
           } else {
             const cached = chatProfilePictures.get(chat.id);
@@ -170,6 +177,12 @@ export function useChats({
       });
       
       console.log('Formatlanmış sohbetler:', formattedChats);
+      
+      // İlk yüklemede profil fotoğrafları yüklendiğini işaretle
+      if (!alreadyLoaded) {
+        chatsProfilePicturesLoadedRef.current.set(sessionId, true);
+      }
+      
       setChats(formattedChats);
       setSelectedChat(prev => {
         // Sadece selectedChat yoksa veya değiştiyse güncelle

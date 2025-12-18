@@ -21,12 +21,15 @@ export const buildMediaContent = ({ buffer, stream, url, mimetype, caption, view
     }
   }
   // Stream kullan (README'ye göre best practice - memory optimization)
+  // BaileyTipREADME.md'ye göre: audio için { audio: stream } veya { audio: { url } } formatı kullanılabilir
   else if (stream) {
     if (mimetype.startsWith("image/")) {
       baseContent = { image: stream, mimetype, caption };
     } else if (mimetype.startsWith("video/")) {
       baseContent = { video: stream, mimetype, caption, ptv: ptv || false };
     } else if (mimetype.startsWith("audio/")) {
+      // Audio için stream direkt kullanılabilir (BaileyTipREADME.md'ye göre)
+      // PTT (Push to Talk) desteği eklendi
       baseContent = { audio: stream, mimetype, ptt: ptt || false };
     } else {
       baseContent = { document: stream, mimetype, fileName: caption || "dosya" };
@@ -34,7 +37,7 @@ export const buildMediaContent = ({ buffer, stream, url, mimetype, caption, view
   }
   // Buffer kullan (fallback - eski uyumluluk için)
   else if (buffer) {
-    if (mimetype.startsWith("image/")) {
+  if (mimetype.startsWith("image/")) {
       baseContent = { image: buffer, mimetype, caption };
     } else if (mimetype.startsWith("video/")) {
       baseContent = { video: buffer, mimetype, caption, ptv: ptv || false };

@@ -157,7 +157,7 @@ export const starMessage = async (accountId, jid, messageId, star = true) => {
           {
             id: messageId,
             fromMe: key.fromMe || false,
-          },
+    },
         ],
         star: star, // true: Star Message; false: Unstar Message
       },

@@ -90,9 +90,26 @@ export default function MessageInput({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // MediaRecorder oluştur - OGG formatı kullan (WhatsApp için önerilen)
+      // MediaRecorder için tarayıcının desteklediği formatı bul
+      let mimeType = 'audio/webm'; // Varsayılan format
+      const supportedTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+        'audio/mpeg'
+      ];
+      
+      for (const type of supportedTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
+        }
+      }
+
+      // MediaRecorder oluştur
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/ogg; codecs=opus'
+        mimeType: mimeType
       });
 
       mediaRecorderRef.current = mediaRecorder;
@@ -106,7 +123,7 @@ export default function MessageInput({
 
       mediaRecorder.onstop = () => {
         // Kayıt durdurulduğunda blob oluştur
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/ogg; codecs=opus' });
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         
         // Stream'i durdur
         if (streamRef.current) {
@@ -128,7 +145,7 @@ export default function MessageInput({
       setIsRecording(true);
       setRecordingTime(0);
     } catch (error) {
-      console.error('Ses kaydı başlatılamadı:', error);
+      // Ses kaydı başlatılamadı
       alert('Mikrofon erişimi alınamadı. Lütfen tarayıcı ayarlarını kontrol edin.');
     }
   };

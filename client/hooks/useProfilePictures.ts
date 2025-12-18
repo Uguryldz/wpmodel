@@ -8,6 +8,8 @@ export function useProfilePictures() {
   const profilePictureLoadingRef = useRef<boolean>(false);
   const profilePictureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const profilePictureFailedRef = useRef<Set<string>>(new Set());
+  const profilePicturesQueuedRef = useRef<Set<string>>(new Set()); // Zaten queue'ya eklenmiş jid'leri takip et
+  const profilePicturesLoadedRef = useRef<Map<string, boolean>>(new Map()); // Hangi session için profil fotoğrafları yüklendi
 
   // Profil resimlerini batch olarak yükle (debounce ile)
   const loadProfilePicturesBatch = async (sessionId: string) => {
@@ -32,6 +34,9 @@ export function useProfilePictures() {
         batch.map(jid => 
           api.getProfilePicture(sessionId, jid)
             .then(pictureUrl => {
+              const queueKey = `${sessionId}:${jid}`;
+              profilePicturesQueuedRef.current.delete(queueKey); // Queue'dan çıkar
+              
               if (pictureUrl) {
                 setChatProfilePictures(prev => new Map(prev).set(jid, pictureUrl));
                 profilePictureFailedRef.current.delete(jid);
@@ -41,6 +46,9 @@ export function useProfilePictures() {
               }
             })
             .catch(() => {
+              const queueKey = `${sessionId}:${jid}`;
+              profilePicturesQueuedRef.current.delete(queueKey); // Queue'dan çıkar
+              
               setChatProfilePictures(prev => new Map(prev).set(jid, 'NO_PICTURE'));
               profilePictureFailedRef.current.add(jid);
             })
@@ -58,15 +66,20 @@ export function useProfilePictures() {
 
   // Profil resmi yükleme isteğini queue'ya ekle (debounce ile)
   const queueProfilePicture = (sessionId: string, jid: string) => {
-    // Eğer zaten yüklenmişse, yükleniyorsa veya başarısız olmuşsa, atla
+    // Eğer zaten yüklenmişse, yükleniyorsa, başarısız olmuşsa veya zaten queue'da ise, atla
     if (chatProfilePictures.has(jid)) return;
     if (profilePictureFailedRef.current.has(jid)) return;
+    
+    // Bu jid zaten queue'ya eklenmiş mi kontrol et
+    const queueKey = `${sessionId}:${jid}`;
+    if (profilePicturesQueuedRef.current.has(queueKey)) return;
     
     // Queue'ya ekle
     if (!profilePictureQueueRef.current.has(sessionId)) {
       profilePictureQueueRef.current.set(sessionId, new Set());
     }
     profilePictureQueueRef.current.get(sessionId)!.add(jid);
+    profilePicturesQueuedRef.current.add(queueKey); // Queue'ya eklendiğini işaretle
 
     // Debounce: belirli süre sonra batch yükle
     if (profilePictureTimeoutRef.current) {

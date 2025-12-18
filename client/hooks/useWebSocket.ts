@@ -74,13 +74,13 @@ export function useWebSocket({
               console.log('[WebSocket] Sohbet listesi güncelleniyor...', data.chats?.length || 0);
               
               if (data.chats && Array.isArray(data.chats)) {
-                // Profil resimlerini cache'e ekle
+                // Profil resimlerini cache'e ekle (sadece yeni chat'ler için)
                 data.chats.forEach((chat: any) => {
                   if (chat.imgUrl) {
                     setChatProfilePictures(prev => new Map(prev).set(chat.id, chat.imgUrl));
-                  } else if (!chatProfilePictures.has(chat.id)) {
-                    queueProfilePicture(data.sessionId, chat.id);
                   }
+                  // WebSocket'ten gelen chat'ler için profil fotoğraflarını tekrar yükleme
+                  // Sadece ilk yüklemede yüklenecek (useChats hook'unda)
                 });
                 
                 const hasInitialLoad = chatsInitialLoadRef.current.get(data.sessionId);
@@ -241,13 +241,13 @@ export function useWebSocket({
                   // README'ye göre best practice: loop kullan
                   const newMessages: Message[] = [];
                   for (const msg of relevantMessages) {
-                    const text = msg.text || extractMessageText(msg);
-                    const body = msg.body || text;
-                    const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
-                    const fromMe = msg.fromMe !== undefined 
-                      ? Boolean(msg.fromMe) 
-                      : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
-                    
+                      const text = msg.text || extractMessageText(msg);
+                      const body = msg.body || text;
+                      const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                      const fromMe = msg.fromMe !== undefined 
+                        ? Boolean(msg.fromMe) 
+                        : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+                      
                     // Duplicate kontrolü
                     if (msgId && !existingIds.has(msgId)) {
                       newMessages.push({
@@ -257,7 +257,7 @@ export function useWebSocket({
                         body: body || text,
                         fromMe: fromMe,
                         timestamp: msg.timestamp || msg.messageTimestamp || undefined,
-                      });
+                    });
                     }
                   }
                   

@@ -33,7 +33,6 @@ export const getProfilePicture = async (accountId, jid) => {
         },
       });
       if (contact?.imgUrl) {
-        console.log(`[getProfilePicture] Profil fotoğrafı DB'den bulundu: ${normalized}`);
         return contact.imgUrl;
       }
     }
@@ -45,7 +44,6 @@ export const getProfilePicture = async (accountId, jid) => {
   try {
     const instance = getOrCreateInstance(accountId);
     if (instance.connectionState.status !== "open") {
-      console.log(`[getProfilePicture] Bağlantı açık değil (${instance.connectionState.status}), DB'de de yok, null döndürülüyor...`);
       return null;
     }
     
@@ -70,7 +68,6 @@ export const getProfilePicture = async (accountId, jid) => {
               imgUrl: url,
             },
           });
-          console.log(`[getProfilePicture] Profil fotoğrafı API'den alındı ve DB'ye kaydedildi: ${normalized}`);
         } catch (updateError) {
           logger.debug({ error: updateError, accountId, jid }, "Profil fotoğrafı DB'ye kaydedilemedi");
         }
@@ -83,7 +80,6 @@ export const getProfilePicture = async (accountId, jid) => {
         error?.data === 401 || error?.output?.statusCode === 401 ||
         error?.message?.includes('not-authorized') ||
         error?.message?.includes('item-not-found')) {
-      console.log(`[getProfilePicture] Profil fotoğrafı API'den alınamadı (${error?.data || error?.output?.statusCode || 'not-found'}), DB'de de yok, null döndürülüyor...`);
       return null;
     }
     logger.error({ error, accountId, jid }, "Profil fotoğrafı alınamadı");

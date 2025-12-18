@@ -174,29 +174,8 @@ export default function WhatsAppMultiAccount() {
     }
   }, [chatProfilePictures, chatsHook.chats.length, chatsHook.selectedChat?.id]);
 
-  // Sohbetler yüklendiğinde profil resimlerini otomatik yükle
-  useEffect(() => {
-    if (activeAccount?.id && chatsHook.chats.length > 0) {
-      const sessionId = activeAccount.id;
-      const cached = contactsHook.contactsCacheRef.current.get(sessionId);
-      
-      chatsHook.chats.forEach(chat => {
-        // Profil resmi yoksa ve henüz yüklenmemişse, queue'ya ekle
-        if (!chatProfilePictures.has(chat.id) && !profilePictureFailedRef.current.has(chat.id)) {
-          // Önce contact cache'den kontrol et
-          if (cached) {
-            const contact = cached.data.get(chat.id);
-            if (contact && contact.imgUrl) {
-              setChatProfilePictures(prev => new Map(prev).set(chat.id, contact.imgUrl));
-              return;
-            }
-          }
-          // Contact cache'de yoksa API'den yükle
-          queueProfilePicture(sessionId, chat.id);
-        }
-      });
-    }
-  }, [chatsHook.chats.length, activeAccount?.id, chatProfilePictures.size]);
+  // Profil resmi yükleme artık useChats ve useContacts hook'larında yönetiliyor
+  // Sadece ilk yüklemede çekilecek, tekrar tekrar denemeyecek
 
   // Seçilen kişiye mesaj gönder
   const handleSelectContactForMessage = async (contact: api.Contact) => {
@@ -240,14 +219,17 @@ export default function WhatsAppMultiAccount() {
   // Ses kaydı gönderme handler'ı
   const handleSendVoiceMessage = async (audioBlob: Blob) => {
     if (!activeAccount || !chatsHook.selectedChat) return;
-
+    
     // Optimistik UI: Ses mesajını hemen ekle
     const tempMessageId = `temp-voice-${Date.now()}`;
 
     try {
-      // Blob'u base64'e çevir
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      // Blob'un mimetype'ini al (MediaRecorder'dan gelen format)
+      // BaileyTipREADME.md'ye göre: audio mesajı için mimetype 'audio/mp4' kullanılabilir
+      // Örnekte audio.mp3 dosyası için bile 'audio/mp4' mimetype kullanılıyor
+      const originalMimetype = audioBlob.type || 'audio/webm';
+      // BaileyTipREADME.md örneğine göre: audio/mp4 kullan (PTT için de çalışır)
+      const mimetype = 'audio/mp4'; // BaileyTipREADME.md'deki örneğe göre
       const optimisticMessage: Message = {
         id: tempMessageId,
         text: '🎤 Ses mesajı',
@@ -259,7 +241,7 @@ export default function WhatsAppMultiAccount() {
         type: 'audioMessage',
         message: {
           audioMessage: {
-            mimetype: 'audio/ogg; codecs=opus',
+            mimetype: mimetype,
             ptt: true, // Push to Talk
           }
         }
@@ -285,11 +267,12 @@ export default function WhatsAppMultiAccount() {
       });
 
       // Ses mesajını gönder (PTT - Push to Talk)
+      // api.sendMediaMessage Blob'u otomatik olarak base64'e çevirir
       await api.sendMediaMessage(
         activeAccount.id,
         chatsHook.selectedChat.id,
-        base64Audio,
-        'audio/ogg; codecs=opus',
+        audioBlob, // Blob'u direkt gönder, api.sendMediaMessage base64'e çevirecek
+        mimetype,
         undefined,
         { ptt: true } // Push to Talk (sesli mesaj)
       );
@@ -313,7 +296,7 @@ export default function WhatsAppMultiAccount() {
         }
         return prevChats;
       });
-
+      
       // Mesajları yeniden yükle (gerçek mesajı almak için)
       setTimeout(() => {
         messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id, 50, false);
@@ -335,35 +318,35 @@ export default function WhatsAppMultiAccount() {
     const tempMessageId = `temp-${Date.now()}`;
     
     // Optimistik UI güncellemesi: Mesajı hemen ekle (gönderiliyor durumu ile)
-    const optimisticMessage: Message = {
+      const optimisticMessage: Message = {
       id: tempMessageId,
-      text: messageText,
-      body: messageText,
-      fromMe: true,
-      timestamp: Math.floor(Date.now() / 1000),
-      from: chatsHook.selectedChat.id,
+        text: messageText,
+        body: messageText,
+        fromMe: true,
+        timestamp: Math.floor(Date.now() / 1000),
+        from: chatsHook.selectedChat.id,
       status: 'sending',
-    };
-    
-    // Mesajı hemen ekle (gönderiliyor durumu ile)
-    messagesHook.setMessages(prev => {
-      const existingIds = new Set(prev.map(m => m.id || m.key?.id));
-      if (existingIds.has(optimisticMessage.id)) {
-        return prev;
-      }
+      };
       
-      const merged = [...prev, optimisticMessage];
-      merged.sort((a, b) => {
-        const normalizeTimestamp = (ts: number | undefined) => {
-          if (!ts) return 0;
-          return ts > 1000000000000 ? ts : ts * 1000;
-        };
-        const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
-        const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-        return aTime - bTime;
+    // Mesajı hemen ekle (gönderiliyor durumu ile)
+      messagesHook.setMessages(prev => {
+        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+        if (existingIds.has(optimisticMessage.id)) {
+          return prev;
+        }
+        
+        const merged = [...prev, optimisticMessage];
+        merged.sort((a, b) => {
+          const normalizeTimestamp = (ts: number | undefined) => {
+            if (!ts) return 0;
+            return ts > 1000000000000 ? ts : ts * 1000;
+          };
+          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
+          return aTime - bTime;
+        });
+        return merged;
       });
-      return merged;
-    });
     
     // Mesaj girişini temizle
     messagesHook.setMessage('');

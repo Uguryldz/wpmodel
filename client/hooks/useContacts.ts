@@ -21,6 +21,7 @@ export function useContacts({
   const [contactSearchTerm, setContactSearchTerm] = useState('');
   const [isLoadingContacts, setIsLoadingContacts] = useState(false);
   const contactsCacheRef = useRef<Map<string, { data: Map<string, any>, timestamp: number }>>(new Map());
+  const contactsProfilePicturesLoadedRef = useRef<Map<string, boolean>>(new Map()); // Hangi session için profil fotoğrafları yüklendi
 
   const loadContacts = async (sessionId: string, forceReload: boolean = false): Promise<Map<string, any>> => {
     try {
@@ -56,6 +57,9 @@ export function useContacts({
   const handleLoadContacts = useCallback(async () => {
     if (!activeAccountId) return;
     
+    // Bu session için profil fotoğrafları zaten yüklendiyse tekrar yükleme
+    const alreadyLoaded = contactsProfilePicturesLoadedRef.current.get(activeAccountId);
+    
     const cached = contactsCacheRef.current.get(activeAccountId);
     if (cached && cached.data.size > 0) {
       const contactsArray = Array.from(cached.data.values());
@@ -63,11 +67,15 @@ export function useContacts({
       setFilteredContacts(contactsArray);
       console.log('Contact\'lar WebSocket cache\'den yüklendi:', contactsArray.length);
       
-      contactsArray.forEach((contact) => {
-        if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
-          queueProfilePicture(activeAccountId, contact.id);
-        }
-      });
+      // Sadece ilk yüklemede profil fotoğraflarını çek
+      if (!alreadyLoaded) {
+        contactsArray.forEach((contact) => {
+          if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+            queueProfilePicture(activeAccountId, contact.id);
+          }
+        });
+        contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
+      }
     } else {
       console.log('Contact cache boş, API\'den yükleniyor...');
       // Cache boşsa API'den yükle
@@ -79,11 +87,15 @@ export function useContacts({
         setFilteredContacts(contactsArray);
         console.log('Contact\'lar API\'den yüklendi:', contactsArray.length);
         
-        contactsArray.forEach((contact) => {
-          if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
-            queueProfilePicture(activeAccountId, contact.id);
-          }
-        });
+        // Sadece ilk yüklemede profil fotoğraflarını çek
+        if (!alreadyLoaded) {
+          contactsArray.forEach((contact) => {
+            if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+              queueProfilePicture(activeAccountId, contact.id);
+            }
+          });
+          contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
+        }
       } catch (error) {
         console.error('Kişi listesi yüklenemedi:', error);
         setContacts([]);
@@ -103,8 +115,12 @@ export function useContacts({
       const contactsArray = Array.from(contactsMap.values());
       setContacts(contactsArray);
       
+      // Refresh'te profil fotoğraflarını tekrar yükleme (sadece yeni contact'lar için)
+      // Zaten yüklenmiş olanları atla
       contactsArray.forEach((contact) => {
-        if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+        if (!contact.imgUrl && 
+            !chatProfilePictures.has(contact.id) && 
+            !profilePictureFailedRef.current.has(contact.id)) {
           queueProfilePicture(activeAccountId, contact.id);
         }
       });
@@ -118,6 +134,9 @@ export function useContacts({
   const handleOpenContactSelector = useCallback(async () => {
     if (!activeAccountId) return;
     
+    // Bu session için profil fotoğrafları zaten yüklendiyse tekrar yükleme
+    const alreadyLoaded = contactsProfilePicturesLoadedRef.current.get(activeAccountId);
+    
     const cached = contactsCacheRef.current.get(activeAccountId);
     if (cached && cached.data.size > 0) {
       const contactsArray = Array.from(cached.data.values());
@@ -125,11 +144,15 @@ export function useContacts({
       setFilteredContacts(contactsArray);
       console.log('Contact\'lar WebSocket cache\'den yüklendi:', contactsArray.length);
       
-      contactsArray.forEach((contact) => {
-        if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
-          queueProfilePicture(activeAccountId, contact.id);
-        }
-      });
+      // Sadece ilk yüklemede profil fotoğraflarını çek
+      if (!alreadyLoaded) {
+        contactsArray.forEach((contact) => {
+          if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+            queueProfilePicture(activeAccountId, contact.id);
+          }
+        });
+        contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
+      }
     } else {
       console.log('Contact cache boş, API\'den yükleniyor...');
       // Cache boşsa API'den yükle
@@ -141,11 +164,15 @@ export function useContacts({
         setFilteredContacts(contactsArray);
         console.log('Contact\'lar API\'den yüklendi:', contactsArray.length);
         
-        contactsArray.forEach((contact) => {
-          if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
-            queueProfilePicture(activeAccountId, contact.id);
-          }
-        });
+        // Sadece ilk yüklemede profil fotoğraflarını çek
+        if (!alreadyLoaded) {
+          contactsArray.forEach((contact) => {
+            if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+              queueProfilePicture(activeAccountId, contact.id);
+            }
+          });
+          contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
+        }
       } catch (error) {
         console.error('Kişi listesi yüklenemedi:', error);
         setContacts([]);

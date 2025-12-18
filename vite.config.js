@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 
 // EPIPE ve ECONNRESET hatalarını filtrele
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
@@ -12,6 +13,25 @@ process.stderr.write = (chunk, encoding, fd) => {
   }
   return originalStderrWrite(chunk, encoding, fd);
 };
+
+// HTTPS sertifikalarını yükle
+let httpsConfig = false;
+try {
+  const keyPath = path.resolve(__dirname, '.cert/key.pem');
+  const certPath = path.resolve(__dirname, '.cert/cert.pem');
+  
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    httpsConfig = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    };
+    console.log('[Vite] HTTPS sertifikaları yüklendi');
+  } else {
+    console.warn('[Vite] HTTPS sertifikaları bulunamadı, HTTPS devre dışı');
+  }
+} catch (error) {
+  console.warn('[Vite] HTTPS sertifikaları yüklenemedi:', error.message);
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -29,6 +49,7 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    https: httpsConfig, // HTTPS desteği ekle (mikrofon/kamera erişimi için gerekli)
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
