@@ -11,6 +11,7 @@ import {
   getConnectionState,
   getLastQr,
   initBaileys,
+  startConnection,
   listChats,
   listContacts,
   listGroups,
@@ -57,6 +58,86 @@ import {
   restoreSessions,
   refreshContacts,
   syncChats,
+  getStatus,
+  setStatus,
+  setDisappearingMode,
+  getDisappearingMode,
+  getPrivacySettings,
+  updatePrivacySettings,
+  getLinkPreview,
+  sendMessageWithPreview,
+  downloadMediaMessageAdvanced,
+  getAudioDuration,
+  generateThumbnailForMedia,
+  extractImageThumbnail,
+  groupLeave,
+  checkIsGroup,
+  downloadChatHistory,
+  getBusinessProfile,
+  getCatalog,
+  getOrderDetails,
+  getProduct,
+  generateWAMessageUtil,
+  generateWAMessageContentUtil,
+  generateWAMessageFromContentUtil,
+  decodeJid,
+  encodeJid,
+  checkIsNewsletter,
+  checkIsStatusBroadcast,
+  checkIsBot,
+  extractChatId,
+  prepareMediaMessage,
+  getMediaDecryptionKeys,
+  calculateMediaHash,
+  getMediaExtension,
+  getAudioWaveformUtil,
+  decryptPollVoteUtil,
+  groupUpdate,
+  getNewsletterMetadata,
+  subscribeToNewsletter,
+  unsubscribeFromNewsletter,
+  getNewsletterSubscriptions,
+  transferDevice,
+  configureSuccessfulPairingUtil,
+  downloadAndProcessHistorySyncNotificationUtil,
+  checkAreJidsSameUser,
+  extractUrlFromTextUtil,
+  cleanMessageUtil,
+  normalizeMessageContentUtil,
+  extractMessageContentUtil,
+  getMessageContentType,
+  checkIsRealMessage,
+  checkIsMetaAI,
+  checkIsLidUser,
+  checkIsPnUser,
+  checkIsHostedLidUser,
+  checkIsHostedPnUser,
+  checkIsWABusinessPlatform,
+  addTransactionCapabilityUtil,
+  extractDeviceJidsUtil,
+  getDeviceUtil,
+  getPlatformIdUtil,
+  getDecryptionJidUtil,
+  getHistoryMessageUtil,
+  getCallStatusUtil,
+  getAggregateResponsesUtil,
+  getAggregateVotesUtil,
+  updateMessageWithReactionUtil,
+  updateMessageWithReceiptUtil,
+  updateMessageWithPollUpdateUtil,
+  updateMessageWithEventResponseUtil,
+  checkShouldIncrementChatUnread,
+  processHistoryMessageUtil,
+  processSyncActionUtil,
+  prepareDisappearingMessageSettingContentUtil,
+  encodeNewsletterMessageUtil,
+  downloadExternalBlobUtil,
+  downloadExternalPatchUtil,
+  downloadEncryptedContentUtil,
+  fetchLatestWaWebVersionUtil,
+  generateMessageIDUtil,
+  generateMessageIDV2Util,
+  chatModificationToAppPatchUtil,
 } from "./baileysClient.js";
 
 const app = express();
@@ -138,14 +219,18 @@ const asyncHandler =
     }
   };
 
-const waitForQrOrStatus = async (sessionId, { timeoutMs = 8000, intervalMs = 300 } = {}) => {
+const waitForQrOrStatus = async (sessionId, { timeoutMs = 15000, intervalMs = 200 } = {}) => {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const state = getConnectionState(sessionId);
     if (!state) break;
-    if (state.lastQr || state.status === "open") return state;
+    // QR kod geldiyse veya bağlantı açıldıysa döndür
+    if (state.lastQr || state.status === "open") {
+      return state;
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+  // Timeout sonrası mevcut state'i döndür (QR kod gelmemiş olsa bile)
   return getConnectionState(sessionId);
 };
 
@@ -198,9 +283,37 @@ app.post(
       return res.status(400).json({ error: "Session already exists" });
     }
 
+    // Session'ı hazırla ve socket'i başlat (QR üretimi için)
     await initBaileys(sessionId);
+    await startConnection(sessionId);
+    
+    // QR kodun gelmesi için bekle (maksimum 15 saniye)
+    // QR kod Baileys'in connection.update event'inde gelir
+    const state = await waitForQrOrStatus(sessionId, { timeoutMs: 15000, intervalMs: 200 });
+    
+    // Response'da QR kod varsa direkt döndür (WebSocket/SSE gerekmez)
+    const response = {
+      ...state,
+      qr: state?.lastQr || null, // QR kod hem 'qr' hem de 'lastQr' field'ında döner
+    };
+    
+    res.json(response || { error: "Session could not be initialized" });
+  })
+);
+
+// QR üretimi için bağlantıyı başlat
+app.post(
+  "/sessions/:sessionId/start",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    if (!sessionExists(sessionId)) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Socket'i başlat (QR üretimi burada tetiklenecek)
+    await startConnection(sessionId);
     const state = await waitForQrOrStatus(sessionId);
-    res.json(state || { error: "Session could not be initialized" });
+    res.json(state || { error: "Connection could not be started" });
   })
 );
 
@@ -240,6 +353,8 @@ app.get(
 );
 
 // SSE ile oturum ekleme (baileys-api-master uyumlu)
+// NOT: Bu endpoint artık socket'i otomatik başlatmıyor
+// QR üretimi için önce /sessions/:sessionId/start endpoint'ini çağırın
 app.get(
   "/sessions/:sessionId/add-sse",
   asyncHandler(async (req, res) => {
@@ -249,22 +364,51 @@ app.get(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
-    await initBaileys(sessionId);
+    // Socket yoksa, önce başlat
+    const state = getConnectionState(sessionId);
+    if (!state || !state.socketReady) {
+      console.log(`[SSE] Socket başlatılıyor: ${sessionId}`);
+      await startConnection(sessionId);
+      console.log(`[SSE] Socket başlatıldı, QR üretimi bekleniyor...`);
+    }
 
+    let updateCount = 0;
     const sendUpdate = () => {
       const state = getConnectionState(sessionId);
       const qr = getLastQr(sessionId);
-      const payload = { ...state, qr };
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      const payload = { 
+        ...state, 
+        qr: qr || state.lastQr || null  // Hem qr hem de lastQr field'larını gönder
+      };
+      
+      // QR kod varsa log'la
+      if (qr || state.lastQr) {
+        const qrValue = qr || state.lastQr;
+        console.log(`[SSE] QR kod gönderiliyor: ${sessionId}, QR uzunluğu: ${qrValue?.length}, updateCount: ${updateCount}`);
+      }
+      
+      try {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        updateCount++;
+      } catch (error) {
+        console.error(`[SSE] Yazma hatası: ${error.message}`);
+        clearInterval(interval);
+        res.end();
+        return;
+      }
 
       if (state.status === "open") {
+        console.log(`[SSE] Bağlantı açıldı, SSE kapatılıyor: ${sessionId}`);
         clearInterval(interval);
         res.end();
       }
     };
 
-    const interval = setInterval(sendUpdate, 2000);
+    // İlk güncellemeyi hemen gönder
     sendUpdate();
+    
+    // Daha sık güncelleme gönder (QR'un hemen gelmesi için)
+    const interval = setInterval(sendUpdate, 500);
 
     req.on("close", () => {
       clearInterval(interval);
@@ -989,6 +1133,1197 @@ app.post(
 
     const result = await createPoll(sessionId, jid, question, options);
     res.status(202).json(result);
+  })
+);
+
+// ========== STATUS (STORY) ÖZELLİKLERİ ==========
+
+// Status mesajlarını çekme
+app.get(
+  "/:sessionId/status",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const result = await getStatus(sessionId);
+    res.json(result);
+  })
+);
+
+// Status mesajı gönderme
+app.post(
+  "/:sessionId/status",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { statusContent } = req.body;
+
+    if (!statusContent) {
+      return res.status(400).json({ error: "statusContent zorunludur" });
+    }
+
+    const result = await setStatus(sessionId, statusContent);
+    res.status(202).json(result);
+  })
+);
+
+// ========== DISAPPEARING MESSAGES ==========
+
+// Geçici mesaj modunu ayarlama
+app.post(
+  "/:sessionId/chats/:jid/disappearing",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { duration } = req.body;
+
+    if (duration === undefined) {
+      return res.status(400).json({ error: "duration zorunludur (0, 86400, 604800, 7776000)" });
+    }
+
+    const result = await setDisappearingMode(sessionId, jid, duration);
+    res.json(result);
+  })
+);
+
+// Mevcut disappearing mode'u çekme
+app.get(
+  "/:sessionId/chats/:jid/disappearing",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await getDisappearingMode(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// ========== PRIVACY SETTINGS ==========
+
+// Gizlilik ayarlarını çekme
+app.get(
+  "/:sessionId/privacy",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const result = await getPrivacySettings(sessionId);
+    res.json(result);
+  })
+);
+
+// Gizlilik ayarlarını güncelleme
+app.patch(
+  "/:sessionId/privacy",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { settings } = req.body;
+
+    if (!settings) {
+      return res.status(400).json({ error: "settings objesi zorunludur" });
+    }
+
+    const result = await updatePrivacySettings(sessionId, settings);
+    res.json(result);
+  })
+);
+
+// ========== LINK PREVIEW ==========
+
+// URL bilgilerini çekme
+app.get(
+  "/api/link-preview",
+  asyncHandler(async (req, res) => {
+    const { url } = req.query;
+
+    if (!url) {
+      return res.status(400).json({ error: "url query parametresi zorunludur" });
+    }
+
+    const result = await getLinkPreview(url);
+    res.json(result);
+  })
+);
+
+// Mesaj gönderirken link preview ekleme
+app.post(
+  "/:sessionId/messages/send-with-preview",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, text } = req.body;
+
+    if (!jid || !text) {
+      return res.status(400).json({ error: "jid ve text zorunludur" });
+    }
+
+    const result = await sendMessageWithPreview(sessionId, jid, text);
+    res.status(202).json(result);
+  })
+);
+
+// ========== MEDYA İYİLEŞTİRMELERİ ==========
+
+// Gelişmiş medya indirme
+app.post(
+  "/:sessionId/messages/download-advanced",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = await downloadMediaMessageAdvanced(sessionId, message);
+    res.json(result);
+  })
+);
+
+// Ses dosyası süresi
+app.post(
+  "/api/audio/duration",
+  asyncHandler(async (req, res) => {
+    const { audioBuffer } = req.body;
+
+    if (!audioBuffer) {
+      return res.status(400).json({ error: "audioBuffer (base64) zorunludur" });
+    }
+
+    const buffer = Buffer.from(audioBuffer, "base64");
+    const result = await getAudioDuration(buffer);
+    res.json(result);
+  })
+);
+
+// Thumbnail oluşturma
+app.post(
+  "/api/media/thumbnail",
+  asyncHandler(async (req, res) => {
+    const { mediaBuffer, mediaType } = req.body;
+
+    if (!mediaBuffer || !mediaType) {
+      return res.status(400).json({ error: "mediaBuffer (base64) ve mediaType zorunludur" });
+    }
+
+    const buffer = Buffer.from(mediaBuffer, "base64");
+    const result = await generateThumbnailForMedia(buffer, mediaType);
+    res.json(result);
+  })
+);
+
+// Image thumbnail çıkarma
+app.post(
+  "/api/image/thumbnail",
+  asyncHandler(async (req, res) => {
+    const { imageBuffer } = req.body;
+
+    if (!imageBuffer) {
+      return res.status(400).json({ error: "imageBuffer (base64) zorunludur" });
+    }
+
+    const buffer = Buffer.from(imageBuffer, "base64");
+    const result = await extractImageThumbnail(buffer);
+    res.json(result);
+  })
+);
+
+// ========== GRUP İYİLEŞTİRMELERİ ==========
+
+// Gruptan ayrılma
+app.post(
+  "/:sessionId/groups/:jid/leave",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await groupLeave(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Grup kontrolü
+app.get(
+  "/api/check-group",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isGroup = checkIsGroup(jid);
+    res.json({ isGroup, jid });
+  })
+);
+
+// ========== CHAT BACKUP ==========
+
+// Chat geçmişi indirme (History Sync Notification işleme)
+app.post(
+  "/:sessionId/chats/history",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { historySyncNotification, options } = req.body;
+
+    if (!historySyncNotification) {
+      return res.status(400).json({ error: "historySyncNotification objesi zorunludur" });
+    }
+
+    const result = await downloadChatHistory(sessionId, historySyncNotification, options || {});
+    res.json(result);
+  })
+);
+
+// ========== BUSINESS ÖZELLİKLERİ ==========
+
+// Business profil bilgilerini çekme
+app.get(
+  "/:sessionId/business/:jid/profile",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await getBusinessProfile(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Business katalog çekme
+app.get(
+  "/:sessionId/business/:jid/catalog",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await getCatalog(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Sipariş detaylarını çekme
+app.get(
+  "/:sessionId/business/orders/:orderId",
+  asyncHandler(async (req, res) => {
+    const { sessionId, orderId } = req.params;
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ error: "token query parametresi zorunludur" });
+    }
+
+    const result = await getOrderDetails(sessionId, orderId, token);
+    res.json(result);
+  })
+);
+
+// Ürün bilgilerini çekme
+app.get(
+  "/:sessionId/business/:jid/products",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { productIds } = req.query;
+
+    if (!productIds) {
+      return res.status(400).json({ error: "productIds query parametresi zorunludur (comma-separated)" });
+    }
+
+    const ids = productIds.split(",").map(id => id.trim());
+    const result = await getProduct(sessionId, jid, ids);
+    res.json(result);
+  })
+);
+
+// ========== UTILITY FUNCTIONS (WAMessage) ==========
+
+// WAMessage oluşturma
+app.post(
+  "/:sessionId/utils/wamessage/generate",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, content, options } = req.body;
+
+    if (!jid || !content) {
+      return res.status(400).json({ error: "jid ve content zorunludur" });
+    }
+
+    const result = await generateWAMessageUtil(sessionId, jid, content, options || {});
+    res.json(result);
+  })
+);
+
+// WAMessage içeriği oluşturma
+app.post(
+  "/api/utils/wamessage/content",
+  asyncHandler(async (req, res) => {
+    const { message, options } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message zorunludur" });
+    }
+
+    const result = await generateWAMessageContentUtil(message, options || {});
+    res.json(result);
+  })
+);
+
+// İçerikten WAMessage oluşturma
+app.post(
+  "/api/utils/wamessage/from-content",
+  asyncHandler(async (req, res) => {
+    const { jid, message, options } = req.body;
+
+    if (!jid || !message) {
+      return res.status(400).json({ error: "jid ve message zorunludur" });
+    }
+
+    const result = generateWAMessageFromContentUtil(jid, message, options || {});
+    res.json(result);
+  })
+);
+
+// ========== JID UTILITIES ==========
+
+// JID decode etme
+app.get(
+  "/api/utils/jid/decode",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const result = decodeJid(jid);
+    res.json(result);
+  })
+);
+
+// JID encode etme
+app.get(
+  "/api/utils/jid/encode",
+  asyncHandler(async (req, res) => {
+    const { user, server, device } = req.query;
+
+    if (!user || !server) {
+      return res.status(400).json({ error: "user ve server query parametreleri zorunludur" });
+    }
+
+    const result = encodeJid(user, server, device);
+    res.json(result);
+  })
+);
+
+// Newsletter JID kontrolü
+app.get(
+  "/api/utils/jid/check-newsletter",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isNewsletter = checkIsNewsletter(jid);
+    res.json({ isNewsletter, jid });
+  })
+);
+
+// Status broadcast JID kontrolü
+app.get(
+  "/api/utils/jid/check-status-broadcast",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isStatusBroadcast = checkIsStatusBroadcast(jid);
+    res.json({ isStatusBroadcast, jid });
+  })
+);
+
+// Bot JID kontrolü
+app.get(
+  "/api/utils/jid/check-bot",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isBot = checkIsBot(jid);
+    res.json({ isBot, jid });
+  })
+);
+
+// Chat ID çıkarma
+app.get(
+  "/api/utils/jid/extract-chat-id",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const result = extractChatId(jid);
+    res.json(result);
+  })
+);
+
+// ========== MEDIA UTILITIES ==========
+
+// Medya mesajı hazırlama
+app.post(
+  "/:sessionId/utils/media/prepare",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { media, mediaType, options } = req.body;
+
+    if (!media || !mediaType) {
+      return res.status(400).json({ error: "media ve mediaType zorunludur" });
+    }
+
+    const result = await prepareMediaMessage(sessionId, media, mediaType, options || {});
+    res.json(result);
+  })
+);
+
+// Medya şifreleme anahtarları
+app.post(
+  "/api/utils/media/keys",
+  asyncHandler(async (req, res) => {
+    const { buffer, mediaType } = req.body;
+
+    if (!buffer || !mediaType) {
+      return res.status(400).json({ error: "buffer (base64) ve mediaType zorunludur" });
+    }
+
+    const bufferObj = Buffer.from(buffer, "base64");
+    const result = await getMediaDecryptionKeys(bufferObj, mediaType);
+    res.json(result);
+  })
+);
+
+// Medya hash hesaplama
+app.post(
+  "/api/utils/media/hash",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = calculateMediaHash(message);
+    res.json(result);
+  })
+);
+
+// Medya uzantısı belirleme
+app.post(
+  "/api/utils/media/extension",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getMediaExtension(message);
+    res.json(result);
+  })
+);
+
+// Ses dalga formu
+app.post(
+  "/api/utils/audio/waveform",
+  asyncHandler(async (req, res) => {
+    const { audioBuffer } = req.body;
+
+    if (!audioBuffer) {
+      return res.status(400).json({ error: "audioBuffer (base64) zorunludur" });
+    }
+
+    const buffer = Buffer.from(audioBuffer, "base64");
+    const result = await getAudioWaveformUtil(buffer);
+    res.json(result);
+  })
+);
+
+// ========== POLL UTILITIES ==========
+
+// Anket oyu decrypt etme
+app.post(
+  "/api/utils/poll/decrypt-vote",
+  asyncHandler(async (req, res) => {
+    const { vote, ctx } = req.body;
+
+    if (!vote || !ctx) {
+      return res.status(400).json({ error: "vote ve ctx objeleri zorunludur" });
+    }
+
+    const result = decryptPollVoteUtil(vote, ctx);
+    res.json(result);
+  })
+);
+
+// ========== GRUP GÜNCELLEMELERİ ==========
+
+// Grup güncelleme (genel)
+app.patch(
+  "/:sessionId/groups/:jid/update",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { updates } = req.body;
+
+    if (!updates) {
+      return res.status(400).json({ error: "updates objesi zorunludur" });
+    }
+
+    const result = await groupUpdate(sessionId, jid, updates);
+    res.json(result);
+  })
+);
+
+// ========== NEWSLETTER OPERATIONS ==========
+
+// Newsletter metadata çekme
+app.get(
+  "/:sessionId/newsletters/:jid/metadata",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await getNewsletterMetadata(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Newsletter'a abone olma
+app.post(
+  "/:sessionId/newsletters/:jid/subscribe",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await subscribeToNewsletter(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Newsletter aboneliğini iptal etme
+app.post(
+  "/:sessionId/newsletters/:jid/unsubscribe",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const result = await unsubscribeFromNewsletter(sessionId, jid);
+    res.json(result);
+  })
+);
+
+// Newsletter aboneliklerini listeleme
+app.get(
+  "/:sessionId/newsletters/subscriptions",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const result = await getNewsletterSubscriptions(sessionId);
+    res.json(result);
+  })
+);
+
+// ========== ADVANCED FEATURES ==========
+
+// Cihaz transferi
+app.post(
+  "/:sessionId/device/transfer",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { targetJid, options } = req.body;
+
+    const result = await transferDevice(sessionId, targetJid, options || {});
+    res.json(result);
+  })
+);
+
+// Pairing yapılandırması
+app.post(
+  "/:sessionId/device/pairing/configure",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { pairingData } = req.body;
+
+    if (!pairingData) {
+      return res.status(400).json({ error: "pairingData objesi zorunludur" });
+    }
+
+    const result = await configureSuccessfulPairingUtil(sessionId, pairingData);
+    res.json(result);
+  })
+);
+
+// History sync notification işleme
+app.post(
+  "/:sessionId/history/process-notification",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { notification, options } = req.body;
+
+    if (!notification) {
+      return res.status(400).json({ error: "notification objesi zorunludur" });
+    }
+
+    const result = await downloadAndProcessHistorySyncNotificationUtil(sessionId, notification, options || {});
+    res.json(result);
+  })
+);
+
+// ========== MESSAGE UTILITIES ==========
+
+// İki JID'in aynı kullanıcıya ait olup olmadığını kontrol etme
+app.get(
+  "/api/utils/jid/same-user",
+  asyncHandler(async (req, res) => {
+    const { jid1, jid2 } = req.query;
+
+    if (!jid1 || !jid2) {
+      return res.status(400).json({ error: "jid1 ve jid2 query parametreleri zorunludur" });
+    }
+
+    const result = checkAreJidsSameUser(jid1, jid2);
+    res.json(result);
+  })
+);
+
+// Metinden URL çıkarma
+app.get(
+  "/api/utils/text/extract-url",
+  asyncHandler(async (req, res) => {
+    const { text } = req.query;
+
+    if (!text) {
+      return res.status(400).json({ error: "text query parametresi zorunludur" });
+    }
+
+    const result = extractUrlFromTextUtil(text);
+    res.json(result);
+  })
+);
+
+// Mesaj temizleme
+app.post(
+  "/:sessionId/utils/message/clean",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { message, meId, meLid } = req.body;
+
+    if (!message || !meId || !meLid) {
+      return res.status(400).json({ error: "message, meId ve meLid zorunludur" });
+    }
+
+    const result = cleanMessageUtil(sessionId, message, meId, meLid);
+    res.json(result);
+  })
+);
+
+// Mesaj içeriğini normalize etme
+app.post(
+  "/api/utils/message/normalize-content",
+  asyncHandler(async (req, res) => {
+    const { content } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: "content objesi zorunludur" });
+    }
+
+    const result = normalizeMessageContentUtil(content);
+    res.json(result);
+  })
+);
+
+// Mesaj içeriğini çıkarma
+app.post(
+  "/api/utils/message/extract-content",
+  asyncHandler(async (req, res) => {
+    const { content } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: "content objesi zorunludur" });
+    }
+
+    const result = extractMessageContentUtil(content);
+    res.json(result);
+  })
+);
+
+// Mesaj tipini belirleme
+app.post(
+  "/api/utils/message/content-type",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getMessageContentType(message);
+    res.json(result);
+  })
+);
+
+// Gerçek mesaj kontrolü
+app.post(
+  "/api/utils/message/is-real",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = checkIsRealMessage(message);
+    res.json(result);
+  })
+);
+
+// ========== JID UTILITIES (Ek) ==========
+
+// Meta AI JID kontrolü
+app.get(
+  "/api/utils/jid/check-meta-ai",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isMetaAI = checkIsMetaAI(jid);
+    res.json({ isMetaAI, jid });
+  })
+);
+
+// LID kullanıcı kontrolü
+app.get(
+  "/api/utils/jid/check-lid-user",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isLidUser = checkIsLidUser(jid);
+    res.json({ isLidUser, jid });
+  })
+);
+
+// Pn kullanıcı kontrolü
+app.get(
+  "/api/utils/jid/check-pn-user",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isPnUser = checkIsPnUser(jid);
+    res.json({ isPnUser, jid });
+  })
+);
+
+// Hosted LID kullanıcı kontrolü
+app.get(
+  "/api/utils/jid/check-hosted-lid-user",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isHostedLidUser = checkIsHostedLidUser(jid);
+    res.json({ isHostedLidUser, jid });
+  })
+);
+
+// Hosted Pn kullanıcı kontrolü
+app.get(
+  "/api/utils/jid/check-hosted-pn-user",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isHostedPnUser = checkIsHostedPnUser(jid);
+    res.json({ isHostedPnUser, jid });
+  })
+);
+
+// Business platform kontrolü
+app.get(
+  "/api/utils/jid/check-business-platform",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const isBusinessPlatform = checkIsWABusinessPlatform(jid);
+    res.json({ isBusinessPlatform, jid });
+  })
+);
+
+// ========== DEVICE UTILITIES ==========
+
+// Transaction capability ekleme
+app.post(
+  "/:sessionId/device/transaction-capability",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { options } = req.body;
+
+    const result = await addTransactionCapabilityUtil(sessionId, options || {});
+    res.json(result);
+  })
+);
+
+// Device JID'leri çıkarma
+app.get(
+  "/api/utils/device/extract-jids",
+  asyncHandler(async (req, res) => {
+    const { jid, includeSelf } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const result = extractDeviceJidsUtil(jid, includeSelf === "true");
+    res.json(result);
+  })
+);
+
+// Device bilgisi
+app.get(
+  "/api/utils/device/info",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const result = getDeviceUtil(jid);
+    res.json(result);
+  })
+);
+
+// Platform ID
+app.get(
+  "/api/utils/device/platform-id",
+  asyncHandler(async (req, res) => {
+    const { jid } = req.query;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid query parametresi zorunludur" });
+    }
+
+    const result = getPlatformIdUtil(jid);
+    res.json(result);
+  })
+);
+
+// Decryption JID
+app.post(
+  "/api/utils/message/decryption-jid",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getDecryptionJidUtil(message);
+    res.json(result);
+  })
+);
+
+// History mesajı
+app.post(
+  "/api/utils/message/history",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getHistoryMessageUtil(message);
+    res.json(result);
+  })
+);
+
+// Call status
+app.post(
+  "/api/utils/call/status",
+  asyncHandler(async (req, res) => {
+    const { node } = req.body;
+
+    if (!node) {
+      return res.status(400).json({ error: "node objesi zorunludur" });
+    }
+
+    const result = getCallStatusUtil(node);
+    res.json(result);
+  })
+);
+
+// ========== MESSAGE UPDATE UTILITIES ==========
+
+// Event mesajındaki aggregate responses
+app.post(
+  "/api/utils/message/aggregate-responses",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getAggregateResponsesUtil(message);
+    res.json(result);
+  })
+);
+
+// Poll mesajındaki aggregate votes
+app.post(
+  "/api/utils/message/aggregate-votes",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = getAggregateVotesUtil(message);
+    res.json(result);
+  })
+);
+
+// Mesajı reaksiyonla güncelleme
+app.post(
+  "/api/utils/message/update-with-reaction",
+  asyncHandler(async (req, res) => {
+    const { message, reaction } = req.body;
+
+    if (!message || !reaction) {
+      return res.status(400).json({ error: "message ve reaction objeleri zorunludur" });
+    }
+
+    const result = updateMessageWithReactionUtil(message, reaction);
+    res.json(result);
+  })
+);
+
+// Mesajı receipt ile güncelleme
+app.post(
+  "/api/utils/message/update-with-receipt",
+  asyncHandler(async (req, res) => {
+    const { message, receipt } = req.body;
+
+    if (!message || !receipt) {
+      return res.status(400).json({ error: "message ve receipt objeleri zorunludur" });
+    }
+
+    const result = updateMessageWithReceiptUtil(message, receipt);
+    res.json(result);
+  })
+);
+
+// Mesajı poll update ile güncelleme
+app.post(
+  "/api/utils/message/update-with-poll-update",
+  asyncHandler(async (req, res) => {
+    const { message, pollUpdate } = req.body;
+
+    if (!message || !pollUpdate) {
+      return res.status(400).json({ error: "message ve pollUpdate objeleri zorunludur" });
+    }
+
+    const result = updateMessageWithPollUpdateUtil(message, pollUpdate);
+    res.json(result);
+  })
+);
+
+// Mesajı event response ile güncelleme
+app.post(
+  "/api/utils/message/update-with-event-response",
+  asyncHandler(async (req, res) => {
+    const { message, eventResponse } = req.body;
+
+    if (!message || !eventResponse) {
+      return res.status(400).json({ error: "message ve eventResponse objeleri zorunludur" });
+    }
+
+    const result = updateMessageWithEventResponseUtil(message, eventResponse);
+    res.json(result);
+  })
+);
+
+// Chat unread artırılmalı mı kontrolü
+app.post(
+  "/api/utils/message/should-increment-unread",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = checkShouldIncrementChatUnread(message);
+    res.json(result);
+  })
+);
+
+// ========== PROCESSING UTILITIES ==========
+
+// History mesajı işleme
+app.post(
+  "/api/utils/message/process-history",
+  asyncHandler(async (req, res) => {
+    const { message, meId } = req.body;
+
+    if (!message || !meId) {
+      return res.status(400).json({ error: "message ve meId zorunludur" });
+    }
+
+    const result = processHistoryMessageUtil(message, meId);
+    res.json(result);
+  })
+);
+
+// Sync action işleme
+app.post(
+  "/api/utils/sync/process-action",
+  asyncHandler(async (req, res) => {
+    const { action, meId } = req.body;
+
+    if (!action || !meId) {
+      return res.status(400).json({ error: "action ve meId zorunludur" });
+    }
+
+    const result = processSyncActionUtil(action, meId);
+    res.json(result);
+  })
+);
+
+// Disappearing message setting içeriği hazırlama
+app.post(
+  "/api/utils/disappearing/prepare-content",
+  asyncHandler(async (req, res) => {
+    const { duration } = req.body;
+
+    if (duration === undefined) {
+      return res.status(400).json({ error: "duration zorunludur" });
+    }
+
+    const result = prepareDisappearingMessageSettingContentUtil(duration);
+    res.json(result);
+  })
+);
+
+// Newsletter mesajı encode etme
+app.post(
+  "/api/utils/newsletter/encode-message",
+  asyncHandler(async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = encodeNewsletterMessageUtil(message);
+    res.json(result);
+  })
+);
+
+// ========== DOWNLOAD UTILITIES ==========
+
+// External blob indirme
+app.post(
+  "/api/utils/download/external-blob",
+  asyncHandler(async (req, res) => {
+    const { blob, options } = req.body;
+
+    if (!blob) {
+      return res.status(400).json({ error: "blob objesi zorunludur" });
+    }
+
+    const result = await downloadExternalBlobUtil(blob, options || {});
+    res.json(result);
+  })
+);
+
+// External patch indirme
+app.post(
+  "/api/utils/download/external-patch",
+  asyncHandler(async (req, res) => {
+    const { patch, options } = req.body;
+
+    if (!patch) {
+      return res.status(400).json({ error: "patch objesi zorunludur" });
+    }
+
+    const result = await downloadExternalPatchUtil(patch, options || {});
+    res.json(result);
+  })
+);
+
+// Encrypted content indirme
+app.post(
+  "/api/utils/download/encrypted-content",
+  asyncHandler(async (req, res) => {
+    const { content, options } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: "content objesi zorunludur" });
+    }
+
+    const result = await downloadEncryptedContentUtil(content, options || {});
+    res.json(result);
+  })
+);
+
+// ========== ÖNEMLİ UTILITY METODLAR ==========
+
+// WhatsApp Web versiyonunu çekme
+app.get(
+  "/api/utils/wa-web-version",
+  asyncHandler(async (req, res) => {
+    const result = await fetchLatestWaWebVersionUtil();
+    res.json(result);
+  })
+);
+
+// Mesaj ID oluşturma
+app.get(
+  "/api/utils/message/generate-id",
+  asyncHandler(async (req, res) => {
+    const result = generateMessageIDUtil();
+    res.json(result);
+  })
+);
+
+// Mesaj ID oluşturma (V2)
+app.post(
+  "/api/utils/message/generate-id-v2",
+  asyncHandler(async (req, res) => {
+    const { userId } = req.body;
+    const result = generateMessageIDV2Util(userId);
+    res.json(result);
+  })
+);
+
+// Chat modification'ı app patch'e çevirme
+app.post(
+  "/api/utils/chat/modification-to-patch",
+  asyncHandler(async (req, res) => {
+    const { modification } = req.body;
+
+    if (!modification) {
+      return res.status(400).json({ error: "modification objesi zorunludur" });
+    }
+
+    const result = chatModificationToAppPatchUtil(modification);
+    res.json(result);
   })
 );
 

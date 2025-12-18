@@ -256,6 +256,7 @@ const swaggerSpec = {
       post: {
         tags: ["Sessions"],
         summary: "Yeni oturum oluştur",
+        description: "Yeni bir WhatsApp oturumu oluşturur ve QR kod üretimi için bağlantıyı başlatır. QR kod direkt HTTP response'da döner (WebSocket/SSE gerekmez). Response'da 'qr' veya 'lastQr' alanında QR kod string'i bulunur. QR kod üretimi genellikle 2-5 saniye içinde tamamlanır.",
         requestBody: {
           required: true,
           content: {
@@ -266,10 +267,72 @@ const swaggerSpec = {
         },
         responses: {
           200: {
-            description: "Oturum oluşturuldu veya durum döndü",
+            description: "Oturum oluşturuldu ve bağlantı başlatıldı. QR kod 'qr' veya 'lastQr' alanında döner. QR kod yoksa (henüz üretilmediyse) bu alanlar null olabilir.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/StatusResponse" },
+                example: {
+                  status: "connecting",
+                  qr: "2@ABC123XYZ...",
+                  lastQr: "2@ABC123XYZ...",
+                  qrGeneratedAt: "2025-01-XXT12:00:00.000Z",
+                  socketReady: true,
+                  version: "2.3000.1027934701",
+                  isLatest: true,
+                  startedAt: "2025-01-XXT12:00:00.000Z"
+                },
+              },
+            },
+          },
+          400: {
+            description: "Geçersiz istek (sessionId eksik veya session zaten mevcut)",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/sessions/{sessionId}/start": {
+      post: {
+        tags: ["Sessions"],
+        summary: "Oturum bağlantısını başlat (QR üretimi için)",
+        description: "Mevcut bir oturumun bağlantısını başlatır ve QR kod üretir. QR kod response'da lastQr alanında döner.",
+        parameters: [
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+          },
+        ],
+        responses: {
+          200: {
+            description: "Bağlantı başlatıldı. QR kod lastQr alanında dönebilir.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/StatusResponse" },
+              },
+            },
+          },
+          404: {
+            description: "Oturum bulunamadı",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string" },
+                  },
+                },
               },
             },
           },
@@ -366,18 +429,28 @@ const swaggerSpec = {
         tags: ["Sessions"],
         summary: "SSE ile QR ve bağlantı güncellemeleri al",
         description:
-          "Server-Sent Events ile belirli bir session için QR ve bağlantı durumunu akış halinde döner.",
+          "Server-Sent Events ile belirli bir session için QR ve bağlantı durumunu akış halinde döner. Socket yoksa otomatik olarak başlatılır. Her event'te StatusResponse formatında veri döner. QR kod 'qr' veya 'lastQr' alanında bulunur.",
         parameters: [
           {
             in: "path",
             name: "sessionId",
             required: true,
             schema: { type: "string" },
+            description: "Session ID",
           },
         ],
         responses: {
           200: {
-            description: "Event-stream başlatıldı",
+            description: "Event-stream başlatıldı. Her event'te StatusResponse formatında veri döner. Content-Type: text/event-stream",
+            content: {
+              "text/event-stream": {
+                schema: {
+                  type: "string",
+                  description: "SSE event stream. Her satır 'data: {JSON}\n\n' formatındadır.",
+                  example: 'data: {"status":"connecting","lastQr":"QR_CODE_STRING","socketReady":true}\n\n',
+                },
+              },
+            },
           },
         },
       },
@@ -2032,7 +2105,16 @@ const swaggerSpec = {
           version: { type: "string", example: "2.3000.1027934701" },
           isLatest: { type: "boolean" },
           lastError: { type: "string", nullable: true },
-          lastQr: { type: "string", nullable: true },
+          qr: { 
+            type: "string", 
+            nullable: true,
+            description: "QR kod string'i (lastQr ile aynı değer, kolaylık için hem qr hem de lastQr field'larında döner)"
+          },
+          lastQr: { 
+            type: "string", 
+            nullable: true,
+            description: "Son üretilen QR kod string'i"
+          },
           qrGeneratedAt: { type: "string", format: "date-time", nullable: true },
           startedAt: { type: "string", format: "date-time" },
           socketReady: { type: "boolean" },
