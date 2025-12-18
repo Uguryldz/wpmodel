@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX } from 'lucide-react';
+import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX, RefreshCcw } from 'lucide-react';
 import * as api from './api';
 import * as QRCode from 'qrcode';
 
@@ -67,7 +67,83 @@ export default function WhatsAppMultiAccount() {
   const activeAccountRef = useRef<Account | undefined>(undefined);
   const selectedChatRef = useRef<Chat | null>(null);
   const contactsCacheRef = useRef<Map<string, { data: Map<string, any>, timestamp: number }>>(new Map());
+  const profilePictureQueueRef = useRef<Map<string, Set<string>>>(new Map()); // sessionId -> Set of jids
+  const profilePictureLoadingRef = useRef<boolean>(false);
+  const profilePictureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const profilePictureFailedRef = useRef<Set<string>>(new Set()); // Başarısız olan profil resimleri (tekrar deneme)
   const CONTACTS_CACHE_TTL = 5 * 60 * 1000; // 5 dakika
+
+  // Profil resimlerini batch olarak yükle (debounce ile)
+  const loadProfilePicturesBatch = async (sessionId: string) => {
+    if (profilePictureLoadingRef.current) return;
+    
+    const queue = profilePictureQueueRef.current.get(sessionId);
+    if (!queue || queue.size === 0) return;
+
+    profilePictureLoadingRef.current = true;
+    
+    // Queue'dan jid'leri al ve temizle
+    const jidsToLoad = Array.from(queue);
+    profilePictureQueueRef.current.delete(sessionId);
+
+    // Batch olarak yükle (bir seferde maksimum 5 profil resmi)
+    const batchSize = 5;
+    for (let i = 0; i < jidsToLoad.length; i += batchSize) {
+      const batch = jidsToLoad.slice(i, i + batchSize);
+      
+      // Paralel olarak yükle
+      await Promise.allSettled(
+        batch.map(jid => 
+          api.getProfilePicture(sessionId, jid)
+            .then(pictureUrl => {
+              if (pictureUrl) {
+                setChatProfilePictures(prev => new Map(prev).set(jid, pictureUrl));
+                // Başarılı olduysa failed listesinden çıkar
+                profilePictureFailedRef.current.delete(jid);
+              } else {
+                // Resim yoksa özel bir flag ekle (tekrar deneme yapılmayacak)
+                setChatProfilePictures(prev => new Map(prev).set(jid, 'NO_PICTURE'));
+                profilePictureFailedRef.current.add(jid);
+              }
+            })
+            .catch(() => {
+              // Hata durumunda da tekrar deneme yapılmayacak
+              setChatProfilePictures(prev => new Map(prev).set(jid, 'NO_PICTURE'));
+              profilePictureFailedRef.current.add(jid);
+            })
+        )
+      );
+      
+      // Her batch arasında kısa bir bekleme (rate limiting)
+      if (i + batchSize < jidsToLoad.length) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+
+    profilePictureLoadingRef.current = false;
+  };
+
+  // Profil resmi yükleme isteğini queue'ya ekle (debounce ile)
+  const queueProfilePicture = (sessionId: string, jid: string) => {
+    // Eğer zaten yüklenmişse, yükleniyorsa veya başarısız olmuşsa, atla
+    if (chatProfilePictures.has(jid)) return;
+    if (profilePictureFailedRef.current.has(jid)) return;
+    
+    // Queue'ya ekle
+    if (!profilePictureQueueRef.current.has(sessionId)) {
+      profilePictureQueueRef.current.set(sessionId, new Set());
+    }
+    profilePictureQueueRef.current.get(sessionId)!.add(jid);
+
+    // Debounce: 500ms sonra batch yükle
+    if (profilePictureTimeoutRef.current) {
+      clearTimeout(profilePictureTimeoutRef.current);
+    }
+    
+    profilePictureTimeoutRef.current = setTimeout(() => {
+      loadProfilePicturesBatch(sessionId);
+    }, 500);
+  };
 
   const colors = ['bg-green-500', 'bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-pink-500', 'bg-red-500', 'bg-yellow-500', 'bg-indigo-500'];
 
@@ -273,11 +349,40 @@ export default function WhatsAppMultiAccount() {
       setContacts(contactsArray);
       setFilteredContacts(contactsArray);
       console.log('Contact\'lar WebSocket cache\'den yüklendi:', contactsArray.length);
+      
+      // Profil fotoğraflarını yükle (imgUrl yoksa)
+      contactsArray.forEach((contact) => {
+        if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+          queueProfilePicture(activeAccount.id, contact.id);
+        }
+      });
     } else {
       // Cache boşsa, WebSocket'ten gelecek contact'ları bekle
       console.log('Contact cache boş, WebSocket\'ten gelecek contact\'lar bekleniyor...');
       setContacts([]);
       setFilteredContacts([]);
+    }
+  };
+
+  const handleRefreshContacts = async () => {
+    if (!activeAccount) return;
+
+    try {
+      setIsLoadingContacts(true);
+      const contactsMap = await loadContacts(activeAccount.id, true);
+      const contactsArray = Array.from(contactsMap.values());
+      setContacts(contactsArray);
+      
+      // Profil fotoğraflarını yükle (imgUrl yoksa)
+      contactsArray.forEach((contact) => {
+        if (!contact.imgUrl && !chatProfilePictures.has(contact.id) && !profilePictureFailedRef.current.has(contact.id)) {
+          queueProfilePicture(activeAccount.id, contact.id);
+        }
+      });
+    } catch (error) {
+      console.error('Kişi listesi yenilenemedi:', error);
+    } finally {
+      setIsLoadingContacts(false);
     }
   };
 
@@ -476,8 +581,9 @@ export default function WhatsAppMultiAccount() {
         }
         
         // Chat ID'den kişi adını bul
+        // Backend'den gelen chat'lerde zaten verifiedName ve name olabilir
         let displayName = chat.name || chat.displayName || chat.id;
-        let verifiedName: string | undefined = undefined;
+        let verifiedName: string | undefined = chat.verifiedName || undefined;
         let profilePicture: string | undefined = chatProfilePictures.get(chat.id);
         
         // Grup değilse (grup ID'leri @g.us ile biter) contact'tan ad al
@@ -485,8 +591,9 @@ export default function WhatsAppMultiAccount() {
           const contact = contactsMap.get(chat.id);
           if (contact) {
             // Contact'tan ad al: verifiedName > name > notify > id
-            verifiedName = contact.verifiedName;
-            displayName = contact.verifiedName || contact.name || contact.notify || chat.id;
+            // Backend'den gelen chat'lerde zaten verifiedName varsa onu kullan
+            verifiedName = verifiedName || contact.verifiedName;
+            displayName = verifiedName || contact.verifiedName || contact.name || contact.notify || chat.name || chat.id;
             
             // Profil resmini contact'tan al (imgUrl varsa)
             if (contact.imgUrl) {
@@ -495,21 +602,12 @@ export default function WhatsAppMultiAccount() {
                 setChatProfilePictures(prev => new Map(prev).set(chat.id, contact.imgUrl));
               }
             } else if (!chatProfilePictures.has(chat.id)) {
-              // Contact'ta imgUrl yoksa, API'den yükle (lazy load)
-              api.getProfilePicture(sessionId, chat.id).then(pictureUrl => {
-                if (pictureUrl) {
-                  setChatProfilePictures(prev => new Map(prev).set(chat.id, pictureUrl));
-                } else {
-                  // Resim yoksa boş string ekle (tekrar deneme)
-                  setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-                }
-              }).catch(() => {
-                setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-              });
+              // Contact'ta imgUrl yoksa, queue'ya ekle (batch yükleme)
+              queueProfilePicture(sessionId, chat.id);
             } else {
               // Cache'den al
               const cached = chatProfilePictures.get(chat.id);
-              profilePicture = cached && cached !== '' ? cached : undefined;
+              profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
             }
           } else {
             // Contact bulunamadıysa, ID'den telefon numarasını göster
@@ -518,40 +616,22 @@ export default function WhatsAppMultiAccount() {
               displayName = phoneMatch[1];
             }
             
-            // Profil resmini lazy load (contact yoksa da deneyelim)
+            // Profil resmini lazy load (contact yoksa da deneyelim) - queue'ya ekle
             if (!chatProfilePictures.has(chat.id)) {
-              api.getProfilePicture(sessionId, chat.id).then(pictureUrl => {
-                if (pictureUrl) {
-                  setChatProfilePictures(prev => new Map(prev).set(chat.id, pictureUrl));
-                } else {
-                  setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-                }
-              }).catch(() => {
-                setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-              });
+              queueProfilePicture(sessionId, chat.id);
             } else {
               const cached = chatProfilePictures.get(chat.id);
-              profilePicture = cached && cached !== '' ? cached : undefined;
+              profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
             }
           }
         } else {
-          // Grup için profil resmini yükle
+          // Grup için profil resmini yükle - queue'ya ekle
           if (!chatProfilePictures.has(chat.id)) {
-            // Grup resmini API'den yükle (lazy load)
-            api.getProfilePicture(sessionId, chat.id).then(pictureUrl => {
-              if (pictureUrl) {
-                setChatProfilePictures(prev => new Map(prev).set(chat.id, pictureUrl));
-              } else {
-                // Resim yoksa boş string ekle (tekrar deneme)
-                setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-              }
-            }).catch(() => {
-              setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-            });
+            queueProfilePicture(sessionId, chat.id);
           } else {
             // Cache'den al
             const cached = chatProfilePictures.get(chat.id);
-            profilePicture = cached && cached !== '' ? cached : undefined;
+            profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
           }
         }
         
@@ -585,34 +665,70 @@ export default function WhatsAppMultiAccount() {
     }
   };
 
-  const loadMessages = async (sessionId: string, chatId: string, limit: number = 50) => {
+  const loadMessages = async (sessionId: string, chatId: string, limit: number = 50, append: boolean = false) => {
     try {
-      console.log('=== Mesajlar yükleniyor ===', { sessionId, chatId, limit });
+      console.log('=== Mesajlar yükleniyor ===', { sessionId, chatId, limit, append });
+      
+      // Eğer append modu değilse, önce mesajları temizle
+      if (!append) {
+        setMessages([]);
+      }
+      
       const data = await api.getMessages(sessionId, chatId, limit);
       console.log('Mesajlar alındı (ham data):', data);
 
       // Mesaj içeriğini okunabilir hale getirmek için map
       const mapped: Message[] = (data || []).map((msg: any) => {
         const body = extractMessageText(msg);
+        
+        // Mesaj ID'si oluştur (duplicate kontrolü için)
+        const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
 
         return {
           ...msg,
+          id: msgId,
           body,
         };
       });
 
-      // Mesajları timestamp'e göre sırala (en eski önce)
-      mapped.sort((a, b) => {
-        const aTime = a.timestamp || a.messageTimestamp || 0;
-        const bTime = b.timestamp || b.messageTimestamp || 0;
-        return aTime - bTime;
-      });
+      // Eğer append moduysa, mevcut mesajlarla birleştir (duplicate kontrolü ile)
+      if (append) {
+        setMessages(prev => {
+          // Mevcut mesaj ID'lerini al
+          const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+          
+          // Yeni mesajları filtrele (duplicate olmayanlar)
+          const newMessages = mapped.filter(msg => {
+            const msgId = msg.id || msg.key?.id;
+            return msgId && !existingIds.has(msgId);
+          });
+          
+          // Birleştir ve sırala
+          const merged = [...prev, ...newMessages];
+          merged.sort((a, b) => {
+            const aTime = a.timestamp || a.messageTimestamp || 0;
+            const bTime = b.timestamp || b.messageTimestamp || 0;
+            return aTime - bTime;
+          });
+          
+          return merged;
+        });
+      } else {
+        // Yeni mesajları timestamp'e göre sırala (en eski önce)
+        mapped.sort((a, b) => {
+          const aTime = a.timestamp || a.messageTimestamp || 0;
+          const bTime = b.timestamp || b.messageTimestamp || 0;
+          return aTime - bTime;
+        });
 
-      setMessages(mapped);
+        setMessages(mapped);
+      }
     } catch (error: any) {
       console.error('Mesajlar yüklenemedi:', error);
-      alert(`Mesajlar yüklenemedi: ${error.message || 'Bilinmeyen hata'}`);
-      setMessages([]);
+      if (!append) {
+        alert(`Mesajlar yüklenemedi: ${error.message || 'Bilinmeyen hata'}`);
+        setMessages([]);
+      }
     }
   };
 
@@ -842,16 +958,8 @@ export default function WhatsAppMultiAccount() {
                     if (chat.imgUrl) {
                       setChatProfilePictures(prev => new Map(prev).set(chat.id, chat.imgUrl));
                     } else if (!chatProfilePictures.has(chat.id)) {
-                      // Resim yoksa ve cache'de de yoksa, API'den yükle (grup veya bireysel)
-                      api.getProfilePicture(data.sessionId, chat.id).then(pictureUrl => {
-                        if (pictureUrl) {
-                          setChatProfilePictures(prev => new Map(prev).set(chat.id, pictureUrl));
-                        } else {
-                          setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-                        }
-                      }).catch(() => {
-                        setChatProfilePictures(prev => new Map(prev).set(chat.id, ''));
-                      });
+                      // Resim yoksa ve cache'de de yoksa, queue'ya ekle (batch yükleme)
+                      queueProfilePicture(data.sessionId, chat.id);
                     }
                   });
                   
@@ -954,14 +1062,7 @@ export default function WhatsAppMultiAccount() {
                     timestamp: Date.now()
                   });
                   console.log('[WebSocket] Contact cache güncellendi:', contactsMap.size, 'profil resimleri ile');
-                  
-                  // Contact listesini güncelle (modal açıksa otomatik görünecek)
-                  const contactsArray = Array.from(contactsMap.values());
-                  setContacts(contactsArray);
-                  // Eğer arama terimi yoksa, filteredContacts'ı da güncelle
-                  if (!contactSearchTerm.trim()) {
-                    setFilteredContacts(contactsArray);
-                  }
+                  // Otomatik UI yenilemesini durdurduk; kullanıcı Yenile ile görecek
                 }
                 // Chat listesini yenile (isimler ve profil resimleri güncellensin)
                 loadChats(data.sessionId, 50);
@@ -970,10 +1071,42 @@ export default function WhatsAppMultiAccount() {
               // Yeni mesajlar geldi
               if (data.sessionId === currentActiveAccount?.id) {
                 console.log('[WebSocket] Yeni mesajlar alındı:', data.messages.length);
-                // Seçili sohbetin mesajlarıysa yenile
+                // Seçili sohbetin mesajlarıysa ekle (append mode)
                 if (currentSelectedChat && data.messages.some((msg: any) => msg.from === currentSelectedChat.id)) {
-                  console.log('[WebSocket] Seçili sohbetin mesajları yenileniyor...');
-                  loadMessages(data.sessionId, currentSelectedChat.id);
+                  console.log('[WebSocket] Seçili sohbetin mesajlarına yeni mesajlar ekleniyor...');
+                  // Yeni mesajları mevcut mesajlara ekle (duplicate kontrolü ile)
+                  setMessages(prev => {
+                    const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+                    const newMessages = data.messages
+                      .filter((msg: any) => msg.from === currentSelectedChat.id)
+                      .map((msg: any) => {
+                        const body = extractMessageText(msg);
+                        const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                        return {
+                          ...msg,
+                          id: msgId,
+                          body,
+                        };
+                      })
+                      .filter(msg => {
+                        const msgId = msg.id || msg.key?.id;
+                        return msgId && !existingIds.has(msgId);
+                      });
+                    
+                    if (newMessages.length === 0) {
+                      return prev; // Yeni mesaj yoksa değişiklik yapma
+                    }
+                    
+                    // Birleştir ve sırala
+                    const merged = [...prev, ...newMessages];
+                    merged.sort((a, b) => {
+                      const aTime = a.timestamp || a.messageTimestamp || 0;
+                      const bTime = b.timestamp || b.messageTimestamp || 0;
+                      return aTime - bTime;
+                    });
+                    
+                    return merged;
+                  });
                 }
                 // Sohbet listesini de yenile (unreadCount güncellemesi için)
                 loadChats(data.sessionId, 50);
@@ -1046,19 +1179,34 @@ export default function WhatsAppMultiAccount() {
       if (wsRef.current) {
         wsRef.current.close();
       }
+      if (profilePictureTimeoutRef.current) {
+        clearTimeout(profilePictureTimeoutRef.current);
+      }
     };
   }, []);
+
+  // Aktif hesap durumu değiştiğinde mesajları temizle (bağlantı kopup bağlanınca)
+  useEffect(() => {
+    if (activeAccount) {
+      // Bağlantı durumu değiştiğinde mesajları temizle
+      if (activeAccount.status !== 'open') {
+        setMessages([]);
+      }
+    }
+  }, [activeAccount?.status]);
 
   // Seçili sohbet değiştiğinde mesajları yükle ve profil resmini güncelle
   useEffect(() => {
     if (activeAccount && selectedChat) {
-      loadMessages(activeAccount.id, selectedChat.id);
+      // Seçili sohbet değiştiğinde mesajları temizle ve yükle (append=false)
+      setMessages([]);
+      loadMessages(activeAccount.id, selectedChat.id, 50, false);
       
       // Profil resmini chatProfilePictures Map'inden al ve selectedChat'e ekle
       const profilePicture = chatProfilePictures.get(selectedChat.id);
-      if (profilePicture && profilePicture !== '' && selectedChat.profilePicture !== profilePicture) {
+      if (profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE' && selectedChat.profilePicture !== profilePicture) {
         setSelectedChat(prev => prev ? { ...prev, profilePicture } : null);
-      } else if (!profilePicture && !selectedChat.profilePicture && !selectedChat.id.includes('@g.us')) {
+      } else if ((!profilePicture || profilePicture === 'NO_PICTURE') && !selectedChat.profilePicture && !selectedChat.id.includes('@g.us')) {
         // Profil resmi yoksa ve henüz yüklenmemişse, contact cache'den kontrol et
         const cached = contactsCacheRef.current.get(activeAccount.id);
         if (cached) {
@@ -1067,7 +1215,7 @@ export default function WhatsAppMultiAccount() {
             setChatProfilePictures(prev => new Map(prev).set(selectedChat.id, contact.imgUrl));
             setSelectedChat(prev => prev ? { ...prev, profilePicture: contact.imgUrl } : null);
           } else {
-            // API'den yükle
+            // API'den yükle - öncelikli olarak hemen yükle (selectedChat için)
             api.getProfilePicture(activeAccount.id, selectedChat.id).then(pictureUrl => {
               if (pictureUrl) {
                 setChatProfilePictures(prev => new Map(prev).set(selectedChat.id, pictureUrl));
@@ -1509,8 +1657,8 @@ export default function WhatsAppMultiAccount() {
                   }`}
                 >
                   <div className="relative flex-shrink-0">
-                    {chat.profilePicture ? (
-                      <img 
+                    {chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' ? (
+                        <img
                         src={chat.profilePicture} 
                         alt={chat.name}
                         className="w-12 h-12 rounded-full object-cover"
@@ -1527,7 +1675,7 @@ export default function WhatsAppMultiAccount() {
                       />
                     ) : null}
                     <div 
-                      className={`w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center text-2xl profile-fallback ${chat.profilePicture ? 'hidden' : ''}`}
+                      className={`w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center text-2xl profile-fallback ${chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' ? 'hidden' : ''}`}
                     >
                       {chat.name[0]?.toUpperCase() || '?'}
                     </div>
@@ -1565,7 +1713,7 @@ export default function WhatsAppMultiAccount() {
               <div className="bg-gray-100 p-3 flex items-center justify-between border-b">
                 <div className="flex items-center space-x-3">
                   <div className="relative">
-                    {selectedChat.profilePicture && selectedChat.profilePicture !== '' ? (
+                    {selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? (
                       <img
                         src={selectedChat.profilePicture}
                         alt={selectedChat.name}
@@ -1584,10 +1732,10 @@ export default function WhatsAppMultiAccount() {
                     ) : null}
                     <div 
                       className={`w-10 h-10 rounded-full flex items-center justify-center text-2xl chat-header-fallback ${
-                        selectedChat.profilePicture && selectedChat.profilePicture !== '' ? 'hidden' : ''
+                        selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? 'hidden' : ''
                       }`}
                       style={{
-                        backgroundColor: selectedChat.profilePicture && selectedChat.profilePicture !== '' 
+                        backgroundColor: selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' 
                           ? 'transparent' 
                           : `hsl(${(selectedChat.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
                       }}
@@ -1791,14 +1939,22 @@ export default function WhatsAppMultiAccount() {
               </div>
             ) : (
               <>
-                <div className="mb-4">
+                <div className="mb-4 flex items-center space-x-2">
                   <input
                     type="text"
                     placeholder="Kişi ara (isim, telefon: 868, *868*)..."
                     value={contactSearchTerm}
                     onChange={(e) => setContactSearchTerm(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
+                  <button
+                    onClick={handleRefreshContacts}
+                    disabled={isLoadingContacts}
+                    className="px-3 py-2 text-sm flex items-center space-x-2 border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 rounded-lg disabled:opacity-60"
+                  >
+                    <RefreshCcw size={16} />
+                    <span>Yenile</span>
+                  </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {contacts.length === 0 ? (
@@ -1810,6 +1966,7 @@ export default function WhatsAppMultiAccount() {
                       {filteredContacts.map((contact) => {
                         const phoneNumber = extractPhoneFromJid(contact.id);
                         const profilePicture = chatProfilePictures.get(contact.id) || contact.imgUrl;
+                        const hasProfilePicture = profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE';
                         
                         return (
                           <div
@@ -1817,7 +1974,7 @@ export default function WhatsAppMultiAccount() {
                             className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
                           >
                             <div className="flex items-center space-x-3">
-                              {profilePicture && profilePicture !== '' ? (
+                              {hasProfilePicture ? (
                                 <img
                                   src={profilePicture}
                                   alt={contact.name || contact.notify || contact.id}
@@ -1833,7 +1990,7 @@ export default function WhatsAppMultiAccount() {
                                 />
                               ) : null}
                               <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-semibold ${
-                                profilePicture && profilePicture !== '' ? 'hidden' : ''
+                                hasProfilePicture ? 'hidden' : ''
                               }`} style={{
                                 backgroundColor: `hsl(${(contact.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
                               }}>
@@ -1898,14 +2055,22 @@ export default function WhatsAppMultiAccount() {
               </div>
             ) : (
               <>
-                <div className="mb-4">
+                <div className="mb-4 flex items-center space-x-2">
                   <input
                     type="text"
                     placeholder="Kişi ara (isim, telefon: 868, *868*)..."
                     value={contactSearchTerm}
                     onChange={(e) => setContactSearchTerm(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
+                  <button
+                    onClick={handleRefreshContacts}
+                    disabled={isLoadingContacts}
+                    className="px-3 py-2 text-sm flex items-center space-x-2 border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 rounded-lg disabled:opacity-60"
+                  >
+                    <RefreshCcw size={16} />
+                    <span>Yenile</span>
+                  </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {contacts.length === 0 ? (
@@ -1917,6 +2082,7 @@ export default function WhatsAppMultiAccount() {
                       {filteredContacts.map((contact) => {
                         const phoneNumber = extractPhoneFromJid(contact.id);
                         const profilePicture = chatProfilePictures.get(contact.id) || contact.imgUrl;
+                        const hasProfilePicture = profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE';
                         
                         return (
                           <div
@@ -1925,7 +2091,7 @@ export default function WhatsAppMultiAccount() {
                             className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
                           >
                             <div className="flex items-center space-x-3">
-                              {profilePicture && profilePicture !== '' ? (
+                              {hasProfilePicture ? (
                                 <img
                                   src={profilePicture}
                                   alt={contact.name || contact.notify || contact.id}
@@ -1941,7 +2107,7 @@ export default function WhatsAppMultiAccount() {
                                 />
                               ) : null}
                               <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-semibold ${
-                                profilePicture && profilePicture !== '' ? 'hidden' : ''
+                                hasProfilePicture ? 'hidden' : ''
                               }`} style={{
                                 backgroundColor: `hsl(${(contact.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
                               }}>

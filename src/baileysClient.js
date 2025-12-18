@@ -139,6 +139,9 @@ const normalizeJid = (value) => {
 const formatChat = (chat, sessionId = null) => {
   // Contact'tan veya grup metadata'sından profil resmini al (eğer varsa)
   let imgUrl = null;
+  let chatName = chat.name || chat.displayName || chat.subject || chat.id;
+  let verifiedName = null;
+  
   if (sessionId) {
     const instance = instances.get(sessionId);
     if (instance) {
@@ -147,10 +150,16 @@ const formatChat = (chat, sessionId = null) => {
         // Grup resimleri async olarak yüklenecek (frontend'de veya başka bir yerde)
         imgUrl = chat.imgUrl || null;
       } else {
-        // Bireysel sohbet için contact'tan imgUrl al
+        // Bireysel sohbet için contact'tan bilgileri al
         const contact = instance.contactsStore.get(chat.id);
-        if (contact && contact.imgUrl) {
-          imgUrl = contact.imgUrl;
+        if (contact) {
+          // Contact'tan imgUrl al
+          if (contact.imgUrl) {
+            imgUrl = contact.imgUrl;
+          }
+          // Contact'tan ad al: verifiedName > name > notify
+          verifiedName = contact.verifiedName || null;
+          chatName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
         }
       }
     }
@@ -158,7 +167,8 @@ const formatChat = (chat, sessionId = null) => {
   
   return {
     id: chat.id,
-    name: chat.name || chat.displayName || chat.subject || chat.id,
+    name: chatName,
+    verifiedName: verifiedName,
     unreadCount: chat.unreadCount ?? 0,
     conversationTimestamp: chat.conversationTimestamp ?? null,
     isMuted: Boolean(chat.isMuted),
@@ -232,7 +242,21 @@ const saveMessages = (instance, jid, messages = []) => {
   if (!jid) return;
   const normalized = jidNormalizedUser(jid);
   const existing = instance.messagesStore.get(normalized) || [];
-  const updated = [...existing, ...messages.map(formatMessage)].slice(-200);
+  
+  // Mevcut mesaj ID'lerini al (duplicate kontrolü için)
+  const existingIds = new Set(
+    existing.map(m => m.key?.id || m.id || `${m.timestamp || m.messageTimestamp || 0}-${m.from || ''}`)
+  );
+  
+  // Yeni mesajları formatla ve duplicate olmayanları filtrele
+  const formatted = messages.map(formatMessage);
+  const newMessages = formatted.filter(msg => {
+    const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || 0}-${msg.from || ''}`;
+    return !existingIds.has(msgId);
+  });
+  
+  // Yeni mesajları ekle ve son 200 mesajı tut
+  const updated = [...existing, ...newMessages].slice(-200);
   instance.messagesStore.set(normalized, updated);
 };
 
@@ -1174,8 +1198,35 @@ export const listChats = async (accountId, cursor, limit = 25) => {
             ? serialized[serialized.length - 1].pkId
             : null;
 
+        // Database'den chat'ler çekildiğinde, contact bilgilerini de çek
+        // Grup olmayan chat'ler için contact bilgilerini al
+        const nonGroupChats = serialized.filter(c => !c.id.includes('@g.us'));
+        if (nonGroupChats.length > 0) {
+          const contactIds = nonGroupChats.map(c => c.id);
+          const contacts = await prisma.contact.findMany({
+            where: {
+              sessionId,
+              id: { in: contactIds },
+            },
+          });
+          
+          // Contact bilgilerini memory store'a ekle (formatChat fonksiyonu bunları kullanacak)
+          const instance = getOrCreateInstance(accountId);
+          contacts.forEach(contact => {
+            const serializedContact = serializePrisma(contact);
+            instance.contactsStore.set(serializedContact.id, {
+              id: serializedContact.id,
+              name: serializedContact.name,
+              notify: serializedContact.notify,
+              verifiedName: serializedContact.verifiedName,
+              imgUrl: serializedContact.imgUrl,
+              status: serializedContact.status,
+            });
+          });
+        }
+
         return {
-          data: serialized.map(formatChat),
+          data: serialized.map(c => formatChat(c, sessionId)),
           cursor: nextCursor,
         };
       } catch (dbError) {
@@ -1288,8 +1339,35 @@ export const listChats = async (accountId, cursor, limit = 25) => {
           ? serialized[serialized.length - 1].pkId
           : null;
 
+      // Database'den chat'ler çekildiğinde, contact bilgilerini de çek
+      // Grup olmayan chat'ler için contact bilgilerini al
+      const nonGroupChats = serialized.filter(c => !c.id.includes('@g.us'));
+      if (nonGroupChats.length > 0) {
+        const contactIds = nonGroupChats.map(c => c.id);
+        const contacts = await prisma.contact.findMany({
+          where: {
+            sessionId,
+            id: { in: contactIds },
+          },
+        });
+        
+        // Contact bilgilerini memory store'a ekle (formatChat fonksiyonu bunları kullanacak)
+        const instance = getOrCreateInstance(accountId);
+        contacts.forEach(contact => {
+          const serializedContact = serializePrisma(contact);
+          instance.contactsStore.set(serializedContact.id, {
+            id: serializedContact.id,
+            name: serializedContact.name,
+            notify: serializedContact.notify,
+            verifiedName: serializedContact.verifiedName,
+            imgUrl: serializedContact.imgUrl,
+            status: serializedContact.status,
+          });
+        });
+      }
+
       return {
-        data: serialized.map(formatChat),
+        data: serialized.map(c => formatChat(c, sessionId)),
         cursor: nextCursor,
       };
     } catch (dbError) {
@@ -1620,17 +1698,92 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
         .slice(0, limit === undefined || limit === null ? source.length : limit)
         .map((c) => ({
           id: c.id,
-          name: formatContactName(c),
+          name: c.name || null, // Formatlamadan gönder, frontend'de zaten verifiedName || name || notify || phoneNumber kontrolü var
           notify: c.notify || null,
           verifiedName: c.verifiedName || null,
           imgUrl: c.imgUrl || null,
           status: c.status || null,
         }));
-      const payload = { data: formatted, cursor: null };
-      if (!cursor && formatted.length > 0) {
-        contactsCache.set(sessionId, { ts: Date.now(), payload });
+      
+      // Eğer cursor yoksa (ilk sayfa), database'den de veri çekip birleştir
+      // Bu sayede memory store'da olmayan contact'lar da gelir
+      if (!cursor) {
+        // Database'den de veri çek
+        try {
+          // Database'den tüm contact'ları çek (limit uygulamadan)
+          // Çünkü memory store'dan gelen contact'ları da dahil edeceğiz
+          // ve birleştirilmiş veriden limit uygulayacağız
+          const dbContacts = await prisma.contact.findMany({
+            where: { sessionId },
+            orderBy: { pkId: "desc" },
+          });
+
+          const dbFormatted = dbContacts.map((c) => {
+            const serialized = serializePrisma(c);
+            return {
+              id: serialized.id,
+              name: serialized.name || null, // Formatlamadan gönder, frontend'de zaten verifiedName || name || notify || phoneNumber kontrolü var
+              notify: serialized.notify || null,
+              verifiedName: serialized.verifiedName || null,
+              imgUrl: serialized.imgUrl || null,
+              status: serialized.status || null,
+            };
+          });
+
+          // Memory store ve database'den gelen contact'ları birleştir (duplicate'leri temizle)
+          const contactMap = new Map();
+          
+          // Önce memory store'dan gelenleri ekle (öncelikli)
+          formatted.forEach((c) => {
+            contactMap.set(c.id, c);
+          });
+          
+          // Sonra database'den gelenleri ekle (memory store'da yoksa)
+          dbFormatted.forEach((c) => {
+            if (!contactMap.has(c.id)) {
+              contactMap.set(c.id, c);
+            }
+          });
+
+          const merged = Array.from(contactMap.values())
+            .sort((a, b) => (a.name || a.notify || a.id).localeCompare(b.name || b.notify || b.id));
+          
+          // Limit belirtilmişse ve çok yüksek değilse, limit uygula
+          const takeLimit = limit && limit < 100000 ? Number(limit) : undefined;
+          
+          // Limit uygula (eğer belirtilmişse)
+          // ÖNEMLİ: Limit uygulanırken, memory store'dan gelen contact'ları da dahil et
+          // Yani birleştirilmiş veriden limit kadarını döndür
+          const finalData = takeLimit ? merged.slice(0, takeLimit) : merged;
+          
+          // Cursor hesapla: Eğer limit uygulandıysa ve birleştirilmiş veri limit'ten fazlaysa cursor döndür
+          // Cursor için database'den gelen son contact'ın pkId'sini kullan
+          // Ama önce birleştirilmiş verinin limit'ten fazla olup olmadığını kontrol et
+          const hasMore = takeLimit && merged.length > takeLimit;
+          const nextCursor = hasMore && dbContacts.length > 0
+            ? dbContacts[dbContacts.length - 1].pkId
+            : null;
+          
+          const payload = { data: finalData, cursor: nextCursor };
+          if (!cursor && finalData.length > 0) {
+            contactsCache.set(sessionId, { ts: Date.now(), payload });
+          }
+          return payload;
+        } catch (error) {
+          logger.error({ error, sessionId }, "Database'den contact'lar alınamadı, sadece memory store verisi döndürülüyor");
+          // Hata durumunda sadece memory store verisini döndür
+          const payload = { data: formatted, cursor: null };
+          if (!cursor && formatted.length > 0) {
+            contactsCache.set(sessionId, { ts: Date.now(), payload });
+          }
+          return payload;
+        }
+      } else {
+        // Cursor varsa (sayfalama), memory store'dan cursor ile sayfalama yapamayız
+        // Bu durumda database fallback'e düş (aşağıdaki kod devam edecek)
+        // Memory store'dan veri geldiğinde cursor ile sayfalama yapılamaz, database'den çekilmeli
+        // Bu yüzden burada return etmeyip database fallback'e düşüyoruz
       }
-      return payload;
     }
   }
 
@@ -1656,7 +1809,7 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
     const payload = {
       data: serialized.map((c) => ({
         id: c.id,
-        name: formatContactName(c),
+        name: c.name || null, // Formatlamadan gönder, frontend'de zaten verifiedName || name || notify || phoneNumber kontrolü var
         notify: c.notify || null,
         verifiedName: c.verifiedName || null,
         imgUrl: c.imgUrl || null,
@@ -1915,64 +2068,78 @@ export const getProfilePicture = async (accountId, jid) => {
   const sock = ensureSocket(accountId);
   const normalized = normalizeJid(jid);
   const isGroup = normalized.includes('@g.us');
+  const sessionId = getAccountId(accountId);
   
+  // ÖNCE DB'den kontrol et
   try {
-    // Bağlantı durumunu kontrol et
+    if (isGroup) {
+      // Grup için groupMetadata kontrol et (eğer imgUrl field'ı varsa)
+      // Şimdilik null döndür, çünkü schema'da imgUrl yok
+    } else {
+      // Bireysel sohbet için contact kontrol et
+      const contact = await prisma.contact.findUnique({
+        where: {
+          sessionId_id: {
+            sessionId,
+            id: normalized,
+          },
+        },
+      });
+      if (contact?.imgUrl) {
+        console.log(`[getProfilePicture] Profil fotoğrafı DB'den bulundu: ${normalized}`);
+        return contact.imgUrl;
+      }
+    }
+  } catch (dbError) {
+    logger.debug({ error: dbError, accountId, jid }, "DB'den profil fotoğrafı kontrol edilemedi");
+  }
+  
+  // DB'de yoksa, bağlantı açıksa API'den dene
+  try {
     const instance = getOrCreateInstance(accountId);
     if (instance.connectionState.status !== "open") {
-      console.log(`[getProfilePicture] Bağlantı açık değil (${instance.connectionState.status}), DB'den kontrol ediliyor...`);
-      // DB'den kontrol et
-      const sessionId = getAccountId(accountId);
-      if (isGroup) {
-        // Grup için groupMetadata kontrol et (eğer imgUrl field'ı varsa)
-        // Şimdilik null döndür, çünkü schema'da imgUrl yok
-        return null;
-      } else {
-        // Bireysel sohbet için contact kontrol et
-        const contact = await prisma.contact.findUnique({
-          where: {
-            sessionId_id: {
-              sessionId,
-              id: normalized,
-            },
-          },
-        });
-        return contact?.imgUrl || null;
-      }
+      console.log(`[getProfilePicture] Bağlantı açık değil (${instance.connectionState.status}), DB'de de yok, null döndürülüyor...`);
+      return null;
     }
     
     // Baileys API'den profil resmini al (hem bireysel hem grup için çalışır)
     const url = await sock.profilePictureUrl(normalized, "image");
-    return url || null;
-  } catch (error) {
-    // Baileys item-not-found -> 404, not-authorized -> 401
-    if (error?.data === 404 || error?.output?.statusCode === 404 || 
-        error?.data === 401 || error?.output?.statusCode === 401 ||
-        error?.message?.includes('not-authorized')) {
-      console.log(`[getProfilePicture] Profil fotoğrafı alınamadı (${error?.data || error?.output?.statusCode || 'not-authorized'}), DB'den kontrol ediliyor...`);
-      // DB'den kontrol et
-      try {
-        const sessionId = getAccountId(accountId);
-        if (isGroup) {
-          // Grup için groupMetadata kontrol et (eğer imgUrl field'ı varsa)
-          // Şimdilik null döndür
-          return null;
-        } else {
-          // Bireysel sohbet için contact kontrol et
-          const contact = await prisma.contact.findUnique({
+    if (url) {
+      // API'den alınan profil resmini DB'ye kaydet (bireysel sohbet için)
+      if (!isGroup) {
+        try {
+          await prisma.contact.upsert({
             where: {
               sessionId_id: {
                 sessionId,
                 id: normalized,
               },
             },
+            create: {
+              sessionId,
+              id: normalized,
+              imgUrl: url,
+            },
+            update: {
+              imgUrl: url,
+            },
           });
-          return contact?.imgUrl || null;
+          console.log(`[getProfilePicture] Profil fotoğrafı API'den alındı ve DB'ye kaydedildi: ${normalized}`);
+        } catch (updateError) {
+          logger.debug({ error: updateError, accountId, jid }, "Profil fotoğrafı DB'ye kaydedilemedi");
         }
-      } catch (dbError) {
-        logger.debug({ error: dbError, accountId, jid }, "DB'den profil fotoğrafı alınamadı");
-        return null;
       }
+      return url;
+    }
+    return null;
+  } catch (error) {
+    // Baileys item-not-found -> 404, not-authorized -> 401
+    if (error?.data === 404 || error?.output?.statusCode === 404 || 
+        error?.data === 401 || error?.output?.statusCode === 401 ||
+        error?.message?.includes('not-authorized') ||
+        error?.message?.includes('item-not-found')) {
+      console.log(`[getProfilePicture] Profil fotoğrafı API'den alınamadı (${error?.data || error?.output?.statusCode || 'not-found'}), DB'de de yok, null döndürülüyor...`);
+      return null;
     }
     logger.error({ error, accountId, jid }, "Profil fotoğrafı alınamadı");
     // Hata fırlatmak yerine null döndür
