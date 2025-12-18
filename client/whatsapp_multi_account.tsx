@@ -9,6 +9,7 @@ interface Account {
   status?: string;
   color: string;
   active: boolean;
+  whatsappJid?: string | null; // WhatsApp numarası (duplicate kontrolü için)
 }
 
 interface Chat {
@@ -29,11 +30,18 @@ interface Message {
   key?: {
     fromMe?: boolean;
     id?: string;
+    remoteJid?: string;
+    participant?: string;
   };
   message?: any;
   pushName?: string;
   body?: string; // bazı helper formatlarda gelebilir
-  timestamp?: number;
+  text?: string; // Backend'den gelen formatlanmış text
+  timestamp?: number; // Unix timestamp (saniye cinsinden)
+  fromMe?: boolean; // Backend'den gelen formatlanmış mesajlarda direkt olarak var
+  from?: string; // Backend'den gelen remoteJid
+  type?: string; // Mesaj tipi (conversation, imageMessage, videoMessage, vb.)
+  participant?: string; // Grup mesajlarında gönderen kişi
 }
 
 export default function WhatsAppMultiAccount() {
@@ -218,6 +226,7 @@ export default function WhatsAppMultiAccount() {
               status: status.status || session.status || 'unknown',
               color: colors[index % colors.length],
               active: index === 0, // İlk hesap aktif
+              whatsappJid: (session as any).whatsappJid || null, // Backend'den gelen whatsappJid
             };
           } catch (error) {
             console.warn(`Session ${session.id} status alınamadı:`, error);
@@ -229,20 +238,53 @@ export default function WhatsAppMultiAccount() {
               status: session.status || 'unknown',
               color: colors[index % colors.length],
               active: index === 0,
+              whatsappJid: (session as any).whatsappJid || null,
             };
           }
         })
       );
       
-      console.log('Hesaplar oluşturuldu:', accountsWithStatus);
+      console.log('Hesaplar oluşturuldu (duplicate kontrolü öncesi):', accountsWithStatus);
       
-      // Aktif hesap yoksa ilkini aktif yap
-      const hasActive = accountsWithStatus.some(acc => acc.active);
-      if (!hasActive && accountsWithStatus.length > 0) {
-        accountsWithStatus[0].active = true;
+      // Duplicate kontrolü: Aynı WhatsApp numarasına sahip session'ları filtrele
+      // Sadece en son aktif olan (open status) session'ı göster
+      const uniqueAccounts = new Map<string, Account>();
+      
+      for (const account of accountsWithStatus) {
+        const key = (account as any).whatsappJid || account.id; // WhatsApp numarası varsa onu kullan, yoksa sessionId
+        
+        const existing = uniqueAccounts.get(key);
+        if (!existing) {
+          // İlk kez görülen hesap
+          uniqueAccounts.set(key, account);
+        } else {
+          // Duplicate hesap - öncelik sırası: open > connecting > initializing > close
+          const statusPriority = { 'open': 4, 'connecting': 3, 'initializing': 2, 'close': 1, 'unknown': 0 };
+          const existingPriority = statusPriority[existing.status as keyof typeof statusPriority] || 0;
+          const currentPriority = statusPriority[account.status as keyof typeof statusPriority] || 0;
+          
+          if (currentPriority > existingPriority) {
+            // Mevcut hesap daha yüksek öncelikli, eskiyi değiştir
+            uniqueAccounts.set(key, account);
+          } else if (currentPriority === existingPriority && account.status === 'open') {
+            // Aynı öncelik ve ikisi de open ise, daha yeni olanı al (id'ye göre)
+            if (account.id > existing.id) {
+              uniqueAccounts.set(key, account);
+            }
+          }
+        }
       }
       
-      setAccounts(accountsWithStatus);
+      const finalAccounts = Array.from(uniqueAccounts.values());
+      console.log('Hesaplar oluşturuldu (duplicate kontrolü sonrası):', finalAccounts);
+      
+      // Aktif hesap yoksa ilkini aktif yap
+      const hasActive = finalAccounts.some(acc => acc.active);
+      if (!hasActive && finalAccounts.length > 0) {
+        finalAccounts[0].active = true;
+      }
+      
+      setAccounts(finalAccounts);
     } catch (error) {
       console.error('Hesaplar yüklenemedi:', error);
       // Hata durumunda boş liste göster
@@ -678,16 +720,27 @@ export default function WhatsAppMultiAccount() {
       console.log('Mesajlar alındı (ham data):', data);
 
       // Mesaj içeriğini okunabilir hale getirmek için map
+      // Backend'den gelen mesajlar formatMessage ile formatlanmış olabilir
       const mapped: Message[] = (data || []).map((msg: any) => {
-        const body = extractMessageText(msg);
+        // Backend'den gelen text field'ını koru, yoksa extractMessageText kullan
+        const text = msg.text || extractMessageText(msg);
+        const body = msg.body || text;
         
         // Mesaj ID'si oluştur (duplicate kontrolü için)
-        const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+        const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+
+        // fromMe kontrolü - backend'den gelen formatlanmış mesajlarda direkt var
+        const fromMe = msg.fromMe !== undefined 
+          ? Boolean(msg.fromMe) 
+          : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
 
         return {
           ...msg,
           id: msgId,
-          body,
+          text: text || body, // Backend formatını koru
+          body: body || text, // Geriye dönük uyumluluk için
+          fromMe: fromMe, // fromMe'yi açıkça set et
+          timestamp: msg.timestamp || msg.messageTimestamp || undefined,
         };
       });
 
@@ -703,11 +756,18 @@ export default function WhatsAppMultiAccount() {
             return msgId && !existingIds.has(msgId);
           });
           
-          // Birleştir ve sırala
+          // Birleştir ve sırala (timestamp'leri normalize et)
           const merged = [...prev, ...newMessages];
           merged.sort((a, b) => {
-            const aTime = a.timestamp || a.messageTimestamp || 0;
-            const bTime = b.timestamp || b.messageTimestamp || 0;
+            // Timestamp'leri normalize et (saniye veya milisaniye olabilir)
+            const normalizeTimestamp = (ts: number | undefined) => {
+              if (!ts) return 0;
+              // Eğer çok büyükse (milisaniye), küçükse (saniye) 1000 ile çarp
+              return ts > 1000000000000 ? ts : ts * 1000;
+            };
+            
+            const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+            const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
             return aTime - bTime;
           });
           
@@ -1078,14 +1138,29 @@ export default function WhatsAppMultiAccount() {
                   setMessages(prev => {
                     const existingIds = new Set(prev.map(m => m.id || m.key?.id));
                     const newMessages = data.messages
-                      .filter((msg: any) => msg.from === currentSelectedChat.id)
+                      .filter((msg: any) => {
+                        // Backend'den gelen mesajlarda from field'ı var
+                        const msgFrom = msg.from || msg.key?.remoteJid;
+                        return msgFrom === currentSelectedChat.id;
+                      })
                       .map((msg: any) => {
-                        const body = extractMessageText(msg);
-                        const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                        // Backend'den gelen text field'ını koru, yoksa extractMessageText kullan
+                        const text = msg.text || extractMessageText(msg);
+                        const body = msg.body || text;
+                        const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                        
+                        // fromMe kontrolü
+                        const fromMe = msg.fromMe !== undefined 
+                          ? Boolean(msg.fromMe) 
+                          : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+                        
                         return {
                           ...msg,
                           id: msgId,
-                          body,
+                          text: text || body,
+                          body: body || text,
+                          fromMe: fromMe,
+                          timestamp: msg.timestamp || msg.messageTimestamp || undefined,
                         };
                       })
                       .filter(msg => {
@@ -1097,11 +1172,18 @@ export default function WhatsAppMultiAccount() {
                       return prev; // Yeni mesaj yoksa değişiklik yapma
                     }
                     
-                    // Birleştir ve sırala
+                    // Birleştir ve sırala (timestamp'leri normalize et)
                     const merged = [...prev, ...newMessages];
                     merged.sort((a, b) => {
-                      const aTime = a.timestamp || a.messageTimestamp || 0;
-                      const bTime = b.timestamp || b.messageTimestamp || 0;
+                      // Timestamp'leri normalize et (saniye veya milisaniye olabilir)
+                      const normalizeTimestamp = (ts: number | undefined) => {
+                        if (!ts) return 0;
+                        // Eğer çok büyükse (milisaniye), küçükse (saniye) 1000 ile çarp
+                        return ts > 1000000000000 ? ts : ts * 1000;
+                      };
+                      
+                      const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+                      const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
                       return aTime - bTime;
                     });
                     
@@ -1110,6 +1192,53 @@ export default function WhatsAppMultiAccount() {
                 }
                 // Sohbet listesini de yenile (unreadCount güncellemesi için)
                 loadChats(data.sessionId, 50);
+              }
+            } else if (data.type === 'messages.set') {
+              // Mesaj geçmişi geldi (bağlantı açıldığında)
+              if (data.sessionId === currentActiveAccount?.id && currentSelectedChat) {
+                console.log('[WebSocket] Mesaj geçmişi alındı:', data.messages?.length || 0);
+                
+                // Seçili sohbetin mesajlarıysa yükle
+                const chatMessages = (data.messages || []).filter((msg: any) => {
+                  const msgFrom = msg.from || msg.key?.remoteJid;
+                  return msgFrom === currentSelectedChat.id;
+                });
+                
+                if (chatMessages.length > 0) {
+                  console.log('[WebSocket] Seçili sohbetin mesaj geçmişi yükleniyor:', chatMessages.length);
+                  
+                  const formattedMessages: Message[] = chatMessages.map((msg: any) => {
+                    const text = msg.text || extractMessageText(msg);
+                    const body = msg.body || text;
+                    const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                    
+                    const fromMe = msg.fromMe !== undefined 
+                      ? Boolean(msg.fromMe) 
+                      : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+                    
+                    return {
+                      ...msg,
+                      id: msgId,
+                      text: text || body,
+                      body: body || text,
+                      fromMe: fromMe,
+                      timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                    };
+                  });
+                  
+                  // Timestamp'e göre sırala
+                  formattedMessages.sort((a, b) => {
+                    const normalizeTimestamp = (ts: number | undefined) => {
+                      if (!ts) return 0;
+                      return ts > 1000000000000 ? ts : ts * 1000;
+                    };
+                    const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+                    const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
+                    return aTime - bTime;
+                  });
+                  
+                  setMessages(formattedMessages);
+                }
               }
             }
           } catch (error) {
@@ -1775,14 +1904,39 @@ export default function WhatsAppMultiAccount() {
                   ) : (
                     messages.map((msg, index) => {
                       // fromMe değerini kontrol et - backend'den gelen mesajlarda fromMe direkt olarak var
-                      // Eğer yoksa key'den kontrol et
+                      // Backend formatMessage fonksiyonu fromMe'yi Boolean olarak döndürüyor
                       const fromMe = msg.fromMe !== undefined 
                         ? Boolean(msg.fromMe) 
                         : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
-                      const text = msg.body || msg.text || '';
-                      const ts = msg.timestamp
-                        ? new Date(msg.timestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                      
+                      // Mesaj metnini çıkar - önce backend'den gelen text'i kontrol et, yoksa extractMessageText kullan
+                      let text = msg.text || msg.body || '';
+                      if (!text && msg.message) {
+                        text = extractMessageText(msg);
+                      }
+                      
+                      // Timestamp formatı - backend'den gelen timestamp saniye cinsinden
+                      // Eğer milisaniye cinsindeyse (1000'den büyükse) böl, değilse olduğu gibi kullan
+                      let timestampMs = 0;
+                      if (msg.timestamp) {
+                        // Eğer timestamp çok büyükse (milisaniye), küçükse (saniye) 1000 ile çarp
+                        timestampMs = msg.timestamp > 1000000000000 ? msg.timestamp : msg.timestamp * 1000;
+                      } else if (msg.messageTimestamp) {
+                        timestampMs = msg.messageTimestamp > 1000000000000 ? msg.messageTimestamp : msg.messageTimestamp * 1000;
+                      }
+                      
+                      const ts = timestampMs > 0
+                        ? new Date(timestampMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
                         : '';
+
+                      // Mesaj tipi kontrolü - desteksiz mesaj tipleri için daha iyi gösterim
+                      const messageType = msg.type || (msg.message ? Object.keys(msg.message)[0] : 'unknown');
+                      const isUnsupportedType = !text && messageType && !['conversation', 'extendedTextMessage'].includes(messageType);
+                      
+                      // Eğer text yoksa ve desteklenmeyen bir tip varsa, tip bilgisini göster
+                      if (!text && isUnsupportedType) {
+                        text = extractMessageText(msg) || `⟨${messageType}⟩`;
+                      }
 
                       return (
                         <div
@@ -1799,12 +1953,27 @@ export default function WhatsAppMultiAccount() {
                               boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)'
                             }}
                           >
-                            <div className="break-words whitespace-pre-wrap leading-relaxed">{text || '⟨desteksiz mesaj tipi⟩'}</div>
+                            {/* Grup mesajlarında gönderen kişi adı */}
+                            {!fromMe && msg.participant && (
+                              <div className="text-xs font-semibold text-gray-600 mb-0.5">
+                                {msg.pushName || msg.participant.split('@')[0]}
+                              </div>
+                            )}
+                            
+                            <div className="break-words whitespace-pre-wrap leading-relaxed">
+                              {text || '⟨desteksiz mesaj tipi⟩'}
+                            </div>
+                            
                             {ts && (
                               <div className={`text-[11px] text-gray-500 mt-0.5 flex items-end ${
                                 fromMe ? 'justify-end' : 'justify-start'
                               }`}>
                                 <span className="opacity-70">{ts}</span>
+                                {fromMe && (
+                                  <span className="ml-1">
+                                    <CheckCheck size={12} className="text-blue-500" />
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>

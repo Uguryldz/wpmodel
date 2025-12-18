@@ -13,7 +13,18 @@ export const prisma = new PrismaClient();
 export const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 // Graceful shutdown
-process.on("beforeExit", async () => {
-  await prisma.$disconnect();
-});
+const gracefulShutdown = async () => {
+  console.log("[shutdown] Prisma bağlantısı kapatılıyor...");
+  try {
+    await prisma.$disconnect();
+    console.log("[shutdown] Prisma bağlantısı kapatıldı");
+  } catch (error) {
+    console.error("[shutdown] Prisma disconnect hatası:", error);
+  }
+  process.exit(0);
+};
+
+process.on("beforeExit", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
 

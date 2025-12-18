@@ -56,6 +56,7 @@ import {
   setWebSocketBroadcast,
   restoreSessions,
   refreshContacts,
+  syncChats,
 } from "./baileysClient.js";
 
 const app = express();
@@ -393,6 +394,23 @@ app.post(
     const { clearDb } = req.query;
     const result = await refreshContacts(sessionId, { clearDb: clearDb !== "false" });
     res.json(result);
+  })
+);
+
+// === Chat Sync ===
+app.post(
+  "/:sessionId/chats/sync",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    console.log(`[POST /${sessionId}/chats/sync] Chat eşitleme başlatılıyor...`);
+    try {
+      const result = await syncChats(sessionId);
+      console.log(`[POST /${sessionId}/chats/sync] ✅ Chat eşitleme tamamlandı:`, result);
+      res.json(result);
+    } catch (error) {
+      console.error(`[POST /${sessionId}/chats/sync] ❌ Chat eşitleme hatası:`, error);
+      res.status(500).json({ error: error.message || "Chat eşitleme başarısız oldu" });
+    }
   })
 );
 
