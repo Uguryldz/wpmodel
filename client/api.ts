@@ -297,6 +297,65 @@ export const sendMessage = async (sessionId: string, jid: string, message: strin
   if (!response.ok) throw new Error('Mesaj gönderilemedi');
 };
 
+// Mesaj İşlemleri API
+export const replyToMessage = async (sessionId: string, jid: string, messageId: string, message: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, messageId, message }),
+  });
+  if (!response.ok) throw new Error('Mesaj yanıtlanamadı');
+  return response.json();
+};
+
+export const forwardMessage = async (sessionId: string, fromJid: string, toJid: string, messageId: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromJid, toJid, messageId }),
+  });
+  if (!response.ok) throw new Error('Mesaj iletilemedi');
+  return response.json();
+};
+
+export const editMessage = async (sessionId: string, jid: string, messageId: string, message: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/${encodeURIComponent(jid)}/${messageId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) throw new Error('Mesaj düzenlenemedi');
+  return response.json();
+};
+
+export const deleteMessage = async (sessionId: string, jid: string, messageId: string, deleteForEveryone: boolean = false): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/${encodeURIComponent(jid)}/${messageId}?deleteForEveryone=${deleteForEveryone}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Mesaj silinemedi');
+  return response.json();
+};
+
+export const starMessage = async (sessionId: string, jid: string, messageId: string, star: boolean = true): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/star`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, messageId, star }),
+  });
+  if (!response.ok) throw new Error('Mesaj yıldızlanamadı');
+  return response.json();
+};
+
+export const markMessagesAsRead = async (sessionId: string, jid: string, messageIds?: string[]): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/read`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, messageIds: messageIds || [] }),
+  });
+  if (!response.ok) throw new Error('Mesajlar okundu olarak işaretlenemedi');
+  return response.json();
+};
+
 // SSE ile QR kod dinleme
 export const subscribeToQR = (sessionId: string, onUpdate: (data: SessionStatus & { qr?: string }) => void) => {
   const eventSource = new EventSource(`${API_BASE}/sessions/${sessionId}/add-sse`);

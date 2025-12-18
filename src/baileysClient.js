@@ -280,17 +280,45 @@ const extractText = (message) =>
   message?.videoMessage?.caption ||
   null;
 
-const formatMessage = (msg) => ({
-  id: msg.key?.id,
-  from: msg.key?.remoteJid,
-  fromMe: Boolean(msg.key?.fromMe),
-  participant: msg.key?.participant || null,
-  timestamp: Number(
-    msg.messageTimestamp || msg.messageStubParameters?.timestamp || Date.now()
-  ),
-  type: msg.message?.messageStubType || Object.keys(msg.message || {})[0],
-  text: extractText(msg.message),
-});
+const formatMessage = (msg) => {
+  // Yanıtlanan mesaj bilgisini çıkar
+  let quotedMessage = null;
+  if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+    const quoted = msg.message.extendedTextMessage.contextInfo;
+    quotedMessage = {
+      id: quoted.stanzaId,
+      from: quoted.participant || quoted.remoteJid,
+      text: extractText(quoted.quotedMessage),
+    };
+  } else if (msg.message?.imageMessage?.contextInfo?.quotedMessage) {
+    const quoted = msg.message.imageMessage.contextInfo;
+    quotedMessage = {
+      id: quoted.stanzaId,
+      from: quoted.participant || quoted.remoteJid,
+      text: extractText(quoted.quotedMessage) || '📷 Fotoğraf',
+    };
+  } else if (msg.message?.videoMessage?.contextInfo?.quotedMessage) {
+    const quoted = msg.message.videoMessage.contextInfo;
+    quotedMessage = {
+      id: quoted.stanzaId,
+      from: quoted.participant || quoted.remoteJid,
+      text: extractText(quoted.quotedMessage) || '📹 Video',
+    };
+  }
+
+  return {
+    id: msg.key?.id,
+    from: msg.key?.remoteJid,
+    fromMe: Boolean(msg.key?.fromMe),
+    participant: msg.key?.participant || null,
+    timestamp: Number(
+      msg.messageTimestamp || msg.messageStubParameters?.timestamp || Date.now()
+    ),
+    type: msg.message?.messageStubType || Object.keys(msg.message || {})[0],
+    text: extractText(msg.message),
+    quotedMessage: quotedMessage, // Yanıtlanan mesaj bilgisi
+  };
+};
 
 // Prisma'ya mesaj kaydet
 const saveMessagesToPrisma = async (sessionId, messages = []) => {
@@ -3133,24 +3161,65 @@ export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone
 export const replyToMessage = async (accountId, jid, messageId, replyMessage) => {
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
 
-  const message = await prisma.message.findFirst({
-    where: {
-      sessionId: getAccountId(accountId),
-      remoteJid: normalizedJid,
-      id: messageId,
-    },
-  });
+  // Önce memory store'dan kontrol et
+  const instance = getOrCreateInstance(accountId);
+  let message = null;
+  let key = null;
 
-  if (!message) {
-    throw new Error("Yanıtlanacak mesaj bulunamadı");
+  // Memory store'dan mesajı bul
+  const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+  const memoryMsg = memoryMessages.find(m => (m.id || m.key?.id) === messageId);
+  
+  if (memoryMsg) {
+    // Memory store'dan bulundu
+    if (memoryMsg.key) {
+      key = memoryMsg.key;
+    } else if (memoryMsg.id) {
+      // Key yoksa oluştur
+      key = {
+        remoteJid: normalizedJid,
+        id: memoryMsg.id,
+        fromMe: memoryMsg.fromMe || false,
+      };
+    }
   }
 
-  let key;
-  try {
-    key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
-  } catch {
-    throw new Error("Mesaj anahtarı geçersiz");
+  // Memory store'da yoksa DB'den kontrol et
+  if (!key) {
+    const dbMessage = await prisma.message.findFirst({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+        id: messageId,
+      },
+    });
+
+    if (!dbMessage) {
+      throw new Error("Yanıtlanacak mesaj bulunamadı");
+    }
+
+    try {
+      key = typeof dbMessage.key === "string" ? JSON.parse(dbMessage.key) : dbMessage.key;
+    } catch (error) {
+      logger.error({ error, messageId }, "Mesaj anahtarı parse edilemedi");
+      // Key parse edilemezse basit bir key oluştur
+      key = {
+        remoteJid: normalizedJid,
+        id: messageId,
+        fromMe: false,
+      };
+    }
+  }
+
+  // Key'in doğru formatta olduğundan emin ol
+  if (!key || !key.remoteJid) {
+    key = {
+      ...key,
+      remoteJid: normalizedJid,
+      id: messageId,
+    };
   }
 
   let messageContent;
@@ -3160,9 +3229,14 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
     messageContent = replyMessage;
   }
 
-  await sock.sendMessage(normalizedJid, messageContent, {
-    quoted: key,
-  });
+  try {
+    await sock.sendMessage(normalizedJid, messageContent, {
+      quoted: key,
+    });
+  } catch (error) {
+    logger.error({ error, jid: normalizedJid, messageId }, "Mesaj yanıtlanamadı");
+    throw new Error(`Mesaj yanıtlanamadı: ${error.message}`);
+  }
 
   return { status: "replied", messageId, jid: normalizedJid };
 };
@@ -3207,28 +3281,83 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
 export const editMessage = async (accountId, jid, messageId, newMessage) => {
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
 
-  const message = await prisma.message.findFirst({
-    where: {
-      sessionId: getAccountId(accountId),
+  // Önce memory store'dan kontrol et
+  const instance = getOrCreateInstance(accountId);
+  let key = null;
+
+  // Memory store'dan mesajı bul
+  const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+  const memoryMsg = memoryMessages.find(m => {
+    const msgId = m.id || m.key?.id;
+    return msgId === messageId;
+  });
+  
+  if (memoryMsg) {
+    // Memory store'dan bulundu
+    // formatMessage ile formatlanmış mesajlarda key direkt olarak olabilir
+    if (memoryMsg.key) {
+      key = memoryMsg.key;
+      // Key'in id'si eksikse ekle
+      if (!key.id && memoryMsg.id) {
+        key.id = memoryMsg.id;
+      }
+    } else if (memoryMsg.id) {
+      // Key yoksa oluştur - formatMessage'dan gelen mesajlarda key olmayabilir
+      key = {
+        remoteJid: normalizedJid,
+        id: memoryMsg.id,
+        fromMe: memoryMsg.fromMe !== undefined ? Boolean(memoryMsg.fromMe) : false,
+      };
+    }
+    
+    // fromMe kontrolü
+    const msgFromMe = memoryMsg.fromMe !== undefined ? Boolean(memoryMsg.fromMe) : (key?.fromMe || false);
+    if (!msgFromMe && !key.fromMe) {
+      throw new Error("Sadece kendi mesajlarını düzenleyebilirsin");
+    }
+    
+    // Key'in fromMe'sini set et
+    if (key) {
+      key.fromMe = msgFromMe || key.fromMe || true;
+    }
+  }
+
+  // Memory store'da yoksa DB'den kontrol et
+  if (!key) {
+    const message = await prisma.message.findFirst({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+        id: messageId,
+      },
+    });
+
+    if (!message) {
+      throw new Error("Düzenlenecek mesaj bulunamadı");
+    }
+
+    try {
+      key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
+    } catch (error) {
+      logger.error({ error, messageId }, "Mesaj anahtarı parse edilemedi");
+      throw new Error("Mesaj anahtarı geçersiz");
+    }
+
+    if (!key.fromMe) {
+      throw new Error("Sadece kendi mesajlarını düzenleyebilirsin");
+    }
+  }
+
+  // Key'in doğru formatta olduğundan emin ol
+  if (!key || !key.remoteJid) {
+    key = {
+      ...key,
       remoteJid: normalizedJid,
       id: messageId,
-    },
-  });
-
-  if (!message) {
-    throw new Error("Düzenlenecek mesaj bulunamadı");
-  }
-
-  let key;
-  try {
-    key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
-  } catch {
-    throw new Error("Mesaj anahtarı geçersiz");
-  }
-
-  if (!key.fromMe) {
-    throw new Error("Sadece kendi mesajlarını düzenleyebilirsin");
+      fromMe: true,
+    };
   }
 
   let messageContent;
@@ -3238,11 +3367,62 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
     messageContent = newMessage;
   }
 
-  // Baileys kaynak koduna göre: content.edit kullanılır
-  await sock.sendMessage(normalizedJid, {
-    ...messageContent,
-    edit: key,
-  });
+  try {
+    // Baileys'de mesaj düzenleme için doğru format
+    // edit parametresi ile eski mesajın key'i gönderilir
+    // Key'in doğru formatta olduğundan emin ol (proto.MessageKey formatı)
+    // Baileys'in en son versiyonunda edit parametresi key.id string'i veya tam key objesi olabilir
+    // Key'in id'si mutlaka string olmalı
+    const keyId = key.id || messageId;
+    if (!keyId) {
+      throw new Error("Mesaj ID'si bulunamadı");
+    }
+    
+    const editKey = {
+      remoteJid: key.remoteJid || normalizedJid,
+      id: String(keyId), // Baileys id'yi string olarak bekliyor
+      fromMe: true, // Düzenleme için mutlaka true olmalı
+    };
+    
+    // Grup mesajları için participant ekle
+    if (key.participant) {
+      editKey.participant = key.participant;
+    }
+    
+    logger.info({ editKey, jid: normalizedJid, messageId, originalKey: key, keyId: String(keyId) }, "Mesaj düzenleniyor");
+    
+    // Baileys 7.0.0-rc.9'da mesaj düzenleme için edit parametresi
+    // Baileys'in kaynak koduna göre, edit parametresi proto.MessageKey tipinde bir obje bekliyor
+    // Ama bazı durumlarda sadece key.id string'i de çalışabilir
+    // Önce key objesi ile deneyelim, çalışmazsa key.id string'i ile deneyelim
+    
+    let result;
+    try {
+      // İlk deneme: tam key objesi ile
+      result = await sock.sendMessage(normalizedJid, messageContent, {
+        edit: editKey,
+      });
+      logger.info({ result, method: 'editKeyObject' }, "Mesaj düzenlendi (key objesi ile)");
+    } catch (firstError) {
+      logger.warn({ firstError, editKey }, "Key objesi ile düzenleme başarısız, key.id string'i ile deneniyor");
+      
+      // İkinci deneme: sadece key.id string'i ile
+      try {
+        result = await sock.sendMessage(normalizedJid, messageContent, {
+          edit: editKey.id,
+        });
+        logger.info({ result, method: 'editKeyId' }, "Mesaj düzenlendi (key.id string'i ile)");
+      } catch (secondError) {
+        logger.error({ firstError, secondError, editKey }, "Her iki yöntem de başarısız");
+        throw secondError; // Son hatayı fırlat
+      }
+    }
+    
+    logger.info({ result, jid: normalizedJid, messageId }, "Mesaj düzenlendi");
+  } catch (error) {
+    logger.error({ error, jid: normalizedJid, messageId, key, errorMessage: error.message, errorStack: error.stack }, "Mesaj düzenlenemedi");
+    throw new Error(`Mesaj düzenlenemedi: ${error.message}`);
+  }
 
   return { status: "edited", messageId, jid: normalizedJid };
 };

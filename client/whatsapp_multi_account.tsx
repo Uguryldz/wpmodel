@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX, RefreshCcw } from 'lucide-react';
+import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX, RefreshCcw, Reply, Forward, Trash2, Star, StarOff, Eye } from 'lucide-react';
 import * as api from './api';
 import * as QRCode from 'qrcode';
 
@@ -42,6 +42,13 @@ interface Message {
   from?: string; // Backend'den gelen remoteJid
   type?: string; // Mesaj tipi (conversation, imageMessage, videoMessage, vb.)
   participant?: string; // Grup mesajlarında gönderen kişi
+  starred?: boolean; // Mesaj yıldızlı mı?
+  messageTimestamp?: number; // Alternatif timestamp
+  quotedMessage?: { // Yanıtlanan mesaj bilgisi
+    id?: string;
+    from?: string;
+    text?: string;
+  };
 }
 
 export default function WhatsAppMultiAccount() {
@@ -61,6 +68,8 @@ export default function WhatsAppMultiAccount() {
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [showContactsModal, setShowContactsModal] = useState(false);
   const [showContactSelector, setShowContactSelector] = useState(false);
+  const [showForwardSelector, setShowForwardSelector] = useState(false);
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const [contacts, setContacts] = useState<api.Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<api.Contact[]>([]);
   const [contactSearchTerm, setContactSearchTerm] = useState('');
@@ -75,6 +84,9 @@ export default function WhatsAppMultiAccount() {
   const activeAccountRef = useRef<Account | undefined>(undefined);
   const selectedChatRef = useRef<Chat | null>(null);
   const contactsCacheRef = useRef<Map<string, { data: Map<string, any>, timestamp: number }>>(new Map());
+  const chatsLoadedRef = useRef<Map<string, boolean>>(new Map()); // sessionId -> chat listesi yüklendi mi?
+  const chatsInitialLoadRef = useRef<Map<string, boolean>>(new Map()); // sessionId -> ilk yükleme yapıldı mı?
+  const messagesInitialLoadRef = useRef<Map<string, boolean>>(new Map()); // sessionId-chatId -> mesaj geçmişi ilk yüklendi mi?
   const profilePictureQueueRef = useRef<Map<string, Set<string>>>(new Map()); // sessionId -> Set of jids
   const profilePictureLoadingRef = useRef<boolean>(false);
   const profilePictureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -177,22 +189,27 @@ export default function WhatsAppMultiAccount() {
   useEffect(() => {
     console.log('=== activeAccount değişti ===', activeAccount);
     if (activeAccount) {
-      console.log('loadChats çağrılıyor, sessionId:', activeAccount.id, 'status:', activeAccount.status);
-      // Sadece bağlı hesaplar için sohbetleri yükle
-      if (activeAccount.status === 'open') {
+      const sessionId = activeAccount.id;
+      const hasInitialLoad = chatsInitialLoadRef.current.get(sessionId);
+      
+      // Sadece ilk bağlantıda veya bağlantı durumu değiştiğinde yükle
+      if (activeAccount.status === 'open' && !hasInitialLoad) {
+        console.log('İlk bağlantı - sohbetler yükleniyor, sessionId:', sessionId);
+        chatsInitialLoadRef.current.set(sessionId, true);
+        chatsLoadedRef.current.set(sessionId, false);
+        
         // İlk bağlantıda contact'ları da yükle
-        loadContacts(activeAccount.id).then(() => {
-          // Eğer sohbet listesi boşsa yükle, değilse WebSocket'ten gelecek
+        loadContacts(sessionId).then(() => {
+          // Sadece sohbet listesi boşsa yükle
           if (chats.length === 0) {
-            loadChats(activeAccount.id, 50);
+            loadChats(sessionId, 50, true);
           }
         });
-      } else {
-        console.log('Hesap henüz bağlı değil, sohbetler yüklenmeyecek');
+      } else if (activeAccount.status !== 'open' && chats.length === 0 && !hasInitialLoad) {
         // Bağlı değilse de DB'den yükle (uygulama yeniden başladığında sohbetler görünsün)
-        if (chats.length === 0) {
-          loadChats(activeAccount.id, 50);
-        }
+        console.log('Hesap bağlı değil ama sohbetler yok - DB\'den yükleniyor');
+        chatsInitialLoadRef.current.set(sessionId, true);
+        loadChats(sessionId, 50, true);
       }
     } else {
       console.log('activeAccount yok, loadChats çağrılmıyor');
@@ -573,17 +590,23 @@ export default function WhatsAppMultiAccount() {
       // Mesajları yükle
       await loadMessages(activeAccount.id, chatId);
       
-      // Sohbet listesini de yenile (yeni chat eklenmiş olabilir)
-      loadChats(activeAccount.id, 50);
+      // Sohbet listesini de yenile (yeni chat eklenmiş olabilir) - force ile
+      loadChats(activeAccount.id, 50, true);
     } catch (error) {
       console.error('Kişi seçilemedi:', error);
       alert('Kişi seçilemedi');
     }
   };
 
-  const loadChats = async (sessionId: string, limit: number = 50) => {
+  const loadChats = async (sessionId: string, limit: number = 50, force: boolean = false) => {
     try {
-      console.log('=== Sohbetler yükleniyor ===', { sessionId, limit });
+      // Eğer zaten yüklendiyse ve force değilse, yükleme
+      if (!force && chatsLoadedRef.current.get(sessionId) && chats.length > 0) {
+        console.log('Sohbetler zaten yüklü, tekrar yüklenmiyor');
+        return;
+      }
+      
+      console.log('=== Sohbetler yükleniyor ===', { sessionId, limit, force });
       console.log('SessionId:', sessionId);
       console.log('Aktif hesap:', activeAccount);
       
@@ -599,6 +622,9 @@ export default function WhatsAppMultiAccount() {
         // setChats([]);
         return;
       }
+      
+      // Yüklendi olarak işaretle
+      chatsLoadedRef.current.set(sessionId, true);
       
       // Contact'ları cache'den al (yoksa boş map)
       const cached = contactsCacheRef.current.get(sessionId);
@@ -714,10 +740,19 @@ export default function WhatsAppMultiAccount() {
       // Eğer append modu değilse, önce mesajları temizle
       if (!append) {
         setMessages([]);
+        // İlk yükleme flag'ini sıfırla (yeni mesajlar yüklenecek)
+        const messagesKey = `${sessionId}-${chatId}`;
+        messagesInitialLoadRef.current.delete(messagesKey);
       }
       
       const data = await api.getMessages(sessionId, chatId, limit);
       console.log('Mesajlar alındı (ham data):', data);
+      
+      // İlk yükleme flag'ini set et
+      if (!append && data && data.length > 0) {
+        const messagesKey = `${sessionId}-${chatId}`;
+        messagesInitialLoadRef.current.set(messagesKey, true);
+      }
 
       // Mesaj içeriğini okunabilir hale getirmek için map
       // Backend'den gelen mesajlar formatMessage ile formatlanmış olabilir
@@ -944,16 +979,180 @@ export default function WhatsAppMultiAccount() {
   const sendMessage = async () => {
     if (!message.trim() || !activeAccount || !selectedChat) return;
     
+    const messageText = message.trim();
+    
     try {
-      await api.sendMessage(activeAccount.id, selectedChat.id, message);
+      await api.sendMessage(activeAccount.id, selectedChat.id, messageText);
       setMessage('');
       setShowEmojiPicker(false);
-      // Mesajları ve sohbet listesini yenile
-      loadMessages(activeAccount.id, selectedChat.id);
-      loadChats(activeAccount.id, 50); // Contact'ları yükleme (cache kullan)
+      
+      // Mesajları yenileme - WebSocket'ten gelecek mesaj zaten eklenecek
+      // loadMessages çağrısını kaldırdık çünkü bu sohbet geçmişini temizliyordu
+      // WebSocket'ten gelen messages.upsert event'i mesajı ekleyecek
+      
+      // Chat listesindeki ilgili chat'i güncelle (yeniden sıralama yapmadan)
+      setChats(prevChats => {
+        const index = prevChats.findIndex(c => c.id === selectedChat.id);
+        if (index >= 0) {
+          const updatedChats = [...prevChats];
+          const now = Math.floor(Date.now() / 1000); // Saniye cinsinden timestamp
+          updatedChats[index] = {
+            ...updatedChats[index],
+            conversationTimestamp: now,
+            lastMessage: messageText,
+            time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+          };
+          // Chat'i en üste taşıma - sadece güncelle
+          return updatedChats;
+        }
+        return prevChats;
+      });
+      
+      // Optimistik UI güncellemesi: Mesajı hemen ekle (WebSocket'ten gelene kadar)
+      const optimisticMessage: Message = {
+        id: `temp-${Date.now()}`,
+        text: messageText,
+        body: messageText,
+        fromMe: true,
+        timestamp: Math.floor(Date.now() / 1000),
+        from: selectedChat.id,
+      };
+      
+      setMessages(prev => {
+        // Duplicate kontrolü
+        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+        if (existingIds.has(optimisticMessage.id)) {
+          return prev;
+        }
+        
+        // Yeni mesajı ekle ve sırala
+        const merged = [...prev, optimisticMessage];
+        merged.sort((a, b) => {
+          const normalizeTimestamp = (ts: number | undefined) => {
+            if (!ts) return 0;
+            return ts > 1000000000000 ? ts : ts * 1000;
+          };
+          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
+          return aTime - bTime;
+        });
+        return merged;
+      });
     } catch (error) {
       console.error('Mesaj gönderilemedi:', error);
       alert('Mesaj gönderilemedi');
+    }
+  };
+
+  // Mesaj İşlemleri Handler'ları
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [showMessageMenu, setShowMessageMenu] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
+
+  const handleReplyMessage = async (msg: Message, replyText?: string) => {
+    if (!activeAccount || !selectedChat || !msg) return;
+    
+    const textToSend = replyText || message;
+    if (!textToSend.trim()) return;
+    
+    try {
+      await api.replyToMessage(activeAccount.id, selectedChat.id, msg.id || '', textToSend);
+      setMessage('');
+      setReplyingTo(null);
+      loadMessages(activeAccount.id, selectedChat.id);
+      
+      // Chat listesindeki ilgili chat'i güncelle (yeniden sıralama yapmadan)
+      setChats(prevChats => {
+        const index = prevChats.findIndex(c => c.id === selectedChat.id);
+        if (index >= 0) {
+          const updatedChats = [...prevChats];
+          const now = Math.floor(Date.now() / 1000);
+          updatedChats[index] = {
+            ...updatedChats[index],
+            conversationTimestamp: now,
+            lastMessage: textToSend,
+            time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+          };
+          return updatedChats;
+        }
+        return prevChats;
+      });
+    } catch (error) {
+      console.error('Mesaj yanıtlanamadı:', error);
+      alert('Mesaj yanıtlanamadı');
+    }
+  };
+
+  const handleForwardMessage = async (msg: Message, toJid: string) => {
+    if (!activeAccount || !msg) return;
+    
+    try {
+      await api.forwardMessage(activeAccount.id, selectedChat?.id || '', toJid, msg.id || '');
+      setShowForwardSelector(false);
+      setForwardingMessage(null);
+      if (selectedChat) {
+        loadMessages(activeAccount.id, selectedChat.id);
+      }
+    } catch (error) {
+      console.error('Mesaj iletilemedi:', error);
+      alert('Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+    }
+  };
+
+  const handleEditMessage = async (msg: Message, newText: string) => {
+    if (!activeAccount || !selectedChat || !newText.trim()) return;
+    
+    try {
+      await api.editMessage(activeAccount.id, selectedChat.id, msg.id || '', newText);
+      setEditingMessage(null);
+      setEditingText('');
+      loadMessages(activeAccount.id, selectedChat.id);
+    } catch (error) {
+      console.error('Mesaj düzenlenemedi:', error);
+      alert('Mesaj düzenlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+    }
+  };
+
+  const handleDeleteMessage = async (msg: Message, deleteForEveryone: boolean = false) => {
+    if (!activeAccount || !selectedChat) return;
+    
+    if (!confirm(deleteForEveryone ? 'Bu mesajı herkes için silmek istediğinizden emin misiniz?' : 'Bu mesajı silmek istediğinizden emin misiniz?')) {
+      return;
+    }
+    
+    try {
+      await api.deleteMessage(activeAccount.id, selectedChat.id, msg.id || '', deleteForEveryone);
+      loadMessages(activeAccount.id, selectedChat.id);
+    } catch (error) {
+      console.error('Mesaj silinemedi:', error);
+      alert('Mesaj silinemedi');
+    }
+  };
+
+  const handleStarMessage = async (msg: Message, star: boolean) => {
+    if (!activeAccount || !selectedChat) return;
+    
+    try {
+      await api.starMessage(activeAccount.id, selectedChat.id, msg.id || '', star);
+      loadMessages(activeAccount.id, selectedChat.id);
+    } catch (error) {
+      console.error('Mesaj yıldızlanamadı:', error);
+      alert('Mesaj yıldızlanamadı');
+    }
+  };
+
+  const handleMarkAsRead = async () => {
+    if (!activeAccount || !selectedChat) return;
+    
+    try {
+      await api.markMessagesAsRead(activeAccount.id, selectedChat.id);
+      loadMessages(activeAccount.id, selectedChat.id);
+      loadChats(activeAccount.id, 50);
+    } catch (error) {
+      console.error('Mesajlar okundu olarak işaretlenemedi:', error);
+      alert('Mesajlar okundu olarak işaretlenemedi');
     }
   };
 
@@ -1024,81 +1223,126 @@ export default function WhatsAppMultiAccount() {
                   });
                   
                   // WebSocket'ten gelen chat'leri direkt state'e set et (API çağrısı yapmadan)
-                  if (data.type === 'chats.set') {
-                    // chats.set: Tüm sohbetler geldi, direkt set et
-                    const formattedChats = data.chats.map((chat: any) => {
-                      const cached = contactsCacheRef.current.get(data.sessionId);
-                      const contactsMap = cached ? cached.data : new Map<string, any>();
-                      const contact = contactsMap.get(chat.id);
-                      
-                      // Mevcut chat'ten lastMessage'ı al (varsa)
-                      const existingChat = chats.find(c => c.id === chat.id);
-                      
-                      return {
-                        id: chat.id,
-                        name: chat.name || chat.displayName || chat.id,
-                        verifiedName: contact?.verifiedName || chat.verifiedName,
-                        profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
-                        unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
-                        conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
-                        archived: chat.archived ?? existingChat?.archived ?? false,
-                        lastMessage: existingChat?.lastMessage || '',
-                        time: chat.conversationTimestamp 
-                          ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                          : existingChat?.time || '',
-                      };
-                    });
+                  const hasInitialLoad = chatsInitialLoadRef.current.get(data.sessionId);
+                  
+                  // İlk bağlantıda değilse ve chat listesi zaten yüklendiyse, sadece yeni chat'leri ekle
+                  if (hasInitialLoad && chatsLoadedRef.current.get(data.sessionId)) {
+                    console.log('[WebSocket] Chat listesi zaten yüklü, sadece yeni/güncellenen chat\'ler işleniyor...', data.type);
                     
-                    setChats(formattedChats);
-                    console.log('[WebSocket] Sohbet listesi direkt güncellendi:', formattedChats.length);
-                  } else {
-                    // chats.upsert: Sadece güncellenen sohbetler, mevcut listeyi güncelle
-                    setChats(prevChats => {
-                      const updatedChats = [...prevChats];
-                      data.chats.forEach((chat: any) => {
-                        const index = updatedChats.findIndex(c => c.id === chat.id);
-                        if (index >= 0) {
-                          updatedChats[index] = {
-                            ...updatedChats[index],
-                            name: chat.name || updatedChats[index].name,
-                            verifiedName: chat.verifiedName || updatedChats[index].verifiedName,
-                            profilePicture: chat.imgUrl || updatedChats[index].profilePicture,
-                            unreadCount: chat.unreadCount ?? updatedChats[index].unreadCount,
-                            archived: chat.archived ?? updatedChats[index].archived,
-                          };
-                        } else {
-                          // Yeni sohbet eklendi
-                          updatedChats.push({
-                            id: chat.id,
-                            name: chat.name || chat.displayName || chat.id,
-                            verifiedName: chat.verifiedName,
-                            profilePicture: chat.imgUrl,
-                            unreadCount: chat.unreadCount || 0,
-                            conversationTimestamp: chat.conversationTimestamp || 0,
-                            archived: chat.archived || false,
-                            lastMessage: '',
-                            time: chat.conversationTimestamp 
-                              ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                              : '',
-                          });
-                        }
+                    if (data.type === 'chats.upsert' && data.chats && Array.isArray(data.chats)) {
+                      // Sadece yeni veya güncellenen chat'leri ekle/güncelle
+                      setChats(prevChats => {
+                        let hasChanges = false;
+                        const updatedChats = [...prevChats];
+                        
+                        data.chats.forEach((chat: any) => {
+                          const index = updatedChats.findIndex(c => c.id === chat.id);
+                          if (index >= 0) {
+                            // Mevcut chat'i güncelle - sadece önemli değişiklikler varsa
+                            const oldChat = updatedChats[index];
+                            const newUnreadCount = chat.unreadCount ?? oldChat.unreadCount;
+                            const newTimestamp = chat.conversationTimestamp || oldChat.conversationTimestamp;
+                            
+                            // Sadece unreadCount veya timestamp değiştiyse güncelle
+                            if (newUnreadCount !== oldChat.unreadCount || newTimestamp !== oldChat.conversationTimestamp) {
+                              updatedChats[index] = {
+                                ...oldChat,
+                                unreadCount: newUnreadCount,
+                                conversationTimestamp: newTimestamp,
+                                name: chat.name || oldChat.name,
+                                verifiedName: chat.verifiedName || oldChat.verifiedName,
+                                profilePicture: chat.imgUrl || oldChat.profilePicture,
+                                archived: chat.archived ?? oldChat.archived,
+                              };
+                              hasChanges = true;
+                            }
+                          } else {
+                            // Yeni chat eklendi
+                            updatedChats.push({
+                              id: chat.id,
+                              name: chat.name || chat.displayName || chat.id,
+                              verifiedName: chat.verifiedName,
+                              profilePicture: chat.imgUrl,
+                              unreadCount: chat.unreadCount || 0,
+                              conversationTimestamp: chat.conversationTimestamp || 0,
+                              archived: chat.archived || false,
+                              lastMessage: '',
+                              time: chat.conversationTimestamp 
+                                ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                                : '',
+                            });
+                            hasChanges = true;
+                          }
+                        });
+                        
+                        // Sadece değişiklik varsa güncelle
+                        return hasChanges ? updatedChats : prevChats;
                       });
-                      return updatedChats;
-                    });
+                    }
+                    // chats.set'i ilk bağlantı dışında ignore et
+                  } else {
+                    // İlk bağlantı - normal yükleme
+                    console.log('[WebSocket] İlk bağlantı - sohbet listesi yükleniyor...', data.type);
+                    
+                    if (data.type === 'chats.set') {
+                      // chats.set: Tüm sohbetler geldi, direkt set et
+                      const formattedChats = data.chats.map((chat: any) => {
+                        const cached = contactsCacheRef.current.get(data.sessionId);
+                        const contactsMap = cached ? cached.data : new Map<string, any>();
+                        const contact = contactsMap.get(chat.id);
+                        
+                        // Mevcut chat'ten lastMessage'ı al (varsa)
+                        const existingChat = chats.find(c => c.id === chat.id);
+                        
+                        return {
+                          id: chat.id,
+                          name: chat.name || chat.displayName || chat.id,
+                          verifiedName: contact?.verifiedName || chat.verifiedName,
+                          profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
+                          unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
+                          conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
+                          archived: chat.archived ?? existingChat?.archived ?? false,
+                          lastMessage: existingChat?.lastMessage || '',
+                          time: chat.conversationTimestamp 
+                            ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                            : existingChat?.time || '',
+                        };
+                      });
+                      
+                      setChats(formattedChats);
+                      chatsLoadedRef.current.set(data.sessionId, true);
+                      console.log('[WebSocket] Sohbet listesi direkt güncellendi:', formattedChats.length);
+                    }
                   }
                 } else {
-                  // WebSocket'ten chat gelmediyse API'den yükle
-                  loadChats(data.sessionId, 50);
+                  // WebSocket'ten chat gelmediyse API'den yükle (sadece ilk bağlantıda)
+                  const hasInitialLoad = chatsInitialLoadRef.current.get(data.sessionId);
+                  if (!hasInitialLoad) {
+                    loadChats(data.sessionId, 50, true);
+                  }
                 }
               }
             } else if (data.type === 'chats.update') {
-              // Sohbet güncellendi (unreadCount, lastMessage vs.)
-              if (data.sessionId === currentActiveAccount?.id) {
-                console.log('[WebSocket] Sohbet güncelleniyor...');
-                loadChats(data.sessionId, 50);
+              // Sohbet güncellendi (unreadCount, lastMessage vs.) - sadece ilgili chat'i güncelle
+              if (data.sessionId === currentActiveAccount?.id && data.chat) {
+                console.log('[WebSocket] Tek sohbet güncelleniyor...', data.chat.id);
+                setChats(prevChats => {
+                  const index = prevChats.findIndex(c => c.id === data.chat.id);
+                  if (index >= 0) {
+                    const updatedChats = [...prevChats];
+                    updatedChats[index] = {
+                      ...updatedChats[index],
+                      unreadCount: data.chat.unreadCount ?? updatedChats[index].unreadCount,
+                      conversationTimestamp: data.chat.conversationTimestamp || updatedChats[index].conversationTimestamp,
+                      lastMessage: data.chat.lastMessage || updatedChats[index].lastMessage,
+                    };
+                    return updatedChats;
+                  }
+                  return prevChats;
+                });
               }
             } else if (data.type === 'contacts.set' || data.type === 'contacts.upsert') {
-              // Kişi listesi güncellendi (WebSocket ile)
+              // Kişi listesi güncellendi (WebSocket ile) - chat listesini yenileme, sadece cache'i güncelle
               if (data.sessionId === currentActiveAccount?.id) {
                 console.log('[WebSocket] Kişi listesi güncelleniyor...', data.contacts?.length || 0);
                 // Contact cache'ini güncelle
@@ -1122,10 +1366,8 @@ export default function WhatsAppMultiAccount() {
                     timestamp: Date.now()
                   });
                   console.log('[WebSocket] Contact cache güncellendi:', contactsMap.size, 'profil resimleri ile');
-                  // Otomatik UI yenilemesini durdurduk; kullanıcı Yenile ile görecek
                 }
-                // Chat listesini yenile (isimler ve profil resimleri güncellensin)
-                loadChats(data.sessionId, 50);
+                // Chat listesini yenileme - gereksiz yenileme yapmıyoruz
               }
             } else if (data.type === 'messages.upsert') {
               // Yeni mesajlar geldi
@@ -1136,7 +1378,15 @@ export default function WhatsAppMultiAccount() {
                   console.log('[WebSocket] Seçili sohbetin mesajlarına yeni mesajlar ekleniyor...');
                   // Yeni mesajları mevcut mesajlara ekle (duplicate kontrolü ile)
                   setMessages(prev => {
-                    const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+                    const existingIds = new Set(prev.map(m => {
+                      const id = m.id || m.key?.id;
+                      // Temp mesajları da kontrol et (optimistik mesajlar)
+                      if (id && id.toString().startsWith('temp-')) {
+                        return id;
+                      }
+                      return id;
+                    }));
+                    
                     const newMessages = data.messages
                       .filter((msg: any) => {
                         // Backend'den gelen mesajlarda from field'ı var
@@ -1165,15 +1415,35 @@ export default function WhatsAppMultiAccount() {
                       })
                       .filter(msg => {
                         const msgId = msg.id || msg.key?.id;
-                        return msgId && !existingIds.has(msgId);
+                        if (msgId && existingIds.has(msgId)) {
+                          return false; // Duplicate
+                        }
+                        return true;
                       });
                     
                     if (newMessages.length === 0) {
                       return prev; // Yeni mesaj yoksa değişiklik yapma
                     }
                     
+                    // Temp mesajları kaldır (eğer gerçek mesaj geldiyse)
+                    let filteredPrev = prev;
+                    newMessages.forEach(newMsg => {
+                      if (newMsg.fromMe && newMsg.text) {
+                        // Aynı text ve fromMe olan temp mesajı bul ve kaldır
+                        filteredPrev = filteredPrev.filter(m => {
+                          const mId = m.id || m.key?.id;
+                          if (mId && mId.toString().startsWith('temp-') && 
+                              m.text === newMsg.text && 
+                              m.fromMe === true) {
+                            return false; // Temp mesajı kaldır
+                          }
+                          return true;
+                        });
+                      }
+                    });
+                    
                     // Birleştir ve sırala (timestamp'leri normalize et)
-                    const merged = [...prev, ...newMessages];
+                    const merged = [...filteredPrev, ...newMessages];
                     merged.sort((a, b) => {
                       // Timestamp'leri normalize et (saniye veya milisaniye olabilir)
                       const normalizeTimestamp = (ts: number | undefined) => {
@@ -1189,14 +1459,91 @@ export default function WhatsAppMultiAccount() {
                     
                     return merged;
                   });
+                  
+                  // Seçili sohbetin chat listesindeki bilgilerini güncelle
+                  const lastMessage = data.messages
+                    .filter((msg: any) => {
+                      const msgFrom = msg.from || msg.key?.remoteJid;
+                      return msgFrom === currentSelectedChat.id;
+                    })
+                    .sort((a: any, b: any) => {
+                      const aTime = a.timestamp || a.messageTimestamp || 0;
+                      const bTime = b.timestamp || b.messageTimestamp || 0;
+                      return bTime - aTime; // En yeni önce
+                    })[0];
+                  
+                  if (lastMessage) {
+                    const messageText = lastMessage.text || extractMessageText(lastMessage) || '';
+                    const messageTimestamp = lastMessage.timestamp || lastMessage.messageTimestamp || Math.floor(Date.now() / 1000);
+                    
+                    setChats(prevChats => {
+                      const index = prevChats.findIndex(c => c.id === currentSelectedChat.id);
+                      if (index >= 0) {
+                        const updatedChats = [...prevChats];
+                        updatedChats[index] = {
+                          ...updatedChats[index],
+                          conversationTimestamp: messageTimestamp,
+                          lastMessage: messageText,
+                          time: new Date(messageTimestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                        };
+                        // Chat'i en üste taşıma - sadece güncelle
+                        return updatedChats;
+                      }
+                      return prevChats;
+                    });
+                  }
+                } else {
+                  // Seçili olmayan sohbetlere mesaj geldi - sadece o chat'in unreadCount'unu ve lastMessage'ını güncelle
+                  const affectedChats = new Map<string, { text: string, timestamp: number }>();
+                  data.messages.forEach((msg: any) => {
+                    const msgFrom = msg.from || msg.key?.remoteJid;
+                    if (msgFrom && msgFrom !== currentSelectedChat?.id) {
+                      const messageText = msg.text || extractMessageText(msg) || '';
+                      const messageTimestamp = msg.timestamp || msg.messageTimestamp || Math.floor(Date.now() / 1000);
+                      const existing = affectedChats.get(msgFrom);
+                      if (!existing || messageTimestamp > existing.timestamp) {
+                        affectedChats.set(msgFrom, { text: messageText, timestamp: messageTimestamp });
+                      }
+                    }
+                  });
+                  
+                  if (affectedChats.size > 0) {
+                    setChats(prevChats => {
+                      let hasChanges = false;
+                      const updatedChats = prevChats.map(chat => {
+                        const chatUpdate = affectedChats.get(chat.id);
+                        if (chatUpdate) {
+                          hasChanges = true;
+                          return {
+                            ...chat,
+                            unreadCount: (chat.unreadCount || 0) + 1,
+                            conversationTimestamp: chatUpdate.timestamp,
+                            lastMessage: chatUpdate.text,
+                            time: new Date(chatUpdate.timestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                          };
+                        }
+                        return chat;
+                      });
+                      return hasChanges ? updatedChats : prevChats;
+                    });
+                  }
                 }
-                // Sohbet listesini de yenile (unreadCount güncellemesi için)
-                loadChats(data.sessionId, 50);
+                // Tüm chat listesini yenileme - gereksiz
               }
             } else if (data.type === 'messages.set') {
               // Mesaj geçmişi geldi (bağlantı açıldığında)
+              // ÖNEMLİ: Bu event sadece ilk yüklemede kullanılmalı, sonrasında ignore edilmeli
               if (data.sessionId === currentActiveAccount?.id && currentSelectedChat) {
-                console.log('[WebSocket] Mesaj geçmişi alındı:', data.messages?.length || 0);
+                const messagesKey = `${data.sessionId}-${currentSelectedChat.id}`;
+                const hasInitialLoad = messagesInitialLoadRef.current.get(messagesKey);
+                
+                // Eğer zaten ilk yükleme yapıldıysa, bu event'i ignore et
+                if (hasInitialLoad) {
+                  console.log('[WebSocket] messages.set event ignore edildi (zaten yüklendi):', data.messages?.length || 0);
+                  return;
+                }
+                
+                console.log('[WebSocket] Mesaj geçmişi alındı (ilk yükleme):', data.messages?.length || 0);
                 
                 // Seçili sohbetin mesajlarıysa yükle
                 const chatMessages = (data.messages || []).filter((msg: any) => {
@@ -1237,6 +1584,10 @@ export default function WhatsAppMultiAccount() {
                     return aTime - bTime;
                   });
                   
+                  // İlk yükleme olarak işaretle
+                  messagesInitialLoadRef.current.set(messagesKey, true);
+                  
+                  // Mesajları set et (ilk yükleme olduğu için mevcut mesajları koruma gerekmez)
                   setMessages(formattedMessages);
                 }
               }
@@ -1328,6 +1679,8 @@ export default function WhatsAppMultiAccount() {
   useEffect(() => {
     if (activeAccount && selectedChat) {
       // Seçili sohbet değiştiğinde mesajları temizle ve yükle (append=false)
+      const messagesKey = `${activeAccount.id}-${selectedChat.id}`;
+      messagesInitialLoadRef.current.delete(messagesKey); // Yeni sohbet için ilk yükleme flag'ini sıfırla
       setMessages([]);
       loadMessages(activeAccount.id, selectedChat.id, 50, false);
       
@@ -1888,6 +2241,13 @@ export default function WhatsAppMultiAccount() {
                   <button className="hover:text-gray-800"><Video size={20} /></button>
                   <button className="hover:text-gray-800"><Phone size={20} /></button>
                   <button className="hover:text-gray-800"><Search size={20} /></button>
+                  <button 
+                    onClick={handleMarkAsRead}
+                    className="hover:text-gray-800"
+                    title="Okundu olarak işaretle"
+                  >
+                    <Eye size={20} />
+                  </button>
                   <button className="hover:text-gray-800"><MoreVertical size={20} /></button>
                 </div>
               </div>
@@ -1938,13 +2298,22 @@ export default function WhatsAppMultiAccount() {
                         text = extractMessageText(msg) || `⟨${messageType}⟩`;
                       }
 
+                      const isSelected = selectedMessage?.id === msg.id;
+                      const isEditing = editingMessage?.id === msg.id;
+                      const isReplying = replyingTo?.id === msg.id;
+
                       return (
                         <div
                           key={msg.id || msg.key?.id || index}
-                          className={`flex w-full ${fromMe ? 'justify-end' : 'justify-start'} mb-0.5`}
+                          className={`flex w-full ${fromMe ? 'justify-end' : 'justify-start'} mb-0.5 group relative`}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedMessage(msg);
+                            setShowMessageMenu(true);
+                          }}
                         >
                           <div
-                            className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm ${
+                            className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm relative ${
                               fromMe 
                                 ? 'bg-[#d9fdd3] text-gray-900 rounded-[7.5px] rounded-tr-[4px]' 
                                 : 'bg-white text-gray-900 rounded-[7.5px] rounded-tl-[4px]'
@@ -1960,9 +2329,55 @@ export default function WhatsAppMultiAccount() {
                               </div>
                             )}
                             
-                            <div className="break-words whitespace-pre-wrap leading-relaxed">
-                              {text || '⟨desteksiz mesaj tipi⟩'}
-                            </div>
+                            {/* Yanıtlanan mesaj gösterimi (mesaj içinde) */}
+                            {msg.quotedMessage && (
+                              <div className="border-l-2 border-blue-500 pl-2 mb-1 text-xs text-gray-600 bg-gray-100 rounded">
+                                <div className="font-semibold">{msg.quotedMessage.from || 'Kişi'}</div>
+                                <div className="truncate">{msg.quotedMessage.text || 'Mesaj'}</div>
+                              </div>
+                            )}
+                            
+                            {/* Mesaj içeriği - düzenleme modunda input */}
+                            {isEditing ? (
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="text"
+                                  value={editingText}
+                                  onChange={(e) => setEditingText(e.target.value)}
+                                  onKeyPress={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleEditMessage(msg, editingText);
+                                    } else if (e.key === 'Escape') {
+                                      setEditingMessage(null);
+                                      setEditingText('');
+                                    }
+                                  }}
+                                  className="flex-1 px-2 py-1 border rounded"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => {
+                                    handleEditMessage(msg, editingText);
+                                  }}
+                                  className="text-blue-500 hover:text-blue-700"
+                                >
+                                  Kaydet
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setEditingMessage(null);
+                                    setEditingText('');
+                                  }}
+                                  className="text-gray-500 hover:text-gray-700"
+                                >
+                                  İptal
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="break-words whitespace-pre-wrap leading-relaxed">
+                                {text || '⟨desteksiz mesaj tipi⟩'}
+                              </div>
+                            )}
                             
                             {ts && (
                               <div className={`text-[11px] text-gray-500 mt-0.5 flex items-end ${
@@ -1976,6 +2391,53 @@ export default function WhatsAppMultiAccount() {
                                 )}
                               </div>
                             )}
+
+                            {/* Mesaj işlem butonları - hover'da görünür */}
+                            <div className={`absolute ${fromMe ? 'left-0' : 'right-0'} -top-8 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white rounded shadow-lg p-1 z-10`}>
+                              {!fromMe && (
+                                <button
+                                  onClick={() => {
+                                    setReplyingTo(msg);
+                                    setMessage('');
+                                  }}
+                                  className="p-1 hover:bg-gray-100 rounded"
+                                  title="Yanıtla"
+                                >
+                                  <Reply size={14} />
+                                </button>
+                              )}
+                              {fromMe && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setEditingMessage(msg);
+                                      setEditingText(msg.text || msg.body || '');
+                                    }}
+                                    className="p-1 hover:bg-gray-100 rounded"
+                                    title="Düzenle"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleStarMessage(msg, !msg.starred)}
+                                    className="p-1 hover:bg-gray-100 rounded"
+                                    title={msg.starred ? "Yıldızı kaldır" : "Yıldızla"}
+                                  >
+                                    {msg.starred ? <StarOff size={14} className="text-yellow-500" /> : <Star size={14} />}
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setSelectedMessage(msg);
+                                  setShowMessageMenu(true);
+                                }}
+                                className="p-1 hover:bg-gray-100 rounded"
+                                title="Daha fazla"
+                              >
+                                <MoreVertical size={14} />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -1983,6 +2445,128 @@ export default function WhatsAppMultiAccount() {
                   )}
                 </div>
               </div>
+
+              {/* Mesaj Context Menüsü */}
+              {showMessageMenu && selectedMessage && (
+                <div className="fixed inset-0 z-50" onClick={() => setShowMessageMenu(false)}>
+                  <div 
+                    className="absolute bg-white rounded-lg shadow-xl p-2 min-w-[200px] z-50"
+                    style={{
+                      top: '50%',
+                      left: '50%',
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => {
+                        setReplyingTo(selectedMessage);
+                        setShowMessageMenu(false);
+                        setSelectedMessage(null);
+                      }}
+                      className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                    >
+                      <Reply size={16} />
+                      <span>Yanıtla</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setForwardingMessage(selectedMessage);
+                        setShowMessageMenu(false);
+                        setSelectedMessage(null);
+                        setShowForwardSelector(true);
+                        // Contact'ları yükle
+                        if (activeAccount) {
+                          loadContacts(activeAccount.id);
+                        }
+                      }}
+                      className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                    >
+                      <Forward size={16} />
+                      <span>İlet</span>
+                    </button>
+                    {selectedMessage.fromMe && (
+                      <>
+                        <button
+                          onClick={() => {
+                            setEditingMessage(selectedMessage);
+                            setEditingText(selectedMessage.text || selectedMessage.body || '');
+                            setShowMessageMenu(false);
+                            setSelectedMessage(null);
+                          }}
+                          className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                        >
+                          <Edit2 size={16} />
+                          <span>Düzenle</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleStarMessage(selectedMessage, !selectedMessage.starred);
+                            setShowMessageMenu(false);
+                            setSelectedMessage(null);
+                          }}
+                          className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                        >
+                          {selectedMessage.starred ? (
+                            <>
+                              <StarOff size={16} className="text-yellow-500" />
+                              <span>Yıldızı kaldır</span>
+                            </>
+                          ) : (
+                            <>
+                              <Star size={16} />
+                              <span>Yıldızla</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
+                    <hr className="my-1" />
+                    <button
+                      onClick={() => {
+                        handleDeleteMessage(selectedMessage, false);
+                        setShowMessageMenu(false);
+                        setSelectedMessage(null);
+                      }}
+                      className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
+                    >
+                      <Trash2 size={16} />
+                      <span>Sil</span>
+                    </button>
+                    {selectedMessage.fromMe && (
+                      <button
+                        onClick={() => {
+                          handleDeleteMessage(selectedMessage, true);
+                          setShowMessageMenu(false);
+                          setSelectedMessage(null);
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
+                      >
+                        <Trash2 size={16} />
+                        <span>Herkes için sil</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Yanıtlanan mesaj gösterimi (mesaj giriş alanında) */}
+              {replyingTo && (
+                <div className="bg-gray-200 px-3 py-2 flex items-center justify-between border-l-4 border-blue-500">
+                  <div className="flex-1">
+                    <div className="text-xs font-semibold text-gray-600">
+                      {replyingTo.fromMe ? 'Sen' : (replyingTo.pushName || 'Kişi')} mesajına yanıt veriyorsun
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">{replyingTo.text || replyingTo.body || 'Mesaj'}</div>
+                  </div>
+                  <button
+                    onClick={() => setReplyingTo(null)}
+                    className="text-gray-500 hover:text-gray-700 ml-2"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
 
               {/* Mesaj Giriş Alanı */}
               <div className="bg-gray-100 p-3 flex items-center space-x-3 relative">
@@ -2043,7 +2627,15 @@ export default function WhatsAppMultiAccount() {
                   type="text"
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      if (replyingTo) {
+                        handleReplyMessage(replyingTo);
+                      } else {
+                        sendMessage();
+                      }
+                    }
+                  }}
                   onFocus={() => {
                     setShowEmojiPicker(false);
                     setShowAttachMenu(false);
@@ -2179,6 +2771,173 @@ export default function WhatsAppMultiAccount() {
                         );
                       })}
                       {filteredContacts.length === 0 && contacts.length > 0 && (
+                        <div className="text-center text-gray-500 py-4">
+                          Arama sonucu bulunamadı
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mesaj İletme Seçici Modalı */}
+      {showForwardSelector && forwardingMessage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-96 max-w-full mx-4 max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Mesajı İlet</h2>
+              <button
+                onClick={() => {
+                  setShowForwardSelector(false);
+                  setForwardingMessage(null);
+                  setContacts([]);
+                  setFilteredContacts([]);
+                  setContactSearchTerm('');
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            {/* İletilecek mesaj önizlemesi */}
+            <div className="mb-4 p-3 bg-gray-50 rounded-lg border-l-4 border-blue-500">
+              <div className="text-xs text-gray-500 mb-1">İletilecek mesaj:</div>
+              <div className="text-sm truncate">{forwardingMessage.text || forwardingMessage.body || 'Mesaj'}</div>
+            </div>
+
+            {contacts.length === 0 && !isLoadingContacts ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-center text-gray-500">
+                  <p>Kişi listesi yükleniyor...</p>
+                </div>
+              </div>
+            ) : isLoadingContacts ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="animate-spin text-green-500" size={32} />
+              </div>
+            ) : (
+              <>
+                <div className="mb-4 flex items-center space-x-2">
+                  <input
+                    type="text"
+                    placeholder="Kişi ara..."
+                    value={contactSearchTerm}
+                    onChange={(e) => setContactSearchTerm(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {contacts.length === 0 ? (
+                    <div className="text-center text-gray-500 py-8">
+                      Kişi bulunamadı
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {/* Chats listesi de ekle */}
+                      {chats.filter(chat => chat.id !== selectedChat?.id).map((chat) => {
+                        const profilePicture = chatProfilePictures.get(chat.id) || chat.imgUrl;
+                        const hasProfilePicture = profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE';
+                        
+                        return (
+                          <div
+                            key={chat.id}
+                            onClick={() => {
+                              if (forwardingMessage) {
+                                handleForwardMessage(forwardingMessage, chat.id);
+                              }
+                            }}
+                            className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              {hasProfilePicture ? (
+                                <img
+                                  src={profilePicture}
+                                  alt={chat.name}
+                                  className="w-10 h-10 rounded-full object-cover"
+                                  onError={(e) => {
+                                    const target = e.target as HTMLImageElement;
+                                    target.style.display = 'none';
+                                    if (target.nextElementSibling) {
+                                      (target.nextElementSibling as HTMLElement).style.display = 'flex';
+                                    }
+                                  }}
+                                />
+                              ) : null}
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-semibold ${
+                                hasProfilePicture ? 'hidden' : ''
+                              }`} style={{
+                                backgroundColor: `hsl(${(chat.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
+                              }}>
+                                {chat.name[0]?.toUpperCase() || '?'}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium truncate">
+                                  {chat.verifiedName || chat.name}
+                                </div>
+                                <div className="text-xs text-gray-400 truncate">{chat.id}</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Contacts listesi */}
+                      {filteredContacts.map((contact) => {
+                        const phoneNumber = extractPhoneFromJid(contact.id);
+                        const profilePicture = chatProfilePictures.get(contact.id) || contact.imgUrl;
+                        const hasProfilePicture = profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE';
+                        
+                        return (
+                          <div
+                            key={contact.id}
+                            onClick={() => {
+                              if (forwardingMessage) {
+                                handleForwardMessage(forwardingMessage, contact.id);
+                              }
+                            }}
+                            className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              {hasProfilePicture ? (
+                                <img
+                                  src={profilePicture}
+                                  alt={contact.name || contact.notify || contact.id}
+                                  className="w-10 h-10 rounded-full object-cover"
+                                  onError={(e) => {
+                                    const target = e.target as HTMLImageElement;
+                                    target.style.display = 'none';
+                                    if (target.nextElementSibling) {
+                                      (target.nextElementSibling as HTMLElement).style.display = 'flex';
+                                    }
+                                  }}
+                                />
+                              ) : null}
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-semibold ${
+                                hasProfilePicture ? 'hidden' : ''
+                              }`} style={{
+                                backgroundColor: `hsl(${(contact.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
+                              }}>
+                                {(contact.name || contact.notify || contact.id)[0]?.toUpperCase() || '?'}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium truncate">
+                                  {contact.verifiedName || contact.name || contact.notify || phoneNumber}
+                                </div>
+                                {contact.verifiedName && (contact.name || contact.notify) && (
+                                  <div className="text-sm text-gray-500 truncate">{contact.name || contact.notify}</div>
+                                )}
+                                <div className="text-xs text-gray-400 truncate">{phoneNumber}</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {filteredContacts.length === 0 && contacts.length > 0 && chats.length === 0 && (
                         <div className="text-center text-gray-500 py-4">
                           Arama sonucu bulunamadı
                         </div>
