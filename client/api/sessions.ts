@@ -128,3 +128,17 @@ export const subscribeToQR = (sessionId: string, onUpdate: (data: SessionStatus 
     eventSource.close();
   };
 };
+
+// Pairing Code iste (README'ye göre)
+export const requestPairingCode = async (sessionId: string, phoneNumber: string): Promise<{ code: string; phoneNumber: string }> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/pairing-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phoneNumber }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Pairing code alınamadı');
+  }
+  return response.json();
+};

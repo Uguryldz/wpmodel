@@ -1,5 +1,5 @@
-import React from 'react';
-import { Search, Edit2, Users, MoreVertical, LogOut, VolumeX, RefreshCcw } from 'lucide-react';
+import React, { useState } from 'react';
+import { Search, Edit2, Users, MoreVertical, LogOut, VolumeX, RefreshCcw, Archive, ArchiveRestore, Trash2, CheckCheck, XCircle } from 'lucide-react';
 import * as api from '../api';
 import { extractPhoneFromJid } from '../utils/contactUtils';
 
@@ -43,6 +43,9 @@ interface ChatListProps {
   onOpenContactsModal?: () => void;
   onShowAccountMenu: (show: boolean) => void;
   onLogout: () => void;
+  onArchiveChat?: (chat: Chat, archive: boolean) => void;
+  onDeleteChat?: (chat: Chat) => void;
+  onMarkChatRead?: (chat: Chat, markRead: boolean) => void;
 }
 
 export default function ChatList({
@@ -64,7 +67,12 @@ export default function ChatList({
   onOpenContactsModal,
   onShowAccountMenu,
   onLogout,
+  onArchiveChat,
+  onDeleteChat,
+  onMarkChatRead,
 }: ChatListProps) {
+  const [contextMenuChat, setContextMenuChat] = useState<Chat | null>(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
   if (!activeAccount) {
     return (
       <div className="w-96 bg-white border-r flex flex-col">
@@ -259,7 +267,12 @@ export default function ChatList({
             <div
               key={chat.id}
               onClick={() => onSelectChat(chat)}
-              className={`p-3 flex items-center space-x-3 hover:bg-gray-50 cursor-pointer border-b ${
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenuChat(chat);
+                setContextMenuPosition({ x: e.clientX, y: e.clientY });
+              }}
+              className={`p-3 flex items-center space-x-3 hover:bg-gray-50 cursor-pointer border-b relative ${
                 selectedChat?.id === chat.id ? 'bg-gray-100' : ''
               }`}
             >
@@ -269,19 +282,36 @@ export default function ChatList({
                     src={chat.profilePicture} 
                     alt={chat.name}
                     className="w-12 h-12 rounded-full object-cover"
+                    loading="lazy"
                     onError={(e) => {
                       const target = e.currentTarget;
                       target.style.display = 'none';
                       const parent = target.parentElement;
                       if (parent) {
                         const fallback = parent.querySelector('.profile-fallback') as HTMLElement;
-                        if (fallback) fallback.style.display = 'flex';
+                        if (fallback) {
+                          fallback.style.display = 'flex';
+                          // Profil resmini NO_PICTURE olarak işaretle (tekrar yüklenmesin)
+                          if (chat.profilePicture && !chat.profilePicture.includes('NO_PICTURE')) {
+                            // Burada profil resmini güncellemek için callback gerekebilir
+                            // Şimdilik sadece gizle
+                          }
+                        }
                       }
                     }}
                   />
                 ) : null}
                 <div 
-                  className={`w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center text-2xl profile-fallback ${chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' ? 'hidden' : ''}`}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center text-2xl profile-fallback ${
+                    chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' 
+                      ? 'hidden' 
+                      : ''
+                  }`}
+                  style={{
+                    backgroundColor: chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' 
+                      ? 'transparent' 
+                      : `hsl(${(chat.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
+                  }}
                 >
                   {chat.name[0]?.toUpperCase() || '?'}
                 </div>
@@ -313,6 +343,86 @@ export default function ChatList({
           ))
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenuChat && contextMenuPosition && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => {
+              setContextMenuChat(null);
+              setContextMenuPosition(null);
+            }}
+          />
+          <div
+            className="fixed bg-white rounded-lg shadow-2xl py-2 w-48 z-50 border"
+            style={{
+              left: `${contextMenuPosition.x}px`,
+              top: `${contextMenuPosition.y}px`,
+            }}
+          >
+            {onArchiveChat && (
+              <button
+                onClick={() => {
+                  onArchiveChat(contextMenuChat, !contextMenuChat.archived);
+                  setContextMenuChat(null);
+                  setContextMenuPosition(null);
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2"
+              >
+                {contextMenuChat.archived ? (
+                  <>
+                    <ArchiveRestore size={16} />
+                    <span>Arşivden Çıkar</span>
+                  </>
+                ) : (
+                  <>
+                    <Archive size={16} />
+                    <span>Arşivle</span>
+                  </>
+                )}
+              </button>
+            )}
+            {onMarkChatRead && (
+              <button
+                onClick={() => {
+                  onMarkChatRead(contextMenuChat, contextMenuChat.unreadCount === 0);
+                  setContextMenuChat(null);
+                  setContextMenuPosition(null);
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2"
+              >
+                {contextMenuChat.unreadCount && contextMenuChat.unreadCount > 0 ? (
+                  <>
+                    <CheckCheck size={16} />
+                    <span>Okundu İşaretle</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle size={16} />
+                    <span>Okunmadı İşaretle</span>
+                  </>
+                )}
+              </button>
+            )}
+            {onDeleteChat && (
+              <button
+                onClick={() => {
+                  if (confirm('Bu sohbeti silmek istediğinizden emin misiniz?')) {
+                    onDeleteChat(contextMenuChat);
+                  }
+                  setContextMenuChat(null);
+                  setContextMenuPosition(null);
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2 text-red-600"
+              >
+                <Trash2 size={16} />
+                <span>Sohbeti Sil</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

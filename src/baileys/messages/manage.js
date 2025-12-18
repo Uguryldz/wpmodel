@@ -122,15 +122,17 @@ export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone
 };
 
 /**
- * Mesaj yıldızla/yıldızı kaldır
+ * Mesaj yıldızla/yıldızı kaldır (Star/Unstar a Message)
+ * README'ye göre: chatModify star kullanılır
  */
 export const starMessage = async (accountId, jid, messageId, star = true) => {
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
 
   const message = await prisma.message.findFirst({
     where: {
-      sessionId: getAccountId(accountId),
+      sessionId,
       remoteJid: normalizedJid,
       id: messageId,
     },
@@ -147,17 +149,23 @@ export const starMessage = async (accountId, jid, messageId, star = true) => {
     throw new Error("Mesaj anahtarı geçersiz");
   }
 
-  await sock.sendMessage(normalizedJid, {
-    react: {
-      text: star ? "⭐" : "",
-      key: key,
+  // README'ye göre: chatModify star kullanılır
+  await sock.chatModify(
+    {
+      star: {
+        messages: [
+          {
+            id: messageId,
+            fromMe: key.fromMe || false,
+          },
+        ],
+        star: star, // true: Star Message; false: Unstar Message
+      },
     },
-  });
+    normalizedJid
+  );
 
-  // Prisma'da güncelle (eğer starred field'ı varsa)
-  // Şimdilik sadece react gönderiyoruz
-
-  return { status: star ? "starred" : "unstarred", messageId };
+  return { status: star ? "starred" : "unstarred", messageId, jid: normalizedJid };
 };
 
 

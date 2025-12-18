@@ -14,6 +14,7 @@ export * from "./messages/reactions.js";
 export * from "./messages/presence.js";
 export * from "./messages/special.js";
 export * from "./messages/link-preview.js";
+export * from "./messages/call.js";
 
 // Groups modules
 export * from "./groups/create.js";

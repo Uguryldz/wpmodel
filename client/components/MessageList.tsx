@@ -1,6 +1,12 @@
-import React from 'react';
-import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Phone, Search, Eye, Forward, Trash2 } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X } from 'lucide-react';
 import { extractMessageText } from '../utils/messageUtils';
+import { shouldShowDateSeparator } from '../utils/dateUtils';
+import DateSeparator from './DateSeparator';
+import MessageStatus from './MessageStatus';
+import MediaMessage from './MediaMessage';
+import MessageError from './MessageError';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 
 interface Chat {
   id: string;
@@ -55,6 +61,10 @@ interface MessageListProps {
   onLoadContacts: (sessionId: string) => void;
   onOpenContactSelector: () => void;
   onMarkAsRead: () => void;
+  onRetryMessage?: (msg: Message) => void;
+  onPinMessage?: (msg: Message, type: number, time?: number) => void;
+  onRejectCall?: (callId: string, callFrom: string) => void;
+  onDeleteMessageForMe?: (msg: Message) => void;
 }
 
 export default function MessageList({
@@ -77,7 +87,18 @@ export default function MessageList({
   onLoadContacts,
   onOpenContactSelector,
   onMarkAsRead,
+  onRetryMessage,
+  onPinMessage,
+  onRejectCall,
+  onDeleteMessageForMe,
 }: MessageListProps) {
+  // Otomatik scroll hook'u
+  const { messagesEndRef, messagesContainerRef, scrollToBottom } = useAutoScroll({
+    messages,
+    selectedChatId: selectedChat?.id || null,
+    enabled: !!selectedChat,
+  });
+
   if (!selectedChat) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-500">
@@ -97,13 +118,16 @@ export default function MessageList({
                 src={selectedChat.profilePicture}
                 alt={selectedChat.name}
                 className="w-10 h-10 rounded-full object-cover"
+                loading="lazy"
                 onError={(e) => {
                   const target = e.currentTarget;
                   target.style.display = 'none';
                   const parent = target.parentElement;
                   if (parent) {
                     const fallback = parent.querySelector('.chat-header-fallback') as HTMLElement;
-                    if (fallback) fallback.style.display = 'flex';
+                    if (fallback) {
+                      fallback.style.display = 'flex';
+                    }
                   }
                 }}
               />
@@ -149,9 +173,13 @@ export default function MessageList({
       </div>
 
       {/* Mesajlar */}
-      <div className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]" style={{
-        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
-      }}>
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]" 
+        style={{
+          backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
+        }}
+      >
         <div className="space-y-2">
           {messages.length === 0 ? (
             <div className="text-center text-gray-500 text-sm">
@@ -159,6 +187,11 @@ export default function MessageList({
             </div>
           ) : (
             messages.map((msg, index) => {
+              const prevMsg = index > 0 ? messages[index - 1] : null;
+              const showDateSeparator = shouldShowDateSeparator(
+                prevMsg?.timestamp || prevMsg?.messageTimestamp,
+                msg.timestamp || msg.messageTimestamp
+              );
               const fromMe = msg.fromMe !== undefined 
                 ? Boolean(msg.fromMe) 
                 : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
@@ -178,9 +211,11 @@ export default function MessageList({
                 text = msg.text || 'Sistem mesajı';
               }
               
+              // Mesaj tipini belirle (bir kez tanımla)
+              const messageType = msg.type || (msg.message ? Object.keys(msg.message)[0] : 'unknown');
+              
               // Eğer hala text yoksa ve type varsa, type'a göre varsayılan mesaj göster
               if (!text) {
-                const messageType = msg.type || (msg.message ? Object.keys(msg.message)[0] : 'unknown');
                 if (messageType && messageType !== 'unknown') {
                   // Protocol mesajları için backend'den gelen text'i kullan
                   if (messageType.startsWith('protocol_')) {
@@ -207,27 +242,34 @@ export default function MessageList({
                 ? new Date(timestampMs).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
                 : '';
 
-              const messageType = msg.type || (msg.message ? Object.keys(msg.message)[0] : 'unknown');
               const isProtocol = isProtocolMessage || messageType?.startsWith('protocol_');
-
               const isEditing = editingMessage?.id === msg.id;
+              
+              // Medya mesajı mı?
+              const isMediaMessage = ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage', 
+                                      'image', 'video', 'audio', 'document', 'sticker', 'ptt'].includes(messageType);
 
               return (
-                <div
-                  key={msg.id || msg.key?.id || index}
-                  className={`flex w-full ${
-                    isProtocol 
-                      ? 'justify-center' 
-                      : fromMe ? 'justify-end' : 'justify-start'
-                  } mb-0.5 group relative`}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    if (!isProtocol) {
-                      onSelectMessage(msg);
-                      onShowMessageMenu(true);
-                    }
-                  }}
-                >
+                <React.Fragment key={msg.id || msg.key?.id || index}>
+                  {/* Tarih ayırıcı */}
+                  {showDateSeparator && (
+                    <DateSeparator timestamp={msg.timestamp || msg.messageTimestamp} />
+                  )}
+                  
+                  <div
+                    className={`flex w-full ${
+                      isProtocol 
+                        ? 'justify-center' 
+                        : fromMe ? 'justify-end' : 'justify-start'
+                    } mb-0.5 group relative`}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (!isProtocol) {
+                        onSelectMessage(msg);
+                        onShowMessageMenu(true);
+                      }
+                    }}
+                  >
                   <div
                     className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm relative ${
                       isProtocol
@@ -288,7 +330,11 @@ export default function MessageList({
                       </div>
                     ) : (
                       <div className="break-words whitespace-pre-wrap leading-relaxed">
-                        {text || '⟨desteksiz mesaj tipi⟩'}
+                        {isMediaMessage ? (
+                          <MediaMessage message={msg} fromMe={fromMe} sessionId={activeAccountId} />
+                        ) : (
+                          text || '⟨desteksiz mesaj tipi⟩'
+                        )}
                       </div>
                     )}
                     
@@ -301,9 +347,12 @@ export default function MessageList({
                           <span className="ml-1 opacity-70 italic">Düzenlendi</span>
                         )}
                         {fromMe && (
-                          <span className="ml-1">
-                            <CheckCheck size={12} className="text-blue-500" />
-                          </span>
+                          <>
+                            <MessageStatus message={msg} />
+                            {msg.status === 'error' && onRetryMessage && (
+                              <MessageError message={msg} onRetry={() => onRetryMessage(msg)} />
+                            )}
+                          </>
                         )}
                       </div>
                     )}
@@ -356,9 +405,12 @@ export default function MessageList({
                     )}
                   </div>
                 </div>
+                </React.Fragment>
               );
             })
           )}
+          {/* Scroll için boş div */}
+          <div ref={messagesEndRef} />
         </div>
       </div>
 
@@ -459,6 +511,50 @@ export default function MessageList({
                 <Trash2 size={16} />
                 <span>Herkes için sil</span>
               </button>
+            )}
+            {/* Delete Message for Me - README'ye göre */}
+            {onDeleteMessageForMe && (
+              <button
+                onClick={() => {
+                  onDeleteMessageForMe(selectedMessage);
+                  onShowMessageMenu(false);
+                  onSelectMessage(null as any);
+                }}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
+              >
+                <Trash2 size={16} />
+                <span>Sadece benim için sil</span>
+              </button>
+            )}
+            {onPinMessage && (
+              <>
+                <button
+                  onClick={() => {
+                    if (selectedMessage.key) {
+                      onPinMessage(selectedMessage, 1, 86400); // Pin for 24h
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                >
+                  <Pin size={16} />
+                  <span>Sabitle</span>
+                </button>
+                <button
+                  onClick={() => {
+                    if (selectedMessage.key) {
+                      onPinMessage(selectedMessage, 0); // Unpin
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                >
+                  <PinOff size={16} />
+                  <span>Sabitlemeyi kaldır</span>
+                </button>
+              </>
             )}
           </div>
         </div>

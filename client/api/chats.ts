@@ -55,3 +55,55 @@ export const getChats = async (sessionId: string, limit: number = 50): Promise<C
     throw error;
   }
 };
+
+/**
+ * Sohbeti arşivle/kaldır
+ */
+export const archiveChat = async (sessionId: string, jid: string, archive: boolean = true, lastMessage?: any): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archive, lastMessage }),
+  });
+  if (!response.ok) throw new Error('Sohbet arşivlenemedi');
+  return response.json();
+};
+
+/**
+ * Sohbeti okundu/okunmadı olarak işaretle (Mark Chat Read/Unread)
+ */
+export const markChatRead = async (sessionId: string, jid: string, markRead: boolean = true, lastMessage?: any): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/mark-read`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markRead, lastMessage }),
+  });
+  if (!response.ok) throw new Error('Sohbet okundu olarak işaretlenemedi');
+  return response.json();
+};
+
+/**
+ * Sohbeti sil (Delete a Chat)
+ */
+export const deleteChat = async (sessionId: string, jid: string, lastMessage?: any): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lastMessage }),
+  });
+  if (!response.ok) throw new Error('Sohbet silinemedi');
+  return response.json();
+};
+
+/**
+ * Chat geçmişi sorgula (Query Chat History)
+ */
+export const queryChatHistory = async (sessionId: string, jid: string, quantity: number = 50, oldestMessage?: any): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/history/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quantity, oldestMessage }),
+  });
+  if (!response.ok) throw new Error('Chat geçmişi sorgulanamadı');
+  return response.json();
+};

@@ -57,12 +57,26 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
     }
   }
 
-  if (!key || !key.remoteJid) {
+  // Key'i garanti et - undefined kontrolü
+  if (!key) {
     key = {
-      ...key,
       remoteJid: normalizedJid,
       id: messageId,
+      fromMe: false,
     };
+  }
+
+  if (!key.remoteJid) {
+    key.remoteJid = normalizedJid;
+  }
+
+  if (!key.id) {
+    key.id = messageId;
+  }
+
+  // fromMe kontrolü - undefined ise false yap
+  if (key.fromMe === undefined) {
+    key.fromMe = false;
   }
 
   let messageContent;
@@ -77,7 +91,7 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
       quoted: key,
     });
   } catch (error) {
-    logger.error({ error, jid: normalizedJid, messageId }, "Mesaj yanıtlanamadı");
+    logger.error({ error, jid: normalizedJid, messageId, key }, "Mesaj yanıtlanamadı");
     throw new Error(`Mesaj yanıtlanamadı: ${error.message}`);
   }
 

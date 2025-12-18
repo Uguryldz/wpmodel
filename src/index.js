@@ -14,6 +14,7 @@ import {
   startConnection,
   listChats,
   listContacts,
+  fetchDeviceContacts,
   listGroups,
   getGroupMetadata,
   listMessages,
@@ -50,6 +51,11 @@ import {
   archiveChat,
   pinChat,
   muteChat,
+  markChatRead,
+  deleteMessageForMe,
+  deleteChat,
+  queryChatHistory,
+  subscribeToPresence,
   searchMessages,
   sendLocation,
   sendContactCard,
@@ -67,6 +73,7 @@ import {
   getLinkPreview,
   sendMessageWithPreview,
   downloadMediaMessageAdvanced,
+  proxyMediaUrl,
   getAudioDuration,
   generateThumbnailForMedia,
   extractImageThumbnail,
@@ -138,6 +145,11 @@ import {
   generateMessageIDUtil,
   generateMessageIDV2Util,
   chatModificationToAppPatchUtil,
+  rejectCall,
+  pinMessage,
+  sendMessageWithMention,
+  updateMediaMessage,
+  requestPairingCode,
 } from "./baileysClient.js";
 
 const app = express();
@@ -541,6 +553,25 @@ app.post(
   })
 );
 
+app.get(
+  "/:sessionId/contacts/device",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    console.log(`[GET /${sessionId}/contacts/device] Cihazdaki contact'lar çekiliyor...`);
+    try {
+      const result = await fetchDeviceContacts(sessionId);
+      console.log(`[GET /${sessionId}/contacts/device] ✅ ${result.data?.length || 0} contact çekildi`);
+      res.json(result);
+    } catch (error) {
+      console.error(`[GET /${sessionId}/contacts/device] ❌ Hata:`, error);
+      res.status(500).json({ 
+        data: [], 
+        error: error.message || "Cihazdan contact'lar çekilemedi" 
+      });
+    }
+  })
+);
+
 // === Chat Sync ===
 app.post(
   "/:sessionId/chats/sync",
@@ -649,6 +680,20 @@ app.post(
         message,
         options,
       });
+    } else if (type === "media" && message.media && message.mimetype) {
+      // Medya mesajı gönder
+      const { media, mimetype, caption, viewOnce, gifPlayback, ptv, ptt } = message;
+      result = await sendMediaMessage({
+        accountId: sessionId,
+        to: jid,
+        media,
+        mimetype,
+        caption,
+        viewOnce,
+        gifPlayback,
+        ptv,
+        ptt,
+      });
     } else {
       result = await sendRawMessage(sessionId, jid, message, options);
     }
@@ -734,8 +779,8 @@ app.post(
   "/api/messages/media",
   asyncHandler(async (req, res) => {
     const accountId = req.query.accountId;
-    const { to, media, mimetype, caption } = req.body;
-    const result = await sendMediaMessage({ accountId, to, media, mimetype, caption });
+    const { to, media, mimetype, caption, viewOnce, gifPlayback, ptv, ptt } = req.body;
+    const result = await sendMediaMessage({ accountId, to, media, mimetype, caption, viewOnce, gifPlayback, ptv, ptt });
     res.status(202).json(result);
   })
 );
@@ -1031,14 +1076,14 @@ app.post(
 
 // ========== SOHBET YÖNETİMİ ==========
 
-// Sohbeti arşivle/kaldır
+// Sohbeti arşivle/kaldır (README'ye göre - lastMessage gereklidir)
 app.post(
   "/:sessionId/chats/:jid/archive",
   asyncHandler(async (req, res) => {
     const { sessionId, jid } = req.params;
-    const { archive } = req.body;
+    const { archive, lastMessage } = req.body;
 
-    const result = await archiveChat(sessionId, jid, archive !== false);
+    const result = await archiveChat(sessionId, jid, archive !== false, lastMessage || null);
     res.json(result);
   })
 );
@@ -1055,14 +1100,78 @@ app.post(
   })
 );
 
-// Sohbeti sessize al/kaldır
+// Sohbeti sessize al/kaldır (README'ye göre - milliseconds cinsinden)
 app.post(
   "/:sessionId/chats/:jid/mute",
   asyncHandler(async (req, res) => {
     const { sessionId, jid } = req.params;
-    const { duration } = req.body; // saniye cinsinden, null ise sessizliği kaldır
+    const { durationMs } = req.body; // milliseconds cinsinden (8h: 86400000, 7d: 604800000), null ise sessizliği kaldır
 
-    const result = await muteChat(sessionId, jid, duration || null);
+    const result = await muteChat(sessionId, jid, durationMs || null);
+    res.json(result);
+  })
+);
+
+// Sohbeti okundu/okunmadı olarak işaretle (Mark Chat Read/Unread) - README'ye göre
+app.post(
+  "/:sessionId/chats/:jid/mark-read",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { markRead, lastMessage } = req.body;
+
+    const result = await markChatRead(sessionId, jid, markRead !== false, lastMessage || null);
+    res.json(result);
+  })
+);
+
+// Mesajı sadece benim için sil (Delete Message for Me) - README'ye göre
+app.post(
+  "/:sessionId/chats/:jid/messages/:messageId/delete-for-me",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid, messageId } = req.params;
+    const { fromMe } = req.body;
+
+    const result = await deleteMessageForMe(sessionId, jid, messageId, fromMe);
+    res.json(result);
+  })
+);
+
+// Sohbeti sil (Delete a Chat) - README'ye göre
+app.delete(
+  "/:sessionId/chats/:jid",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { lastMessage } = req.body;
+
+    const result = await deleteChat(sessionId, jid, lastMessage || null);
+    res.json(result);
+  })
+);
+
+// Chat geçmişi sorgula (Query Chat History) - README'ye göre
+app.post(
+  "/:sessionId/chats/:jid/history/query",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { quantity, oldestMessage } = req.body;
+
+    const result = await queryChatHistory(sessionId, jid, quantity || 50, oldestMessage || null);
+    res.json(result);
+  })
+);
+
+// Presence dinle (Fetch Someone's Presence) - README'ye göre
+app.post(
+  "/:sessionId/presence/subscribe",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid } = req.body;
+
+    if (!jid) {
+      return res.status(400).json({ error: "jid zorunludur" });
+    }
+
+    const result = await subscribeToPresence(sessionId, jid);
     res.json(result);
   })
 );
@@ -1125,14 +1234,94 @@ app.post(
   "/:sessionId/messages/poll",
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
-    const { jid, question, options } = req.body;
+    const { jid, question, options, selectableCount, toAnnouncementGroup } = req.body;
 
     if (!jid || !question || !options || !Array.isArray(options)) {
       return res.status(400).json({ error: "jid, question ve options (array) zorunludur" });
     }
 
-    const result = await createPoll(sessionId, jid, question, options);
+    const result = await createPoll(sessionId, jid, question, options, selectableCount, toAnnouncementGroup);
     res.status(202).json(result);
+  })
+);
+
+// Mesaj pin/unpin (README'ye göre)
+app.post(
+  "/:sessionId/messages/pin",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, messageKey, type, time } = req.body;
+
+    if (!jid || !messageKey) {
+      return res.status(400).json({ error: "jid ve messageKey zorunludur" });
+    }
+
+    const result = await pinMessage(sessionId, jid, messageKey, type || 1, time || 86400);
+    res.status(202).json(result);
+  })
+);
+
+// Mention ile mesaj gönder (README'ye göre)
+app.post(
+  "/:sessionId/messages/mention",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, text, mentions } = req.body;
+
+    if (!jid || !text) {
+      return res.status(400).json({ error: "jid ve text zorunludur" });
+    }
+
+    const result = await sendMessageWithMention(sessionId, jid, text, mentions || []);
+    res.status(202).json(result);
+  })
+);
+
+// Arama reddet (Reject Call) - README'ye göre
+app.post(
+  "/:sessionId/calls/reject",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { callId, callFrom } = req.body;
+
+    if (!callId || !callFrom) {
+      return res.status(400).json({ error: "callId ve callFrom zorunludur" });
+    }
+
+    const result = await rejectCall(sessionId, callId, callFrom);
+    res.json(result);
+  })
+);
+
+// Medya mesajını yeniden yükle (Re-upload Media Message) - README'ye göre
+app.post(
+  "/:sessionId/messages/media/reupload",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = await updateMediaMessage(sessionId, message);
+    res.json(result);
+  })
+);
+
+// Pairing Code iste (README'ye göre)
+app.post(
+  "/:sessionId/pairing-code",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { phoneNumber } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ error: "phoneNumber zorunludur (sadece rakamlar, + veya () veya - olmadan)" });
+    }
+
+    const result = await requestPairingCode(sessionId, phoneNumber);
+    res.json(result);
   })
 );
 
@@ -1268,6 +1457,26 @@ app.post(
 
     const result = await downloadMediaMessageAdvanced(sessionId, message);
     res.json(result);
+  })
+);
+
+// Medya URL proxy - .enc sorununu kalıcı çözer, direkt görsel döner
+app.post(
+  "/:sessionId/media/proxy",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { message, mimetype } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "message objesi zorunludur" });
+    }
+
+    const result = await proxyMediaUrl(sessionId, message, mimetype);
+    
+    // Direkt görsel olarak döndür (Content-Type ile)
+    res.setHeader('Content-Type', result.mimetype);
+    res.setHeader('Content-Disposition', 'inline'); // Download değil, görüntüle
+    res.send(result.buffer);
   })
 );
 

@@ -56,13 +56,17 @@ export const getMessages = async (sessionId: string, jid: string, limit: number 
   }
 };
 
-export const sendMessage = async (sessionId: string, jid: string, message: string): Promise<void> => {
+export const sendMessage = async (sessionId: string, jid: string, message: string): Promise<any> => {
   const response = await fetch(`${API_BASE}/${sessionId}/messages/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jid, type: 'text', message }),
   });
-  if (!response.ok) throw new Error('Mesaj gönderilemedi');
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Mesaj gönderilemedi');
+  }
+  return response.json();
 };
 
 export const replyToMessage = async (sessionId: string, jid: string, messageId: string, message: string): Promise<any> => {
@@ -120,5 +124,54 @@ export const markMessagesAsRead = async (sessionId: string, jid: string, message
     body: JSON.stringify({ jid, messageIds: messageIds || [] }),
   });
   if (!response.ok) throw new Error('Mesajlar okundu olarak işaretlenemedi');
+  return response.json();
+};
+
+// Pin Message (README'ye göre) - Mesaj pin/unpin
+export const pinMessage = async (
+  sessionId: string, 
+  jid: string, 
+  messageKey: any, 
+  type: number = 1, 
+  time: number = 86400
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, messageKey, type, time }),
+  });
+  if (!response.ok) throw new Error('Mesaj pinlenemedi');
+  return response.json();
+};
+
+// Mention ile mesaj gönder (README'ye göre)
+export const sendMessageWithMention = async (
+  sessionId: string, 
+  jid: string, 
+  text: string, 
+  mentions: string[] = []
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/mention`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, text, mentions }),
+  });
+  if (!response.ok) throw new Error('Mention ile mesaj gönderilemedi');
+  return response.json();
+};
+
+// Mesajı sadece benim için sil (Delete Message for Me) - README'ye göre
+export const deleteMessageForMe = async (
+  sessionId: string,
+  jid: string,
+  messageId: string,
+  fromMe: boolean = false
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/messages/${messageId}/delete-for-me`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fromMe }),
+  });
+  if (!response.ok) throw new Error('Mesaj silinemedi');
   return response.json();
 };

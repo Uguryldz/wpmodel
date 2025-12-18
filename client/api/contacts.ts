@@ -81,3 +81,27 @@ export const getProfilePicture = async (sessionId: string, jid: string): Promise
     return null;
   }
 };
+
+/**
+ * Cihazdaki kayıtlı kişi listesini ad soyad ile çek
+ * Baileys API'nin fetchContacts metodunu kullanarak WhatsApp cihazındaki tüm contact'ları çeker
+ */
+export const getDeviceContacts = async (sessionId: string): Promise<Contact[]> => {
+  try {
+    const response = await fetch(`${API_BASE}/${sessionId}/contacts/device`);
+    if (!response.ok) {
+      console.warn('Cihazdan contact\'lar alınamadı:', response.status);
+      return [];
+    }
+    const data = await response.json();
+    // Response formatı: { data: [...], error?: ... }
+    if (data.error) {
+      console.error('Cihazdan contact\'lar çekilirken hata:', data.error);
+      return [];
+    }
+    return Array.isArray(data.data) ? data.data : [];
+  } catch (error) {
+    console.error('Cihazdan contact\'lar yüklenirken hata:', error);
+    return [];
+  }
+};

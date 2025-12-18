@@ -83,7 +83,9 @@ export default function ContactsModal({
                     const profilePicture = chatProfilePictures.get(contact.id) || contact.imgUrl;
                     const hasProfilePicture = profilePicture && profilePicture !== '' && profilePicture !== 'NO_PICTURE';
                     
-                    // Cihazdaki kişi adı öncelikli (name), yoksa diğerleri
+                    // Cihaz rehberindeki isim öncelikli (name alanı cihaz rehberindeki isimdir)
+                    // name: Cihaz rehberindeki isim
+                    // notify: WhatsApp'ta kayıtlı isim
                     const displayName = contact.name || contact.notify || contact.verifiedName || phoneNumber;
                     const showPhoneNumber = !!(contact.name || contact.notify || contact.verifiedName);
                     

@@ -74,6 +74,12 @@ export interface Message {
   messageTimestamp?: number;
   edited?: boolean; // Mesaj düzenlendi mi?
   editedAt?: number; // Düzenlenme zamanı
+  status?: 'sending' | 'sent' | 'delivered' | 'read' | 'error'; // Mesaj durumu
+  error?: string; // Hata mesajı (varsa)
+  readReceipt?: boolean; // Okundu mu?
+  readTimestamp?: number; // Okunma zamanı
+  deliveredReceipt?: boolean; // Teslim edildi mi?
+  deliveredTimestamp?: number; // Teslim zamanı
   quotedMessage?: {
     id?: string;
     from?: string;

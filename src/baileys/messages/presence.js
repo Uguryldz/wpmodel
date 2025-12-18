@@ -53,5 +53,23 @@ export const updatePresence = async (accountId, jid, presence) => {
   return { status: "presence_updated", jid: normalizedJid, presence };
 };
 
+/**
+ * Birinin presence'ını dinle (Fetch Someone's Presence) - README'ye göre
+ * The presence update is fetched and called in presence.update event
+ */
+export const subscribeToPresence = async (accountId, jid) => {
+  const sock = ensureSocket(accountId);
+  const normalizedJid = normalizeJid(jid);
+
+  // README'ye göre: presenceSubscribe kullanılır
+  await sock.presenceSubscribe(normalizedJid);
+
+  return { 
+    status: "subscribed", 
+    jid: normalizedJid,
+    message: "Presence güncellemeleri presence.update event'inde gelecek"
+  };
+};
+
 
 

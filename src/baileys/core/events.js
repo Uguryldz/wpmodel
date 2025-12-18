@@ -2,6 +2,7 @@
 import makeWASocket, { Browsers } from "baileys";
 import { DisconnectReason, isJidBroadcast, jidNormalizedUser } from "baileys";
 import Boom from "@hapi/boom";
+import NodeCache from "node-cache";
 import { prisma, logger } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 import { findSessionByWhatsAppJid, migrateSessionData } from "../../sessionMapper.js";
@@ -1382,8 +1383,9 @@ export const startSocket = (instance) => {
 
   const sessionId = instance.id;
 
-  // Grup metadata cache (README'ye göre öneriliyor)
-  const groupCache = new Map();
+  // Grup metadata cache (README'ye göre öneriliyor - NodeCache ile TTL desteği)
+  // stdTTL: 5 dakika (300 saniye) - README'deki örnekle aynı
+  const groupCache = new NodeCache({ stdTTL: 5 * 60, useClones: false });
 
   instance.sock = makeWASocket({
     auth: authState,
@@ -1416,7 +1418,7 @@ export const startSocket = (instance) => {
     markOnlineOnConnect: false,
   });
 
-  // Grup metadata cache'i güncelle
+  // Grup metadata cache'i güncelle (README'ye göre best practice)
   instance.sock.ev.on('groups.update', async ([event]) => {
     try {
       const metadata = await instance.sock.groupMetadata(event.id);
@@ -1426,12 +1428,18 @@ export const startSocket = (instance) => {
     }
   });
 
+  // Grup metadata cache'i güncelle (README'ye göre best practice)
   instance.sock.ev.on('group-participants.update', async (event) => {
     try {
-      const metadata = await instance.sock.groupMetadata(event.id);
-      groupCache.set(event.id, metadata);
+      // event bir array olabilir veya direkt obje olabilir
+      const update = Array.isArray(event) ? event[0] : event;
+      if (update && update.id) {
+        const metadata = await instance.sock.groupMetadata(update.id);
+        groupCache.set(update.id, metadata);
+      }
     } catch (error) {
-      logger.error({ error, groupId: event.id }, "Grup metadata cache'lenemedi");
+      const update = Array.isArray(event) ? event[0] : event;
+      logger.error({ error, groupId: update?.id }, "Grup metadata cache'lenemedi");
     }
   });
 

@@ -7,22 +7,33 @@ export function useMessages() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [message, setMessage] = useState('');
   const messagesInitialLoadRef = useRef<Map<string, boolean>>(new Map());
+  // Mesajları chat bazında cache'le - hızlı geçiş için
+  const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
+  const currentChatKeyRef = useRef<string | null>(null);
 
   const loadMessages = async (sessionId: string, chatId: string, limit: number = 50, append: boolean = false) => {
     try {
-      console.log('=== Mesajlar yükleniyor ===', { sessionId, chatId, limit, append });
+      const messagesKey = `${sessionId}-${chatId}`;
+      console.log('=== Mesajlar yükleniyor ===', { sessionId, chatId, limit, append, messagesKey });
       
+      // Cache'den mesajları yükle (eğer varsa ve append değilse)
       if (!append) {
-        setMessages([]);
-        const messagesKey = `${sessionId}-${chatId}`;
-        messagesInitialLoadRef.current.delete(messagesKey);
+        const cachedMessages = messagesCacheRef.current.get(messagesKey);
+        if (cachedMessages && cachedMessages.length > 0) {
+          console.log('Cache\'den mesajlar yüklendi:', cachedMessages.length);
+          setMessages(cachedMessages);
+          currentChatKeyRef.current = messagesKey;
+          // Cache'den gösterdikten sonra arka planda güncelle
+        } else {
+          setMessages([]);
+          messagesInitialLoadRef.current.delete(messagesKey);
+        }
       }
       
       const data = await api.getMessages(sessionId, chatId, limit);
-      console.log('Mesajlar alındı (ham data):', data);
+      console.log('Mesajlar alındı (ham data):', data?.length || 0);
       
       if (!append && data && data.length > 0) {
-        const messagesKey = `${sessionId}-${chatId}`;
         messagesInitialLoadRef.current.set(messagesKey, true);
       }
 
@@ -67,6 +78,8 @@ export function useMessages() {
             return aTime - bTime;
           });
           
+          // Cache'e kaydet
+          messagesCacheRef.current.set(messagesKey, merged);
           return merged;
         });
       } else {
@@ -77,6 +90,9 @@ export function useMessages() {
         });
 
         setMessages(mapped);
+        // Cache'e kaydet
+        messagesCacheRef.current.set(messagesKey, mapped);
+        currentChatKeyRef.current = messagesKey;
       }
     } catch (error: any) {
       console.error('Mesajlar yüklenemedi:', error);
@@ -87,12 +103,36 @@ export function useMessages() {
     }
   };
 
+  // Mesajları cache'den yükle (chat değiştiğinde hızlı gösterim için)
+  const loadMessagesFromCache = (sessionId: string, chatId: string) => {
+    const messagesKey = `${sessionId}-${chatId}`;
+    const cachedMessages = messagesCacheRef.current.get(messagesKey);
+    if (cachedMessages && cachedMessages.length > 0) {
+      setMessages(cachedMessages);
+      currentChatKeyRef.current = messagesKey;
+      return true; // Cache'den yüklendi
+    }
+    return false; // Cache'de yok
+  };
+
+  // Mesajları cache'e kaydet (WebSocket'ten gelen yeni mesajlar için)
+  const updateMessagesCache = (sessionId: string, chatId: string, newMessages: Message[]) => {
+    const messagesKey = `${sessionId}-${chatId}`;
+    if (currentChatKeyRef.current === messagesKey) {
+      // Eğer bu chat şu anda açıksa, cache'i güncelle
+      messagesCacheRef.current.set(messagesKey, newMessages);
+    }
+  };
+
   return {
     messages,
     setMessages,
     message,
     setMessage,
     messagesInitialLoadRef,
+    messagesCacheRef,
     loadMessages,
+    loadMessagesFromCache,
+    updateMessagesCache,
   };
 }

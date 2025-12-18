@@ -1,5 +1,5 @@
 // Contact listing functions
-import { getAccountId, getOrCreateInstance, formatContactName, instances, contactsCache, CONTACT_CACHE_TTL_MS } from "../shared.js";
+import { getAccountId, getOrCreateInstance, formatContactName, instances, contactsCache, CONTACT_CACHE_TTL_MS, ensureSocket } from "../shared.js";
 import { isJidBroadcast } from "baileys";
 import { prisma, logger } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
@@ -136,6 +136,72 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
   } catch (error) {
     logger.error({ error, sessionId }, "Contact listesi alınamadı");
     return { data: [], cursor: null };
+  }
+};
+
+/**
+ * Cihazdaki kayıtlı kişi listesini ad soyad ile çek
+ * Baileys API'nin fetchContacts metodunu kullanarak WhatsApp cihazındaki tüm contact'ları çeker
+ */
+export const fetchDeviceContacts = async (accountId) => {
+  try {
+    const sessionId = getAccountId(accountId);
+    const sock = ensureSocket(accountId);
+    
+    // Baileys API'nin fetchContacts metodunu kullan
+    if (typeof sock.fetchContacts !== "function") {
+      logger.error({ sessionId }, "fetchContacts metodu mevcut değil");
+      return { data: [], error: "fetchContacts metodu mevcut değil" };
+    }
+
+    const deviceContacts = await sock.fetchContacts();
+    
+    // Baileys'te fetchContacts Map, Array veya Object dönebilir
+    let contactsArray = [];
+    if (Array.isArray(deviceContacts)) {
+      contactsArray = deviceContacts;
+    } else if (deviceContacts instanceof Map) {
+      contactsArray = Array.from(deviceContacts.values());
+    } else if (deviceContacts && typeof deviceContacts === "object") {
+      contactsArray = Object.values(deviceContacts);
+    }
+
+    logger.info({ sessionId, count: contactsArray.length }, "Cihazdan contact'lar çekildi");
+
+    // Contact'ları formatla - cihaz rehberindeki ad soyad bilgilerini önceliklendir
+    // Baileys'te fetchContacts() telefon rehberindeki kişileri çeker
+    // name: Telefon rehberindeki isim (cihaz rehberi)
+    // notify: WhatsApp'ta kayıtlı isim
+    const formatted = contactsArray
+      .filter((c) => c && c.id && !c.id.endsWith("@g.us") && !isJidBroadcast(c.id))
+      .map((c) => {
+        // Cihaz rehberindeki ismi önceliklendir (name alanı)
+        const deviceName = c.name || null; // Cihaz rehberindeki isim
+        const whatsappName = c.notify || null; // WhatsApp'ta kayıtlı isim
+        
+        return {
+          id: c.id || null,
+          name: deviceName || whatsappName || null, // Cihaz rehberindeki isim öncelikli
+          notify: whatsappName || null, // WhatsApp'ta kayıtlı isim
+          verifiedName: c.verifiedName || null, // Doğrulanmış isim
+          imgUrl: c.imgUrl || null,
+          status: c.status || null,
+          // Cihaz rehberindeki ismin varlığını kontrol etmek için
+          hasDeviceName: !!deviceName,
+        };
+      })
+      .sort((a, b) => {
+        // Cihaz rehberindeki isme göre sırala (name öncelikli)
+        const nameA = a.name || a.notify || a.verifiedName || a.id || "";
+        const nameB = b.name || b.notify || b.verifiedName || b.id || "";
+        return nameA.localeCompare(nameB, "tr", { sensitivity: "base" });
+      });
+
+    return { data: formatted };
+  } catch (error) {
+    const sessionId = getAccountId(accountId);
+    logger.error({ error, sessionId }, "Cihazdan contact'lar çekilemedi");
+    return { data: [], error: error.message || "Cihazdan contact'lar çekilemedi" };
   }
 };
 

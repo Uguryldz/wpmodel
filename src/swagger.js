@@ -717,6 +717,65 @@ const swaggerSpec = {
         },
       },
     },
+    "/{sessionId}/contacts/device": {
+      get: {
+        tags: ["Contacts"],
+        summary: "Cihazdaki kayıtlı kişi listesini ad soyad ile çek",
+        description: "Baileys API'nin fetchContacts metodunu kullanarak WhatsApp cihazındaki tüm contact'ları ad soyad bilgileriyle birlikte çeker.",
+        parameters: [
+          {
+            in: "path",
+            name: "sessionId",
+            required: true,
+            schema: { type: "string" },
+            description: "Session ID",
+          },
+        ],
+        responses: {
+          200: {
+            description: "Cihazdaki contact listesi (ad soyad ile)",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string", description: "Contact JID" },
+                          name: { type: "string", nullable: true, description: "Ad soyad" },
+                          notify: { type: "string", nullable: true, description: "WhatsApp'ta kayıtlı isim" },
+                          verifiedName: { type: "string", nullable: true, description: "Doğrulanmış isim" },
+                          imgUrl: { type: "string", nullable: true, description: "Profil resmi URL'i" },
+                          status: { type: "string", nullable: true, description: "Durum mesajı" },
+                        },
+                      },
+                    },
+                    error: { type: "string", nullable: true, description: "Hata mesajı (varsa)" },
+                  },
+                },
+              },
+            },
+          },
+          500: {
+            description: "Sunucu hatası",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: { type: "array", items: {} },
+                    error: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
 
     // === Groups ===
     "/{sessionId}/groups": {

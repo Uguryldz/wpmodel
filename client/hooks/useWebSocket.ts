@@ -19,6 +19,7 @@ interface UseWebSocketProps {
   setSelectedChat: React.Dispatch<React.SetStateAction<Chat | null>>;
   queueProfilePicture: (sessionId: string, jid: string) => void;
   loadChats?: (sessionId: string, limit: number, force: boolean) => void;
+  updateMessagesCache?: (sessionId: string, chatId: string, messages: Message[]) => void;
 }
 
 export function useWebSocket({
@@ -37,6 +38,7 @@ export function useWebSocket({
   setSelectedChat,
   queueProfilePicture,
   loadChats,
+  updateMessagesCache,
 }: UseWebSocketProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const isMountedRef = useRef<boolean>(true);
@@ -207,10 +209,19 @@ export function useWebSocket({
               }
             } 
             // messages.upsert
+            // README'ye göre: "In messages.upsert it's recommended to use a loop like for (const message of event.messages)"
             else if (data.type === 'messages.upsert' && data.sessionId === currentActiveAccount?.id) {
               console.log('[WebSocket] Yeni mesajlar alındı:', data.messages.length);
               
-              if (currentSelectedChat && data.messages.some((msg: any) => (msg.from || msg.key?.remoteJid) === currentSelectedChat.id)) {
+              // README'ye göre best practice: loop kullan
+              const relevantMessages: any[] = [];
+              for (const msg of data.messages) {
+                if (currentSelectedChat && (msg.from || msg.key?.remoteJid) === currentSelectedChat.id) {
+                  relevantMessages.push(msg);
+                }
+              }
+              
+              if (relevantMessages.length > 0) {
                 // Seçili sohbetin mesajlarıysa ekle
                 console.log('[WebSocket] Seçili sohbetin mesajlarına yeni mesajlar ekleniyor...');
                 
@@ -220,29 +231,35 @@ export function useWebSocket({
                     return id && id.toString().startsWith('temp-') ? id : id;
                   }));
                   
-                  const newMessages = data.messages
-                    .filter((msg: any) => (msg.from || msg.key?.remoteJid) === currentSelectedChat.id)
-                    .map((msg: any) => {
-                      const text = msg.text || extractMessageText(msg);
-                      const body = msg.body || text;
-                      const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
-                      const fromMe = msg.fromMe !== undefined 
-                        ? Boolean(msg.fromMe) 
-                        : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
-                      
-                      return {
+                  // Cache'i güncelle
+                  if (updateMessagesCache && currentSelectedChat) {
+                    const messagesKey = `${currentActiveAccount?.id}-${currentSelectedChat.id}`;
+                    const updatedMessages = [...prev, ...relevantMessages];
+                    updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, updatedMessages);
+                  }
+                  
+                  // README'ye göre best practice: loop kullan
+                  const newMessages: Message[] = [];
+                  for (const msg of relevantMessages) {
+                    const text = msg.text || extractMessageText(msg);
+                    const body = msg.body || text;
+                    const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                    const fromMe = msg.fromMe !== undefined 
+                      ? Boolean(msg.fromMe) 
+                      : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+                    
+                    // Duplicate kontrolü
+                    if (msgId && !existingIds.has(msgId)) {
+                      newMessages.push({
                         ...msg,
                         id: msgId,
                         text: text || body,
                         body: body || text,
                         fromMe: fromMe,
                         timestamp: msg.timestamp || msg.messageTimestamp || undefined,
-                      };
-                    })
-                    .filter(msg => {
-                      const msgId = msg.id || msg.key?.id;
-                      return msgId && !existingIds.has(msgId);
-                    });
+                      });
+                    }
+                  }
                   
                   if (newMessages.length === 0) return prev;
                   
@@ -269,19 +286,27 @@ export function useWebSocket({
                     return aTime - bTime;
                   });
                   
+                  // Cache'i güncelle
+                  if (updateMessagesCache && currentSelectedChat) {
+                    updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, merged);
+                  }
+                  
                   return merged;
                 });
                 
                 // Chat listesindeki bilgileri güncelle
-                const lastMessage = data.messages
-                  .filter((msg: any) => (msg.from || msg.key?.remoteJid) === currentSelectedChat.id)
-                  .sort((a: any, b: any) => {
-                    const aTime = a.timestamp || a.messageTimestamp || 0;
-                    const bTime = b.timestamp || b.messageTimestamp || 0;
-                    return bTime - aTime;
-                  })[0];
-                
-                if (lastMessage) {
+                // README'ye göre best practice: loop kullan
+                if (relevantMessages.length > 0) {
+                  // En son mesajı bul (timestamp'e göre sırala)
+                  let lastMessage = relevantMessages[0];
+                  for (const msg of relevantMessages) {
+                    const msgTime = msg.timestamp || msg.messageTimestamp || 0;
+                    const lastTime = lastMessage.timestamp || lastMessage.messageTimestamp || 0;
+                    if (msgTime > lastTime) {
+                      lastMessage = msg;
+                    }
+                  }
+                  
                   const messageText = lastMessage.text || extractMessageText(lastMessage) || '';
                   const messageTimestamp = lastMessage.timestamp || lastMessage.messageTimestamp || Math.floor(Date.now() / 1000);
                   
@@ -385,6 +410,11 @@ export function useWebSocket({
                 
                 messagesInitialLoadRef.current.set(messagesKey, true);
                 setMessages(formattedMessages);
+                
+                // Cache'i güncelle
+                if (updateMessagesCache && currentSelectedChat) {
+                  updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, formattedMessages);
+                }
               }
             }
           } catch (error) {

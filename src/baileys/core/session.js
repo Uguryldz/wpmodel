@@ -68,6 +68,37 @@ export const startConnection = async (accountId) => {
 };
 
 /**
+ * Pairing Code iste (README'ye göre)
+ * Pairing Code isn't Mobile API, it's a method to connect Whatsapp Web without QR-CODE
+ * The phone number can't have + or () or -, only numbers, you must provide country code
+ */
+export const requestPairingCode = async (accountId, phoneNumber) => {
+  const instance = getOrCreateInstance(accountId);
+  
+  // Auth state yüklenmemişse, önce initBaileys çağır
+  if (!instance.authState || !instance.waVersion) {
+    await initBaileys(accountId);
+  }
+
+  // Eğer socket yoksa, önce socket oluştur (ama QR gösterme)
+  if (!instance.sock) {
+    const { startSocket } = await import("./socket.js");
+    startSocket(instance);
+  }
+
+  // Phone number'ı temizle (+ ve () ve - karakterlerini kaldır)
+  const cleanNumber = phoneNumber.replace(/[+\-()\s]/g, "");
+  
+  if (!instance.sock.authState.creds.registered) {
+    const code = await instance.sock.requestPairingCode(cleanNumber);
+    logger.info({ accountId, phoneNumber: cleanNumber }, "Pairing code oluşturuldu");
+    return { code, phoneNumber: cleanNumber };
+  } else {
+    throw new Error("Bu session zaten kayıtlı. Pairing code sadece kayıtlı olmayan session'lar için kullanılabilir.");
+  }
+};
+
+/**
  * Mevcut session'ları restore et (backend restart sonrası)
  * Restore edilen session'lar otomatik olarak bağlantıyı başlatır
  */

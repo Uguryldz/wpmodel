@@ -21,6 +21,7 @@
     "baileys": "^7.0.0-rc.9",
     "express": "^4.19.2",
     "lucide-react": "^0.263.1",
+    "node-cache": "^5.1.2",
     "pino": "^9.2.0",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
