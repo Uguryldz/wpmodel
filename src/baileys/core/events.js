@@ -5,7 +5,7 @@ import Boom from "@hapi/boom";
 import NodeCache from "node-cache";
 import { prisma, logger } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
-import { findSessionByWhatsAppJid, migrateSessionData } from "../../sessionMapper.js";
+import { findSessionByWhatsAppJid, migrateSessionData, findActiveSessionByWhatsAppJid } from "../../sessionMapper.js";
 import {
   getWebSocketBroadcast,
   instances,
@@ -907,7 +907,29 @@ export const bindSocketEvents = (instance) => {
           instance.whatsappJid = whatsappJid;
           
           if (whatsappJid) {
-            // Aynı WhatsApp numarası için eski sessionId'yi bul
+            // Aynı WhatsApp numarası için aktif session'ları bul (memory'den)
+            const activeOldSessionId = findActiveSessionByWhatsAppJid(whatsappJid);
+            
+            // Eğer bu numara için başka bir aktif session varsa, eski session'ı kapat
+            if (activeOldSessionId && activeOldSessionId !== sessionId) {
+              logger.warn(
+                { oldSessionId: activeOldSessionId, newSessionId: sessionId, whatsappJid },
+                "Aynı WhatsApp hesabı için aktif session tespit edildi, eski session kapatılıyor"
+              );
+              
+              try {
+                const oldInstance = instances.get(activeOldSessionId);
+                if (oldInstance && oldInstance.sock) {
+                  // Eski session'ı logout yap
+                  await oldInstance.sock.logout();
+                  logger.info({ oldSessionId: activeOldSessionId }, "Eski session logout yapıldı");
+                }
+              } catch (error) {
+                logger.error({ error, oldSessionId: activeOldSessionId }, "Eski session kapatılamadı");
+              }
+            }
+            
+            // Aynı WhatsApp numarası için eski sessionId'yi bul (veritabanından)
             const oldSessionId = await findSessionByWhatsAppJid(whatsappJid);
 
             // Eğer bu numara için başka bir sessionId varsa, verileri taşı

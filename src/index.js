@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { createServer } from "http";
 
 import swaggerSpec from "./swagger.js";
+import { safeStringify } from "./utils.js";
 import {
   blockContact,
   createGroup,
@@ -60,6 +61,15 @@ import {
   sendLocation,
   sendContactCard,
   createPoll,
+  sendButtonMessage,
+  sendListMessage,
+  sendTemplateMessage,
+  sendProductMessage,
+  listTemplates,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  getTemplate,
   setWebSocketBroadcast,
   restoreSessions,
   refreshContacts,
@@ -178,7 +188,7 @@ wss.on("connection", (ws, req) => {
   });
 
   // İlk bağlantıda mevcut session'ları gönder
-  ws.send(JSON.stringify({
+  ws.send(safeStringify({
     type: "connected",
     message: "WebSocket bağlantısı kuruldu"
   }));
@@ -186,7 +196,7 @@ wss.on("connection", (ws, req) => {
 
 // WebSocket'e mesaj gönderme fonksiyonu
 const broadcastToWebSocket = (data) => {
-  const message = JSON.stringify(data);
+  const message = safeStringify(data);
   wsClients.forEach((client) => {
     if (client.readyState === 1) { // WebSocket.OPEN
       try {
@@ -254,7 +264,7 @@ app.get(
   "/sessions",
   asyncHandler((_req, res) => {
     const sessions = listSessions();
-    console.log('[GET /sessions] Sessions:', JSON.stringify(sessions, null, 2));
+    console.log('[GET /sessions] Sessions:', safeStringify(sessions, 2));
     res.json(sessions);
   })
 );
@@ -340,7 +350,7 @@ app.get(
     console.log(`[GET /api/chats] AccountId: ${accountId}, Limit: ${limit}`);
 
     const result = await listChats(accountId, null, limit);
-    console.log(`[GET /api/chats] Result:`, JSON.stringify(result, null, 2));
+    console.log(`[GET /api/chats] Result:`, safeStringify(result, 2));
     res.json(result);
   })
 );
@@ -359,7 +369,7 @@ app.get(
     if (result === null) {
       return res.status(404).json({ error: "Session not found" });
     }
-    console.log(`[GET /api/contacts] Result:`, JSON.stringify(result, null, 2));
+    console.log(`[GET /api/contacts] Result:`, safeStringify(result, 2));
     res.json(result);
   })
 );
@@ -451,7 +461,7 @@ app.get(
 
     console.log(`[GET /${sessionId}/chats] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     const result = await listChats(sessionId, cursor, Number(limit) || 25);
-    console.log(`[GET /${sessionId}/chats] Result:`, JSON.stringify(result, null, 2));
+    console.log(`[GET /${sessionId}/chats] Result:`, safeStringify(result, 2));
     res.json(result);
   })
 );
@@ -485,7 +495,7 @@ app.get(
     if (result === null) {
       return res.status(404).json({ error: "Session not found" });
     }
-    console.log(`[GET /${sessionId}/contacts] Result:`, JSON.stringify(result, null, 2));
+    console.log(`[GET /${sessionId}/contacts] Result:`, safeStringify(result, 2));
     res.json(result);
   })
 );
@@ -714,6 +724,180 @@ app.post(
 
     const result = await sendBulkMessages(sessionId, items);
     res.status(202).json({ data: result });
+  })
+);
+
+// ========== INTERACTIVE MESSAGES (Business Features) ==========
+
+// Butonlu mesaj gönder
+app.post(
+  "/:sessionId/messages/send/button",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, text, buttons, footer, header } = req.body || {};
+
+    if (!jid || !text || !buttons || buttons.length === 0) {
+      return res.status(400).json({ 
+        error: "jid, text ve buttons alanları zorunludur" 
+      });
+    }
+
+    const result = await sendButtonMessage(
+      sessionId,
+      jid,
+      text,
+      buttons,
+      footer,
+      header
+    );
+    res.status(202).json(result);
+  })
+);
+
+// Liste mesajı gönder
+app.post(
+  "/:sessionId/messages/send/list",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, text, title, buttonText, sections, footer } = req.body || {};
+
+    if (!jid || !text || !title || !buttonText || !sections || sections.length === 0) {
+      return res.status(400).json({ 
+        error: "jid, text, title, buttonText ve sections alanları zorunludur" 
+      });
+    }
+
+    const result = await sendListMessage(
+      sessionId,
+      jid,
+      text,
+      title,
+      buttonText,
+      sections,
+      footer
+    );
+    res.status(202).json(result);
+  })
+);
+
+// Şablon mesajı gönder
+app.post(
+  "/:sessionId/messages/send/template",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, templateName, languageCode = "tr", components = [] } = req.body || {};
+
+    if (!jid || !templateName) {
+      return res.status(400).json({ 
+        error: "jid ve templateName alanları zorunludur" 
+      });
+    }
+
+    const result = await sendTemplateMessage(
+      sessionId,
+      jid,
+      templateName,
+      languageCode,
+      components
+    );
+    res.status(202).json(result);
+  })
+);
+
+// Ürün mesajı gönder
+app.post(
+  "/:sessionId/messages/send/product",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, text, productList, businessOwnerJid, footer, thumbnail } = req.body || {};
+
+    if (!jid || !text || !productList || !businessOwnerJid) {
+      return res.status(400).json({ 
+        error: "jid, text, productList ve businessOwnerJid alanları zorunludur" 
+      });
+    }
+
+    const result = await sendProductMessage(
+      sessionId,
+      jid,
+      text,
+      productList,
+      businessOwnerJid,
+      footer,
+      thumbnail
+    );
+    res.status(202).json(result);
+  })
+);
+
+// ========== MESSAGE TEMPLATES (CRUD) ==========
+
+// Tüm şablonları listele
+app.get(
+  "/:sessionId/templates",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const templates = await listTemplates(sessionId);
+    res.json({ data: templates });
+  })
+);
+
+// Global şablonları listele (tüm session'lar için)
+app.get(
+  "/api/templates",
+  asyncHandler(async (req, res) => {
+    const templates = await listTemplates(null);
+    res.json({ data: templates });
+  })
+);
+
+// Şablon oluştur
+app.post(
+  "/:sessionId/templates",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { name, type, data } = req.body || {};
+
+    if (!name || !type || !data) {
+      return res.status(400).json({ 
+        error: "name, type ve data alanları zorunludur" 
+      });
+    }
+
+    const template = await createTemplate(sessionId, name, type, data);
+    res.status(201).json(template);
+  })
+);
+
+// Şablon güncelle
+app.put(
+  "/:sessionId/templates/:templateId",
+  asyncHandler(async (req, res) => {
+    const { templateId } = req.params;
+    const updates = req.body || {};
+
+    const template = await updateTemplate(templateId, updates);
+    res.json(template);
+  })
+);
+
+// Şablon sil
+app.delete(
+  "/:sessionId/templates/:templateId",
+  asyncHandler(async (req, res) => {
+    const { templateId } = req.params;
+    await deleteTemplate(templateId);
+    res.json({ success: true });
+  })
+);
+
+// Şablon getir
+app.get(
+  "/:sessionId/templates/:templateId",
+  asyncHandler(async (req, res) => {
+    const { templateId } = req.params;
+    const template = await getTemplate(templateId);
+    res.json(template);
   })
 );
 

@@ -5,6 +5,7 @@ import * as QRCode from 'qrcode';
 import AddAccountModal from './components/AddAccountModal';
 import ContactsModal from './components/ContactsModal';
 import ContactSelector from './components/ContactSelector';
+import TemplatesModal from './components/TemplatesModal';
 import AccountSidebar from './components/AccountSidebar';
 import ChatList from './components/ChatList';
 import MessageList from './components/MessageList';
@@ -84,6 +85,7 @@ export default function WhatsAppMultiAccount() {
   const [showContactSelector, setShowContactSelector] = useState(false);
   const [showForwardSelector, setShowForwardSelector] = useState(false);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [showTemplatesModal, setShowTemplatesModal] = useState(false);
   // Refs (WebSocket ve diğer)
   const chatsPollRef = useRef<NodeJS.Timeout | null>(null);
   const activeAccountRef = useRef<Account | undefined>(undefined);
@@ -879,6 +881,7 @@ export default function WhatsAppMultiAccount() {
         accounts={accountsHook.accounts}
         onSwitchAccount={accountsHook.switchAccount}
         onAddAccount={accountsHook.handleAddAccount}
+        onOpenTemplates={() => setShowTemplatesModal(true)}
         onDeleteAccount={async (accountId) => {
           try {
             await api.deleteSession(accountId);
@@ -999,6 +1002,8 @@ export default function WhatsAppMultiAccount() {
               onInsertEmoji={insertEmoji}
               onHandleAttachment={handleAttachment}
               onSendVoiceMessage={handleSendVoiceMessage}
+              activeAccountId={activeAccount?.id}
+              onOpenTemplates={() => setShowTemplatesModal(true)}
             />
           )}
         </div>
@@ -1070,6 +1075,122 @@ export default function WhatsAppMultiAccount() {
           contactsHook.setContactSearchTerm('');
         }}
       />
+
+      {showTemplatesModal && (
+        <TemplatesModal
+          isOpen={showTemplatesModal}
+          activeAccountId={activeAccount?.id}
+          activeAccountJid={activeAccount?.whatsappJid || null}
+          selectedChatJid={chatsHook.selectedChat?.id}
+          onClose={() => setShowTemplatesModal(false)}
+          onSendTemplate={async (template) => {
+            // Templates modal'dan direkt gönderme (şablon yönetimi sayfasından)
+            if (!activeAccount || !chatsHook.selectedChat) return;
+            
+            try {
+              if (template.type === 'button') {
+                await api.sendButtonMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.buttons,
+                  template.data.footer,
+                  undefined
+                );
+              } else if (template.type === 'list') {
+                await api.sendListMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.title,
+                  template.data.buttonText,
+                  template.data.sections,
+                  template.data.footer
+                );
+              } else if (template.type === 'template') {
+                await api.sendTemplateMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.templateName,
+                  template.data.languageCode,
+                  template.data.components || []
+                );
+              } else if (template.type === 'product') {
+                await api.sendProductMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.productList,
+                  template.data.businessOwnerJid,
+                  template.data.footer,
+                  undefined
+                );
+              }
+              
+              // Mesajları yeniden yükle
+              setTimeout(() => {
+                messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+              }, 500);
+            } catch (error: any) {
+              console.error('Şablon mesajı gönderilemedi:', error);
+              alert(`Mesaj gönderilemedi: ${error.message}`);
+            }
+          }}
+          onSelectTemplate={async (template) => {
+            // Chat sırasında şablon seçme (MessageInput'dan)
+            if (!activeAccount || !chatsHook.selectedChat) return;
+            
+            try {
+              if (template.type === 'button') {
+                await api.sendButtonMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.buttons,
+                  template.data.footer,
+                  undefined
+                );
+              } else if (template.type === 'list') {
+                await api.sendListMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.title,
+                  template.data.buttonText,
+                  template.data.sections,
+                  template.data.footer
+                );
+              } else if (template.type === 'template') {
+                await api.sendTemplateMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.templateName,
+                  template.data.languageCode,
+                  template.data.components || []
+                );
+              } else if (template.type === 'product') {
+                await api.sendProductMessage(
+                  activeAccount.id,
+                  chatsHook.selectedChat.id,
+                  template.data.text,
+                  template.data.productList,
+                  template.data.businessOwnerJid,
+                  template.data.footer,
+                  undefined
+                );
+              }
+              
+              // Mesajları yeniden yükle
+              setTimeout(() => {
+                messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+              }, 500);
+            } catch (error: any) {
+              console.error('Şablon mesajı gönderilemedi:', error);
+              alert(`Mesaj gönderilemedi: ${error.message}`);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

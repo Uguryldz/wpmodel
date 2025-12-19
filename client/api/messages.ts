@@ -175,3 +175,130 @@ export const deleteMessageForMe = async (
   if (!response.ok) throw new Error('Mesaj silinemedi');
   return response.json();
 };
+
+// ========== INTERACTIVE MESSAGES (Business Features) ==========
+
+// Butonlu mesaj gönder
+export interface ButtonMessage {
+  buttonId: string;
+  buttonText: { displayText: string } | string;
+  type?: 1 | 2 | 3; // 1 = Quick Reply, 2 = URL, 3 = Call
+  displayText?: string; // Alternatif format için
+}
+
+export interface ButtonMessageHeader {
+  type: 1 | 2 | 3 | 4; // 1 = Text, 2 = Image, 3 = Video, 4 = Document
+  text?: string;
+  image?: { url: string };
+  video?: { url: string };
+  document?: { url: string; fileName?: string };
+}
+
+export const sendButtonMessage = async (
+  sessionId: string,
+  jid: string,
+  text: string,
+  buttons: ButtonMessage[],
+  footer?: string,
+  header?: ButtonMessageHeader
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/send/button`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, text, buttons, footer, header }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Butonlu mesaj gönderilemedi');
+  }
+  return response.json();
+};
+
+// Liste mesajı gönder
+export interface ListSection {
+  title: string;
+  rows: Array<{
+    title: string;
+    description?: string;
+    rowId: string;
+  }>;
+}
+
+export const sendListMessage = async (
+  sessionId: string,
+  jid: string,
+  text: string,
+  title: string,
+  buttonText: string,
+  sections: ListSection[],
+  footer?: string
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/send/list`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, text, title, buttonText, sections, footer }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Liste mesajı gönderilemedi');
+  }
+  return response.json();
+};
+
+// Şablon mesajı gönder
+export interface TemplateComponent {
+  type: string;
+  parameters?: Array<{
+    type: string;
+    text?: string;
+    image?: { url: string };
+    video?: { url: string };
+    document?: { url: string };
+  }>;
+}
+
+export const sendTemplateMessage = async (
+  sessionId: string,
+  jid: string,
+  templateName: string,
+  languageCode: string = 'tr',
+  components: TemplateComponent[] = []
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/send/template`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, templateName, languageCode, components }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Şablon mesajı gönderilemedi');
+  }
+  return response.json();
+};
+
+// Ürün mesajı gönder
+export interface ProductList {
+  title: string;
+  products: Array<{ productId: string }>;
+}
+
+export const sendProductMessage = async (
+  sessionId: string,
+  jid: string,
+  text: string,
+  productList: ProductList[],
+  businessOwnerJid: string,
+  footer?: string,
+  thumbnail?: string
+): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/send/product`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, text, productList, businessOwnerJid, footer, thumbnail }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Ürün mesajı gönderilemedi');
+  }
+  return response.json();
+};

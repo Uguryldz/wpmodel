@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Smile, Paperclip, Mic, Send, Square } from 'lucide-react';
+import { X, Smile, Paperclip, Mic, Send, Square, FileText } from 'lucide-react';
 
 interface Message {
   id?: string;
@@ -43,6 +43,8 @@ export default function MessageInput({
   onInsertEmoji,
   onHandleAttachment,
   onSendVoiceMessage,
+  activeAccountId,
+  onOpenTemplates,
 }: MessageInputProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -270,6 +272,19 @@ export default function MessageInput({
         >
           <Paperclip size={24} />
         </button>
+        {onOpenTemplates && (
+          <button 
+            onClick={() => {
+              onOpenTemplates();
+              onSetShowEmojiPicker(false);
+              onSetShowAttachMenu(false);
+            }}
+            className="text-gray-600 hover:text-gray-800"
+            title="Hazır Mesaj Şablonları"
+          >
+            <FileText size={24} />
+          </button>
+        )}
         <input
           type="text"
           value={message}

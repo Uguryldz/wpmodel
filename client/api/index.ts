@@ -9,6 +9,7 @@ export * from './media';
 export * from './calls';
 export * from './special';
 export * from './presence';
+export * from './templates';
 
 // Types
 export * from '../types';

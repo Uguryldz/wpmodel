@@ -159,3 +159,17 @@ model Session {
   @@index([sessionId])
 }
 
+model MessageTemplate {
+  pkId        Int      @id @default(autoincrement())
+  sessionId   String   // Hangi session'a ait (opsiyonel, tüm hesaplar için kullanılabilir)
+  id          String   @unique // Unique template ID
+  name        String   // Şablon adı
+  type        String   // 'button' | 'list' | 'template' | 'product'
+  data        String   // JSON string olarak şablon verisi
+  createdAt   BigInt   // Timestamp (milliseconds)
+  updatedAt   BigInt?  // Timestamp (milliseconds)
+
+  @@index([sessionId])
+  @@index([type])
+}
+

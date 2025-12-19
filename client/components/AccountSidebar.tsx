@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageCircle, Plus, X, Users } from 'lucide-react';
+import { MessageCircle, Plus, X, Users, FileText } from 'lucide-react';
 import * as api from '../api';
 import { Contact } from '../types';
 
@@ -17,6 +17,7 @@ interface AccountSidebarProps {
   onSwitchAccount: (accountId: string) => void;
   onAddAccount: () => void;
   onDeleteAccount: (accountId: string) => Promise<void>;
+  onOpenTemplates: () => void;
 }
 
 export default function AccountSidebar({
@@ -24,6 +25,7 @@ export default function AccountSidebar({
   onSwitchAccount,
   onAddAccount,
   onDeleteAccount,
+  onOpenTemplates,
 }: AccountSidebarProps) {
   const [showContacts, setShowContacts] = useState(false);
   const [deviceContacts, setDeviceContacts] = useState<Contact[]>([]);
@@ -55,6 +57,15 @@ export default function AccountSidebar({
       <div className="text-white text-2xl mb-4">
         <MessageCircle size={32} />
       </div>
+      
+      {/* Templates Butonu */}
+      <button
+        onClick={onOpenTemplates}
+        className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white hover:bg-blue-500 transition-colors"
+        title="Mesaj Şablonları"
+      >
+        <FileText size={20} />
+      </button>
       
       {accounts.map(account => (
         <div key={account.id} className="relative group">
