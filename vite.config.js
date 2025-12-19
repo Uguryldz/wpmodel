@@ -109,8 +109,8 @@ export default defineConfig({
         secure: false,
         timeout: 10000,
       },
-      // SessionId ile başlayan route'lar (örn: /default/chats, /test/chats)
-      '^/([a-zA-Z0-9_-]+)/(chats|contacts|groups|messages)': {
+      // SessionId ile başlayan route'lar (örn: /default/chats, /test/chats, /temp-xxx/templates)
+      '^/([a-zA-Z0-9_-]+)/(chats|contacts|groups|messages|templates)': {
         target: 'http://localhost:3000',
         changeOrigin: true,
         secure: false,

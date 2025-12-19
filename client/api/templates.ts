@@ -17,11 +17,20 @@ export const getTemplates = async (sessionId?: string): Promise<MessageTemplate[
     : `${API_BASE}/api/templates`;
   
   const response = await fetch(url);
+  const responseText = await response.text();
+  
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'Şablonlar alınamadı');
+    let errorMessage = 'Şablonlar alınamadı';
+    try {
+      const errorData = JSON.parse(responseText);
+      errorMessage = errorData.error || errorData.message || errorMessage;
+    } catch {
+      errorMessage = responseText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
-  const result = await response.json();
+  
+  const result = JSON.parse(responseText);
   return result.data || [];
 };
 
@@ -31,16 +40,37 @@ export const createTemplate = async (
   type: 'button' | 'list' | 'template' | 'product',
   data: any
 ): Promise<MessageTemplate> => {
-  const response = await fetch(`${API_BASE}/${sessionId}/templates`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, type, data }),
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'Şablon oluşturulamadı');
+  try {
+    const response = await fetch(`${API_BASE}/${sessionId}/templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, data }),
+    });
+    
+    // Response body'yi bir kez oku
+    const responseText = await response.text();
+    
+    if (!response.ok) {
+      let errorMessage = 'Şablon oluşturulamadı';
+      try {
+        const errorData = JSON.parse(responseText);
+        errorMessage = errorData.error || errorData.message || errorMessage;
+      } catch {
+        errorMessage = responseText || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+    
+    // Response başarılıysa JSON parse et
+    const result = JSON.parse(responseText);
+    // Backend { data: template } formatında döndürüyor
+    return result.data || result;
+  } catch (error: any) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Şablon oluşturulamadı: ${error?.message || 'Bilinmeyen hata'}`);
   }
-  return response.json();
 };
 
 export const updateTemplate = async (
@@ -53,28 +83,54 @@ export const updateTemplate = async (
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
   });
+  const responseText = await response.text();
+  
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'Şablon güncellenemedi');
+    let errorMessage = 'Şablon güncellenemedi';
+    try {
+      const errorData = JSON.parse(responseText);
+      errorMessage = errorData.error || errorData.message || errorMessage;
+    } catch {
+      errorMessage = responseText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
-  return response.json();
+  
+  return JSON.parse(responseText);
 };
 
 export const deleteTemplate = async (sessionId: string, templateId: string): Promise<void> => {
   const response = await fetch(`${API_BASE}/${sessionId}/templates/${templateId}`, {
     method: 'DELETE',
   });
+  const responseText = await response.text();
+  
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'Şablon silinemedi');
+    let errorMessage = 'Şablon silinemedi';
+    try {
+      const errorData = JSON.parse(responseText);
+      errorMessage = errorData.error || errorData.message || errorMessage;
+    } catch {
+      errorMessage = responseText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
 };
 
 export const getTemplate = async (sessionId: string, templateId: string): Promise<MessageTemplate> => {
   const response = await fetch(`${API_BASE}/${sessionId}/templates/${templateId}`);
+  const responseText = await response.text();
+  
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || 'Şablon alınamadı');
+    let errorMessage = 'Şablon alınamadı';
+    try {
+      const errorData = JSON.parse(responseText);
+      errorMessage = errorData.error || errorData.message || errorMessage;
+    } catch {
+      errorMessage = responseText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
-  return response.json();
+  
+  return JSON.parse(responseText);
 };

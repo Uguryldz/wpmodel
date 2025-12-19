@@ -39,42 +39,57 @@ export const sendButtonMessage = async (accountId, to, text, buttons, footer, he
       // Farklı formatları destekle
       const buttonId = btn.buttonId || btn.id || `btn_${Math.random().toString(36).substr(2, 9)}`;
       const displayText = btn.buttonText?.displayText || btn.displayText || btn.title || btn.text || btn.reply?.title;
-      const type = btn.type || btn.reply?.type || 1; // 1 = Quick Reply (default)
+      const type = btn.type || btn.reply?.type || 1; // 1 = Quick Reply, 2 = URL, 3 = Call
       
-      return {
+      const buttonObj = {
         buttonId,
         buttonText: {
           displayText
         },
         type
       };
+      
+      // URL butonu için URL ekle
+      if (type === 2 && btn.url) {
+        buttonObj.url = btn.url;
+      }
+      
+      // Call butonu için telefon numarası ekle
+      if (type === 3 && btn.phoneNumber) {
+        buttonObj.phoneNumber = btn.phoneNumber;
+      }
+      
+      return buttonObj;
     })
   };
 
   // Header ekle (eğer varsa)
+  // Baileys'te headerType kullanılmıyor, direkt image/video/document ekleniyor
   if (header) {
     if (header.type === 2 && header.image) {
+      // Image header için image ekle ve text'i caption olarak kullan
       content.image = header.image;
-      content.headerType = 2;
+      // text zaten var, image için caption olarak kullanılır
     } else if (header.type === 3 && header.video) {
+      // Video header için video ekle
       content.video = header.video;
-      content.headerType = 3;
+      // text zaten var, video için caption olarak kullanılır
     } else if (header.type === 4 && header.document) {
+      // Document header için document ekle
       content.document = header.document;
-      content.headerType = 4;
+      // text zaten var, document için caption olarak kullanılır
     } else if (header.type === 1 && header.text) {
+      // Text header için text'i birleştir
       content.text = header.text + "\n\n" + text;
-      content.headerType = 1;
     }
-  } else {
-    content.headerType = 1; // Default: text header
   }
 
   try {
+    logger.info({ accountId, jid, content: JSON.stringify(content, null, 2) }, "Button mesajı gönderiliyor");
     await sock.sendMessage(jid, content);
     logger.info({ accountId, jid, buttonCount: buttons.length }, "Button mesajı gönderildi");
   } catch (error) {
-    logger.error({ error, accountId, jid, content }, "Button mesajı gönderilemedi");
+    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "Button mesajı gönderilemedi");
     throw error;
   }
 
@@ -135,10 +150,11 @@ export const sendListMessage = async (accountId, to, text, title, buttonText, se
   };
 
   try {
+    logger.info({ accountId, jid, content: JSON.stringify(content, null, 2) }, "List mesajı gönderiliyor");
     await sock.sendMessage(jid, content);
     logger.info({ accountId, jid, sectionCount: sections.length, totalRows }, "List mesajı gönderildi");
   } catch (error) {
-    logger.error({ error, accountId, jid, content }, "List mesajı gönderilemedi");
+    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "List mesajı gönderilemedi");
     throw error;
   }
 
@@ -173,7 +189,14 @@ export const sendTemplateMessage = async (accountId, to, templateName, languageC
     }
   };
 
-  await sock.sendMessage(jid, content);
+  try {
+    logger.info({ accountId, jid, content: JSON.stringify(content, null, 2) }, "Template mesajı gönderiliyor");
+    await sock.sendMessage(jid, content);
+    logger.info({ accountId, jid }, "Template mesajı gönderildi");
+  } catch (error) {
+    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "Template mesajı gönderilemedi");
+    throw error;
+  }
 
   return { accountId: getAccountId(accountId), jid, status: "queued" };
 };
@@ -210,7 +233,14 @@ export const sendProductMessage = async (accountId, to, text, productList, busin
     thumbnail: thumbnail ? { url: thumbnail } : undefined
   };
 
-  await sock.sendMessage(jid, content);
+  try {
+    logger.info({ accountId, jid, content: JSON.stringify(content, null, 2) }, "Product mesajı gönderiliyor");
+    await sock.sendMessage(jid, content);
+    logger.info({ accountId, jid }, "Product mesajı gönderildi");
+  } catch (error) {
+    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "Product mesajı gönderilemedi");
+    throw error;
+  }
 
   return { accountId: getAccountId(accountId), jid, status: "queued" };
 };

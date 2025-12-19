@@ -5,7 +5,8 @@ import * as QRCode from 'qrcode';
 import AddAccountModal from './components/AddAccountModal';
 import ContactsModal from './components/ContactsModal';
 import ContactSelector from './components/ContactSelector';
-import TemplatesModal from './components/TemplatesModal';
+import TemplatesPage from './pages/TemplatesPage';
+import TemplateSelectorModal from './components/TemplateSelectorModal';
 import AccountSidebar from './components/AccountSidebar';
 import ChatList from './components/ChatList';
 import MessageList from './components/MessageList';
@@ -85,7 +86,8 @@ export default function WhatsAppMultiAccount() {
   const [showContactSelector, setShowContactSelector] = useState(false);
   const [showForwardSelector, setShowForwardSelector] = useState(false);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
-  const [showTemplatesModal, setShowTemplatesModal] = useState(false);
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false);
+  const [currentPage, setCurrentPage] = useState<string>('main');
   // Refs (WebSocket ve diğer)
   const chatsPollRef = useRef<NodeJS.Timeout | null>(null);
   const activeAccountRef = useRef<Account | undefined>(undefined);
@@ -93,6 +95,30 @@ export default function WhatsAppMultiAccount() {
   // wsRef artık useWebSocket hook'unda
 
   // Profil resmi yükleme artık useProfilePictures hook'unda yönetiliyor
+
+  // Routing kontrolü
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path === '/templates') {
+      setCurrentPage('templates');
+    } else {
+      setCurrentPage('main');
+    }
+  }, []);
+
+  // URL değişikliklerini dinle
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path === '/templates') {
+        setCurrentPage('templates');
+      } else {
+        setCurrentPage('main');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Hesap listesini yükle
   useEffect(() => {
@@ -864,6 +890,19 @@ export default function WhatsAppMultiAccount() {
     );
   }
 
+  // Templates sayfası
+  if (currentPage === 'templates') {
+    return (
+      <TemplatesPage
+        activeAccountId={activeAccount?.id}
+        onBack={() => {
+          window.history.pushState({}, '', '/');
+          setCurrentPage('main');
+        }}
+      />
+    );
+  }
+
   // Aktif hesap yoksa loading göster
   if (!activeAccount) {
     return (
@@ -894,7 +933,10 @@ export default function WhatsAppMultiAccount() {
         accounts={accountsHook.accounts}
         onSwitchAccount={accountsHook.switchAccount}
         onAddAccount={accountsHook.handleAddAccount}
-        onOpenTemplates={() => setShowTemplatesModal(true)}
+        onOpenTemplates={() => {
+          window.history.pushState({}, '', '/templates');
+          setCurrentPage('templates');
+        }}
         onDeleteAccount={async (accountId) => {
           try {
             await api.deleteSession(accountId);
@@ -1016,7 +1058,9 @@ export default function WhatsAppMultiAccount() {
               onHandleAttachment={handleAttachment}
               onSendVoiceMessage={handleSendVoiceMessage}
               activeAccountId={activeAccount?.id}
-              onOpenTemplates={() => setShowTemplatesModal(true)}
+              onOpenTemplates={() => {
+                setShowTemplateSelector(true);
+              }}
             />
           )}
         </div>
@@ -1089,117 +1133,19 @@ export default function WhatsAppMultiAccount() {
         }}
       />
 
-      {showTemplatesModal && (
-        <TemplatesModal
-          isOpen={showTemplatesModal}
+      {/* Template Selector Modal */}
+      {showTemplateSelector && (
+        <TemplateSelectorModal
+          isOpen={showTemplateSelector}
           activeAccountId={activeAccount?.id}
-          activeAccountJid={activeAccount?.whatsappJid || null}
           selectedChatJid={chatsHook.selectedChat?.id}
-          onClose={() => setShowTemplatesModal(false)}
-          onSendTemplate={async (template) => {
-            // Templates modal'dan direkt gönderme (şablon yönetimi sayfasından)
-            if (!activeAccount || !chatsHook.selectedChat) return;
-            
-            try {
-              if (template.type === 'button') {
-                await api.sendButtonMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.buttons,
-                  template.data.footer,
-                  undefined
-                );
-              } else if (template.type === 'list') {
-                await api.sendListMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.title,
-                  template.data.buttonText,
-                  template.data.sections,
-                  template.data.footer
-                );
-              } else if (template.type === 'template') {
-                await api.sendTemplateMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.templateName,
-                  template.data.languageCode,
-                  template.data.components || []
-                );
-              } else if (template.type === 'product') {
-                await api.sendProductMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.productList,
-                  template.data.businessOwnerJid,
-                  template.data.footer,
-                  undefined
-                );
-              }
-              
-              // Mesajları yeniden yükle
+          onClose={() => setShowTemplateSelector(false)}
+          onTemplateSent={() => {
+            // Mesajları yeniden yükle
+            if (activeAccount && chatsHook.selectedChat) {
               setTimeout(() => {
                 messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
               }, 500);
-            } catch (error: any) {
-              console.error('Şablon mesajı gönderilemedi:', error);
-              alert(`Mesaj gönderilemedi: ${error.message}`);
-            }
-          }}
-          onSelectTemplate={async (template) => {
-            // Chat sırasında şablon seçme (MessageInput'dan)
-            if (!activeAccount || !chatsHook.selectedChat) return;
-            
-            try {
-              if (template.type === 'button') {
-                await api.sendButtonMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.buttons,
-                  template.data.footer,
-                  undefined
-                );
-              } else if (template.type === 'list') {
-                await api.sendListMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.title,
-                  template.data.buttonText,
-                  template.data.sections,
-                  template.data.footer
-                );
-              } else if (template.type === 'template') {
-                await api.sendTemplateMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.templateName,
-                  template.data.languageCode,
-                  template.data.components || []
-                );
-              } else if (template.type === 'product') {
-                await api.sendProductMessage(
-                  activeAccount.id,
-                  chatsHook.selectedChat.id,
-                  template.data.text,
-                  template.data.productList,
-                  template.data.businessOwnerJid,
-                  template.data.footer,
-                  undefined
-                );
-              }
-              
-              // Mesajları yeniden yükle
-              setTimeout(() => {
-                messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
-              }, 500);
-            } catch (error: any) {
-              console.error('Şablon mesajı gönderilemedi:', error);
-              alert(`Mesaj gönderilemedi: ${error.message}`);
             }
           }}
         />

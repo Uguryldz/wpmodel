@@ -25,6 +25,8 @@ interface MessageInputProps {
   onInsertEmoji: (emoji: string) => void;
   onHandleAttachment: (type: string) => void;
   onSendVoiceMessage?: (audioBlob: Blob) => void;
+  activeAccountId?: string;
+  onOpenTemplates?: () => void;
 }
 
 export default function MessageInput({

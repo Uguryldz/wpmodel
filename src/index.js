@@ -981,7 +981,7 @@ app.post(
     }
 
     const template = await createTemplate(sessionId, name, type, data);
-    res.status(201).json(template);
+    res.status(201).json({ data: template });
   })
 );
 
