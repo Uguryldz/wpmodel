@@ -42,6 +42,9 @@ export interface Chat {
   displayName?: string;
   messages?: any[];
   lastMsgTimestamp?: number;
+  pinned?: Date | null;
+  presence?: 'available' | 'unavailable' | 'composing' | 'recording' | null;
+  lastSeen?: number | null;
 }
 
 export interface Contact {

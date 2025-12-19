@@ -289,9 +289,9 @@ export const deleteSession = async (accountId) => {
  */
 export const listSessions = () => {
   const sessions = Array.from(instances.values()).map((instance) => ({
-    id: instance.id,
-    status: instance.connectionState.status,
-    whatsappJid: instance.whatsappJid || null,
+    id: instance?.id || null,
+    status: instance?.connectionState?.status || 'close',
+    whatsappJid: instance?.whatsappJid || null,
   }));
   
   const sessionsByWhatsAppJid = new Map();
@@ -316,7 +316,7 @@ export const listSessions = () => {
         if (currentPriority > existingPriority) {
           sessionsByWhatsAppJid.set(session.whatsappJid, session);
         } else if (currentPriority === existingPriority && session.status === 'open') {
-          if (session.id > existing.id) {
+          if (session.id && existing.id && session.id > existing.id) {
             sessionsByWhatsAppJid.set(session.whatsappJid, session);
           }
         }

@@ -66,7 +66,17 @@ export default function ContactSelector({
         {isForwardMode && forwardingMessage && (
           <div className="mb-4 p-3 bg-gray-50 rounded-lg border-l-4 border-blue-500">
             <div className="text-xs text-gray-500 mb-1">İletilecek mesaj:</div>
-            <div className="text-sm truncate">{forwardingMessage.text || forwardingMessage.body || 'Mesaj'}</div>
+            <div className="text-sm font-medium text-gray-700 mb-1">
+              {forwardingMessage.fromMe ? 'Sen' : (forwardingMessage.pushName || 'Kişi')}
+            </div>
+            <div className="text-sm text-gray-600 break-words">
+              {forwardingMessage.text || forwardingMessage.body || 'Mesaj'}
+            </div>
+            {forwardingMessage.timestamp && (
+              <div className="text-xs text-gray-400 mt-1">
+                {new Date((forwardingMessage.timestamp > 1000000000000 ? forwardingMessage.timestamp : forwardingMessage.timestamp * 1000)).toLocaleString('tr-TR')}
+              </div>
+            )}
           </div>
         )}
 

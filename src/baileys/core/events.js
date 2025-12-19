@@ -797,24 +797,33 @@ export const bindSocketEvents = (instance) => {
 
   const messagesUpsertListener = async (event) => {
     const { type, messages } = event;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return;
+    }
+    
     for (const msg of messages) {
-      saveMessages(instance, msg.key?.remoteJid, [msg]);
+      if (msg.key?.remoteJid) {
+        saveMessages(instance, msg.key.remoteJid, [msg]);
+      }
     }
     await saveMessagesToPrisma(sessionId, messages);
 
+    // WebSocket'e bildir - TÜM mesajlar için (sadece notify değil)
+    // type === "notify" yeni mesajlar için, type === "append" geçmiş mesajlar için
+    if (wsBroadcastFn) {
+      const formattedMessages = messages.map(formatMessage);
+      logger.info({ sessionId, count: messages.length, type }, "Mesajlar WebSocket'e gönderiliyor");
+      
+      wsBroadcastFn({
+        type: "messages.upsert",
+        sessionId,
+        messages: formattedMessages,
+        eventType: type,
+      });
+    }
+    
     if (type === "notify") {
       logger.info({ sessionId, count: messages.length }, "Yeni mesajlar alındı");
-      
-      // WebSocket'e bildir - yeni mesajlar geldi
-      if (wsBroadcastFn) {
-        const formattedMessages = messages.map(formatMessage);
-        wsBroadcastFn({
-          type: "messages.upsert",
-          sessionId,
-          messages: formattedMessages,
-          eventType: type,
-        });
-      }
     }
   };
   sock.ev.on("messages.upsert", messagesUpsertListener);

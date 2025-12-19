@@ -12,6 +12,7 @@ Aşağıdaki dosyalar proje geliştirme sırasında **mutlaka referans alınmal�
 
 1. **`BAILEYS_API_KULLANIM_RAPORU.md`** - Baileys API metodlarının kullanım durumu ve detayları
 2. **`BaileyTipREADME.md`** - Baileys kütüphanesinin resmi dokümantasyonu ve kullanım örnekleri
+3. **`BaileysDetailApiReferance.md`** - Baileys kütüphanesinin resmi dokümantasyonu ve kullanım örnekleri
 
 ## 🏗️ Proje Yapısı
 

@@ -24,3 +24,4 @@ export const downloadAndProcessHistorySyncNotificationUtil = async (accountId, n
 
 
 
+

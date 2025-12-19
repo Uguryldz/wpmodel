@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X } from 'lucide-react';
 import { extractMessageText } from '../utils/messageUtils';
 import { shouldShowDateSeparator } from '../utils/dateUtils';
@@ -65,6 +65,8 @@ interface MessageListProps {
   onPinMessage?: (msg: Message, type: number, time?: number) => void;
   onRejectCall?: (callId: string, callFrom: string) => void;
   onDeleteMessageForMe?: (msg: Message) => void;
+  searchTerm?: string;
+  onSearchChange?: (term: string) => void;
 }
 
 export default function MessageList({
@@ -91,7 +93,21 @@ export default function MessageList({
   onPinMessage,
   onRejectCall,
   onDeleteMessageForMe,
+  searchTerm = '',
+  onSearchChange,
 }: MessageListProps) {
+  const [showSearch, setShowSearch] = React.useState(false);
+  
+  // Mesajları filtrele
+  const filteredMessages = useMemo(() => {
+    if (!searchTerm.trim()) return messages;
+    
+    const term = searchTerm.toLowerCase();
+    return messages.filter(msg => {
+      const text = extractMessageText(msg.message || msg) || msg.text || msg.body || '';
+      return text.toLowerCase().includes(term);
+    });
+  }, [messages, searchTerm]);
   // Otomatik scroll hook'u
   const { messagesEndRef, messagesContainerRef, scrollToBottom } = useAutoScroll({
     messages,
@@ -160,7 +176,13 @@ export default function MessageList({
           </button>
           <button className="hover:text-gray-800"><Video size={20} /></button>
           <button className="hover:text-gray-800"><Phone size={20} /></button>
-          <button className="hover:text-gray-800"><Search size={20} /></button>
+          <button 
+            onClick={() => setShowSearch(!showSearch)}
+            className="hover:text-gray-800"
+            title="Mesajlarda ara"
+          >
+            <Search size={20} />
+          </button>
           <button 
             onClick={onMarkAsRead}
             className="hover:text-gray-800"
@@ -172,6 +194,39 @@ export default function MessageList({
         </div>
       </div>
 
+      {/* Mesaj Arama */}
+      {showSearch && (
+        <div className="bg-white border-b p-2">
+          <div className="flex items-center space-x-2">
+            <Search size={18} className="text-gray-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => onSearchChange?.(e.target.value)}
+              placeholder="Mesajlarda ara..."
+              className="flex-1 outline-none text-sm"
+              autoFocus
+            />
+            {searchTerm && (
+              <button
+                onClick={() => {
+                  onSearchChange?.('');
+                  setShowSearch(false);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X size={18} />
+              </button>
+            )}
+          </div>
+          {searchTerm && (
+            <div className="text-xs text-gray-500 mt-1">
+              {filteredMessages.length} mesaj bulundu
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Mesajlar */}
       <div 
         ref={messagesContainerRef}
@@ -181,13 +236,13 @@ export default function MessageList({
         }}
       >
         <div className="space-y-2">
-          {messages.length === 0 ? (
+          {filteredMessages.length === 0 ? (
             <div className="text-center text-gray-500 text-sm">
-              Henüz mesaj yok
+              {searchTerm ? 'Arama sonucu bulunamadı' : 'Henüz mesaj yok'}
             </div>
           ) : (
-            messages.map((msg, index) => {
-              const prevMsg = index > 0 ? messages[index - 1] : null;
+            filteredMessages.map((msg, index) => {
+              const prevMsg = index > 0 ? filteredMessages[index - 1] : null;
               const showDateSeparator = shouldShowDateSeparator(
                 prevMsg?.timestamp || prevMsg?.messageTimestamp,
                 msg.timestamp || msg.messageTimestamp
@@ -203,6 +258,20 @@ export default function MessageList({
               if (!text && msg.message) {
                 text = extractMessageText(msg);
               }
+              
+              // Arama terimini highlight et
+              const highlightText = (text: string, term: string) => {
+                if (!term.trim()) return text;
+                const regex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                const parts = text.split(regex);
+                return parts.map((part, i) => 
+                  regex.test(part) ? (
+                    <mark key={i} className="bg-yellow-200 px-1 rounded">{part}</mark>
+                  ) : (
+                    part
+                  )
+                );
+              };
               
               // Protocol mesajları için özel işleme
               const isProtocolMessage = msg.messageStubType || msg.type?.startsWith('protocol_');
@@ -271,27 +340,37 @@ export default function MessageList({
                   }}
                 >
                   <div
-                    className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm relative ${
+                    className={`max-w-[65%] md:max-w-[70%] px-2 py-1.5 text-sm relative transition-all ${
                       isProtocol
                         ? 'bg-transparent text-gray-500 italic text-center w-full max-w-none'
                         : fromMe 
                           ? 'bg-[#d9fdd3] text-gray-900 rounded-[7.5px] rounded-tr-[4px]' 
                           : 'bg-white text-gray-900 rounded-[7.5px] rounded-tl-[4px]'
-                    }`}
+                    } ${msg.id?.startsWith('temp-') || msg.status === 'sending' 
+                      ? 'opacity-75 scale-95 animate-slide-in' 
+                      : 'opacity-100 scale-100 animate-fade-in'}`}
                     style={isProtocol ? {} : {
                       boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)'
                     }}
                   >
-                    {!isProtocol && !fromMe && msg.participant && (
-                      <div className="text-xs font-semibold text-gray-600 mb-0.5">
-                        {msg.pushName || msg.participant.split('@')[0]}
+                    {!isProtocol && !fromMe && (msg.participant || (selectedChat?.id.includes('@g.us') && msg.from)) && (
+                      <div className="text-xs font-semibold text-gray-600 mb-0.5 flex items-center space-x-1">
+                        {selectedChat?.id.includes('@g.us') && msg.from && !msg.participant && (
+                          <span>{msg.pushName || msg.from.split('@')[0]}</span>
+                        )}
+                        {msg.participant && (
+                          <span>{msg.pushName || msg.participant.split('@')[0]}</span>
+                        )}
                       </div>
                     )}
                     
                     {!isProtocol && msg.quotedMessage && (
-                      <div className="border-l-2 border-blue-500 pl-2 mb-1 text-xs text-gray-600 bg-gray-100 rounded">
-                        <div className="font-semibold">{msg.quotedMessage.from || 'Kişi'}</div>
-                        <div className="truncate">{msg.quotedMessage.text || 'Mesaj'}</div>
+                      <div className="border-l-4 border-blue-500 pl-2 mb-1 text-xs text-gray-600 bg-gray-100 rounded py-1">
+                        <div className="font-semibold text-blue-600">{msg.quotedMessage.from || 'Kişi'}</div>
+                        <div className="truncate text-gray-700">{msg.quotedMessage.text || msg.quotedMessage.body || 'Mesaj'}</div>
+                        {msg.quotedMessage.id && (
+                          <div className="text-[10px] text-gray-400 mt-0.5">Yanıtlanan mesaj</div>
+                        )}
                       </div>
                     )}
                     
@@ -333,7 +412,7 @@ export default function MessageList({
                         {isMediaMessage ? (
                           <MediaMessage message={msg} fromMe={fromMe} sessionId={activeAccountId} />
                         ) : (
-                          text || '⟨desteksiz mesaj tipi⟩'
+                          searchTerm.trim() ? highlightText(text || '⟨desteksiz mesaj tipi⟩', searchTerm) : (text || '⟨desteksiz mesaj tipi⟩')
                         )}
                       </div>
                     )}
@@ -343,8 +422,13 @@ export default function MessageList({
                         fromMe ? 'justify-end' : 'justify-start'
                       }`}>
                         <span className="opacity-70">{ts}</span>
-                        {msg.edited && (
-                          <span className="ml-1 opacity-70 italic">Düzenlendi</span>
+                        {(msg.edited || msg.editedAt) && (
+                          <span className="ml-1 opacity-70 italic" title={msg.editedAt ? new Date(msg.editedAt).toLocaleString('tr-TR') : ''}>
+                            Düzenlendi
+                          </span>
+                        )}
+                        {msg.starred && (
+                          <Star size={12} className="ml-1 text-yellow-500 fill-yellow-500" />
                         )}
                         {fromMe && (
                           <>

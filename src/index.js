@@ -169,29 +169,96 @@ const PORT = Number(process.env.PORT || 3000);
 const server = createServer(app);
 
 // WebSocket server oluştur
-const wss = new WebSocketServer({ server, path: "/ws" });
+// clientTracking: true - bağlantıları otomatik takip et
+// perMessageDeflate: false - performans için sıkıştırmayı kapat
+const wss = new WebSocketServer({ 
+  server, 
+  path: "/ws",
+  clientTracking: true,
+  perMessageDeflate: false,
+  // WebSocket bağlantısını sürekli açık tutmak için timeout'ları artır
+  maxPayload: 100 * 1024 * 1024, // 100MB max payload
+});
 
 // WebSocket bağlantılarını sakla
 const wsClients = new Set();
 
 wss.on("connection", (ws, req) => {
-  console.log("[WebSocket] Yeni bağlantı:", req.socket.remoteAddress);
+  console.log("[WebSocket] ✅ Yeni bağlantı:", req.socket.remoteAddress);
   wsClients.add(ws);
 
+  // WebSocket bağlantısını sürekli açık tutmak için ping-pong mekanizması
+  let pingInterval = null;
+  let pongTimeout = null;
+  let isAlive = true;
+
+  // Ping gönder (her 30 saniyede bir)
+  pingInterval = setInterval(() => {
+    if (ws.readyState === 1) { // WebSocket.OPEN
+      try {
+        isAlive = false;
+        ws.ping();
+        
+        // Pong gelmezse bağlantıyı kapat
+        pongTimeout = setTimeout(() => {
+          if (!isAlive) {
+            console.warn("[WebSocket] ⚠️ Pong alınamadı, bağlantı kapatılıyor");
+            ws.terminate();
+          }
+        }, 10000); // 10 saniye içinde pong gelmezse kapat
+      } catch (error) {
+        console.error("[WebSocket] Ping gönderme hatası:", error);
+      }
+    }
+  }, 30000); // 30 saniyede bir ping gönder
+
+  // Pong alındığında isAlive'i true yap
+  ws.on("pong", () => {
+    isAlive = true;
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = null;
+    }
+  });
+
   ws.on("close", () => {
-    console.log("[WebSocket] Bağlantı kapandı");
+    console.log("[WebSocket] ⚠️ Bağlantı kapandı");
     wsClients.delete(ws);
+    
+    // Interval'leri temizle
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = null;
+    }
   });
 
   ws.on("error", (error) => {
-    console.error("[WebSocket] Hata:", error);
+    console.error("[WebSocket] ❌ Hata:", error);
+    
+    // Interval'leri temizle
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+    if (pongTimeout) {
+      clearTimeout(pongTimeout);
+      pongTimeout = null;
+    }
   });
 
   // İlk bağlantıda mevcut session'ları gönder
-  ws.send(safeStringify({
-    type: "connected",
-    message: "WebSocket bağlantısı kuruldu"
-  }));
+  try {
+    ws.send(safeStringify({
+      type: "connected",
+      message: "WebSocket bağlantısı kuruldu"
+    }));
+  } catch (error) {
+    console.error("[WebSocket] İlk mesaj gönderme hatası:", error);
+  }
 });
 
 // WebSocket'e mesaj gönderme fonksiyonu
@@ -616,6 +683,27 @@ app.get(
   })
 );
 
+// DİKKAT: /contacts/device route'u /contacts/:jid route'undan ÖNCE tanımlanmalı
+// yoksa "device" bir jid olarak algılanır ve "Number not found" hatası alınır
+app.get(
+  "/:sessionId/contacts/device",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    console.log(`[GET /${sessionId}/contacts/device] Cihazdaki contact'lar çekiliyor...`);
+    try {
+      const result = await fetchDeviceContacts(sessionId);
+      console.log(`[GET /${sessionId}/contacts/device] ✅ ${result.data?.length || 0} contact çekildi`);
+      res.json(result);
+    } catch (error) {
+      console.error(`[GET /${sessionId}/contacts/device] ❌ Hata:`, error);
+      res.status(500).json({ 
+        data: [], 
+        error: error.message || "Cihazdan contact'lar çekilemedi" 
+      });
+    }
+  })
+);
+
 app.get(
   "/:sessionId/contacts/blocklist",
   asyncHandler(async (req, res) => {
@@ -676,25 +764,6 @@ app.post(
     const { clearDb } = req.query;
     const result = await refreshContacts(sessionId, { clearDb: clearDb !== "false" });
     res.json(result);
-  })
-);
-
-app.get(
-  "/:sessionId/contacts/device",
-  asyncHandler(async (req, res) => {
-    const { sessionId } = req.params;
-    console.log(`[GET /${sessionId}/contacts/device] Cihazdaki contact'lar çekiliyor...`);
-    try {
-      const result = await fetchDeviceContacts(sessionId);
-      console.log(`[GET /${sessionId}/contacts/device] ✅ ${result.data?.length || 0} contact çekildi`);
-      res.json(result);
-    } catch (error) {
-      console.error(`[GET /${sessionId}/contacts/device] ❌ Hata:`, error);
-      res.status(500).json({ 
-        data: [], 
-        error: error.message || "Cihazdan contact'lar çekilemedi" 
-      });
-    }
   })
 );
 
@@ -877,10 +946,16 @@ app.post(
     const { sessionId } = req.params;
     const { jid, text, title, buttonText, sections, footer } = req.body || {};
 
-    if (!jid || !text || !title || !buttonText || !sections || sections.length === 0) {
+    if (!jid || !text || !buttonText || !sections || sections.length === 0) {
       return res.status(400).json({ 
-        error: "jid, text, title, buttonText ve sections alanları zorunludur" 
+        error: "jid, text, buttonText ve sections alanları zorunludur" 
       });
+    }
+    
+    // Title opsiyonel ama genellikle kullanılır
+    if (!title || !title.trim()) {
+      // Title yoksa varsayılan bir title kullan
+      title = "Seçenekler";
     }
 
     const result = await sendListMessage(

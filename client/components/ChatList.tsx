@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Edit2, Users, MoreVertical, LogOut, VolumeX, RefreshCcw, Archive, ArchiveRestore, Trash2, CheckCheck, XCircle } from 'lucide-react';
+import { Search, Edit2, Users, MoreVertical, LogOut, VolumeX, Volume2, RefreshCcw, Archive, ArchiveRestore, Trash2, CheckCheck, XCircle, Pin, PinOff } from 'lucide-react';
 import * as api from '../api';
 import { extractPhoneFromJid } from '../utils/contactUtils';
 
@@ -22,6 +22,7 @@ interface Chat {
   profilePicture?: string;
   verifiedName?: string | null;
   archived?: boolean;
+  pinned?: Date | null;
 }
 
 interface ChatListProps {
@@ -46,6 +47,9 @@ interface ChatListProps {
   onArchiveChat?: (chat: Chat, archive: boolean) => void;
   onDeleteChat?: (chat: Chat) => void;
   onMarkChatRead?: (chat: Chat, markRead: boolean) => void;
+  onPinChat?: (chat: Chat, pin: boolean) => void;
+  onMuteChat?: (chat: Chat, durationMs: number | null) => void;
+  onShowContactProfile?: (chat: Chat) => void;
 }
 
 export default function ChatList({
@@ -70,6 +74,9 @@ export default function ChatList({
   onArchiveChat,
   onDeleteChat,
   onMarkChatRead,
+  onPinChat,
+  onMuteChat,
+  onShowContactProfile,
 }: ChatListProps) {
   const [contextMenuChat, setContextMenuChat] = useState<Chat | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -267,15 +274,23 @@ export default function ChatList({
             <div
               key={chat.id}
               onClick={() => onSelectChat(chat)}
+              onDoubleClick={() => {
+                if (!chat.id.includes('@g.us') && onShowContactProfile) {
+                  onShowContactProfile(chat);
+                }
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setContextMenuChat(chat);
                 setContextMenuPosition({ x: e.clientX, y: e.clientY });
               }}
-              className={`p-3 flex items-center space-x-3 hover:bg-gray-50 cursor-pointer border-b relative ${
+              className={`p-3 flex items-center space-x-3 hover:bg-gray-50 cursor-pointer border-b relative transition-all duration-300 ${
                 selectedChat?.id === chat.id ? 'bg-gray-100' : ''
-              }`}
+              } ${chat.pinned ? 'bg-blue-50' : ''}`}
             >
+              {chat.pinned && (
+                <Pin size={14} className="absolute top-1 right-1 text-blue-500" />
+              )}
               <div className="relative flex-shrink-0">
                 {chat.profilePicture && chat.profilePicture !== '' && chat.profilePicture !== 'NO_PICTURE' ? (
                   <img
@@ -319,8 +334,11 @@ export default function ChatList({
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-center">
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm truncate">
-                      {chat.name}
+                    <div className="flex items-center space-x-1">
+                      <div className="font-semibold text-sm truncate">
+                        {chat.name}
+                      </div>
+                      {chat.isMuted && <VolumeX size={14} className="text-gray-400 flex-shrink-0" />}
                     </div>
                     {!chat.id.includes('@g.us') && (
                       <div className="text-xs text-gray-400 truncate">
@@ -401,6 +419,55 @@ export default function ChatList({
                   <>
                     <XCircle size={16} />
                     <span>Okunmadı İşaretle</span>
+                  </>
+                )}
+              </button>
+            )}
+            {onPinChat && (
+              <button
+                onClick={() => {
+                  onPinChat(contextMenuChat, !contextMenuChat.pinned);
+                  setContextMenuChat(null);
+                  setContextMenuPosition(null);
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2"
+              >
+                {contextMenuChat.pinned ? (
+                  <>
+                    <PinOff size={16} />
+                    <span>Sabitlemeyi Kaldır</span>
+                  </>
+                ) : (
+                  <>
+                    <Pin size={16} />
+                    <span>Sabitle</span>
+                  </>
+                )}
+              </button>
+            )}
+            {onMuteChat && (
+              <button
+                onClick={() => {
+                  if (contextMenuChat.isMuted) {
+                    onMuteChat(contextMenuChat, null);
+                  } else {
+                    // 8 saat sessize al
+                    onMuteChat(contextMenuChat, 8 * 60 * 60 * 1000);
+                  }
+                  setContextMenuChat(null);
+                  setContextMenuPosition(null);
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2"
+              >
+                {contextMenuChat.isMuted ? (
+                  <>
+                    <Volume2 size={16} />
+                    <span>Sessizliği Kaldır</span>
+                  </>
+                ) : (
+                  <>
+                    <VolumeX size={16} />
+                    <span>Sessize Al (8 saat)</span>
                   </>
                 )}
               </button>

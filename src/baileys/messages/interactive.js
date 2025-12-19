@@ -2,6 +2,7 @@
 // BaileyTipREADME.md'deki örneklere göre güncellendi
 import { ensureSocket, normalizeJid, getAccountId } from "../shared.js";
 import { logger } from "../../shared.js";
+import { generateWAMessageFromContent } from "baileys";
 
 /**
  * Butonlu mesaj gönder
@@ -31,7 +32,7 @@ export const sendButtonMessage = async (accountId, to, text, buttons, footer, he
   const sock = ensureSocket(accountId);
 
   // Baileys formatına göre button mesajı oluştur
-  // BaileyTipREADME.md ve web araması sonuçlarına göre format
+  // Web araması sonuçlarına göre headerType eklenmeli
   const content = {
     text: text,
     footer: footer || undefined,
@@ -60,24 +61,29 @@ export const sendButtonMessage = async (accountId, to, text, buttons, footer, he
       }
       
       return buttonObj;
-    })
+    }),
+    // headerType ekle (Baileys'in güncel formatına göre gerekli)
+    // 1 = Text, 2 = Image, 3 = Video, 4 = Document
+    headerType: header ? header.type : 1
   };
 
   // Header ekle (eğer varsa)
-  // Baileys'te headerType kullanılmıyor, direkt image/video/document ekleniyor
   if (header) {
     if (header.type === 2 && header.image) {
-      // Image header için image ekle ve text'i caption olarak kullan
-      content.image = header.image;
-      // text zaten var, image için caption olarak kullanılır
+      // Image header için image ekle
+      content.image = typeof header.image === 'string' 
+        ? { url: header.image } 
+        : header.image;
     } else if (header.type === 3 && header.video) {
       // Video header için video ekle
-      content.video = header.video;
-      // text zaten var, video için caption olarak kullanılır
+      content.video = typeof header.video === 'string' 
+        ? { url: header.video } 
+        : header.video;
     } else if (header.type === 4 && header.document) {
       // Document header için document ekle
-      content.document = header.document;
-      // text zaten var, document için caption olarak kullanılır
+      content.document = typeof header.document === 'string' 
+        ? { url: header.document } 
+        : header.document;
     } else if (header.type === 1 && header.text) {
       // Text header için text'i birleştir
       content.text = header.text + "\n\n" + text;
@@ -112,8 +118,13 @@ export const sendButtonMessage = async (accountId, to, text, buttons, footer, he
  * @returns {Promise<Object>}
  */
 export const sendListMessage = async (accountId, to, text, title, buttonText, sections, footer) => {
-  if (!to || !text || !title || !buttonText || !sections || sections.length === 0) {
-    throw new Error("to, text, title, buttonText ve sections alanları zorunludur");
+  if (!to || !text || !buttonText || !sections || sections.length === 0) {
+    throw new Error("to, text, buttonText ve sections alanları zorunludur");
+  }
+  
+  // Title zorunlu - Baileys list mesajları için title gerekiyor
+  if (!title || !title.trim()) {
+    throw new Error("List mesajı için title zorunludur");
   }
 
   // Toplam satır sayısını kontrol et (max 10)
@@ -126,36 +137,175 @@ export const sendListMessage = async (accountId, to, text, title, buttonText, se
   const sock = ensureSocket(accountId);
 
   // Baileys formatına göre list mesajı oluştur
-  // BaileyTipREADME.md ve web araması sonuçlarına göre format
+  // Web araması sonuçlarına göre format - rowId kullanılmalı
+  // Tüm alanların dolu olduğundan emin ol
+  // Baileys'in beklediği format: { text, title?, buttonText, sections: [{title, rows: [{title, description?, rowId}]}], footer? }
+  // NOT: Baileys'te liste mesajları için text, buttonText ve sections zorunludur
+  // title opsiyonel olabilir ama genellikle kullanılır
+  // listType GEREKSIZ - web araması sonuçlarında yok
   const content = {
-    text: text,
-    footer: footer || undefined,
-    title: title,
-    buttonText: buttonText,
-    sections: sections.map(section => ({
-      title: section.title || "",
-      rows: section.rows.map(row => {
-        // Farklı formatları destekle
+    text: text.trim(),
+    buttonText: buttonText.trim(),
+    sections: sections.map(section => {
+      // Section title boş olamaz, en azından boş string olmalı
+      const sectionTitle = (section.title || "").trim();
+      
+      // Rows'ları düzenle
+      const sectionRows = (section.rows || []).map(row => {
+        // Farklı formatları destekle - id veya rowId kullanılabilir
         const rowId = row.rowId || row.id || `row_${Math.random().toString(36).substr(2, 9)}`;
-        const rowTitle = row.title;
-        const description = row.description || undefined;
+        const rowTitle = (row.title || "").trim();
         
-        return {
+        // Title boş olamaz
+        if (!rowTitle) {
+          throw new Error("Her satır için title zorunludur");
+        }
+        
+        // Baileys'in güncel formatına göre rowId kullan
+        // Format: { title: string, rowId: string, description?: string }
+        const rowObj = {
           title: rowTitle,
-          description,
-          rowId
+          rowId: String(rowId) // rowId string olmalı
+        };
+        
+        // Description varsa ekle (opsiyonel, ama boş string değilse)
+        if (row.description && row.description.trim()) {
+          rowObj.description = row.description.trim();
+        }
+        
+        return rowObj;
+      });
+      
+      // En az bir row olmalı
+      if (sectionRows.length === 0) {
+        throw new Error("Her bölüm için en az bir satır olmalıdır");
+      }
+      
+      // Section formatı: { title: string, rows: Array<{title, rowId, description?}> }
+      return {
+        title: sectionTitle,
+        rows: sectionRows
         };
       })
-    }))
   };
+  
+  // Title zorunlu - her zaman ekle
+  content.title = title.trim();
+  
+  // Footer varsa ekle (opsiyonel)
+  if (footer && footer.trim()) {
+    content.footer = footer.trim();
+  }
+  
+  // Baileys'in beklediği formatı doğrula
+  // Tüm zorunlu alanların dolu olduğundan emin ol
+  if (!content.text || !content.buttonText || !content.sections || content.sections.length === 0) {
+    throw new Error("List mesajı için text, buttonText ve sections alanları zorunludur");
+  }
+  
+  // Her section'ın en az bir row'u olmalı
+  for (const section of content.sections) {
+    if (!section.rows || section.rows.length === 0) {
+      throw new Error("Her bölüm için en az bir satır olmalıdır");
+    }
+    for (const row of section.rows) {
+      if (!row.title || !row.rowId) {
+        throw new Error("Her satır için title ve rowId zorunludur");
+      }
+    }
+  }
+  
+  // Debug: Content formatını kontrol et
+  logger.debug({ 
+    accountId, 
+    jid, 
+    contentStructure: {
+      hasText: !!content.text,
+      hasTitle: !!content.title,
+      hasButtonText: !!content.buttonText,
+      sectionsCount: content.sections.length,
+      sectionsStructure: content.sections.map(s => ({
+        hasTitle: !!s.title,
+        rowsCount: s.rows.length,
+        rowsStructure: s.rows.map(r => ({
+          hasTitle: !!r.title,
+          hasRowId: !!r.rowId,
+          hasDescription: !!r.description
+        }))
+      }))
+    }
+  }, "List mesajı format kontrolü");
 
   try {
-    logger.info({ accountId, jid, content: JSON.stringify(content, null, 2) }, "List mesajı gönderiliyor");
-    await sock.sendMessage(jid, content);
-    logger.info({ accountId, jid, sectionCount: sections.length, totalRows }, "List mesajı gönderildi");
+    logger.info({ 
+      accountId, 
+      jid, 
+      content: JSON.stringify(content, null, 2),
+      sectionCount: sections.length,
+      totalRows: sections.reduce((sum, s) => sum + (s.rows?.length || 0), 0)
+    }, "List mesajı gönderiliyor");
+    
+    // Baileys'in beklediği formatı kullan
+    // generateWAMessageFromContent ile formatı doğrula ve gönder
+    // Bu fonksiyon Baileys'in beklediği formata çevirir
+    
+    // Final content'i hazırla - tüm alanların doğru formatta olduğundan emin ol
+    const finalContent = {
+      ...content
+    };
+    
+    // Content'i logla (debug için)
+    logger.debug({ 
+      accountId, 
+      jid, 
+      finalContent: JSON.stringify(finalContent, null, 2),
+      contentKeys: Object.keys(finalContent),
+      sectionsCount: finalContent.sections?.length,
+      firstSection: finalContent.sections?.[0],
+      firstRow: finalContent.sections?.[0]?.rows?.[0]
+    }, "List mesajı final content");
+    
+    // Baileys'in beklediği format: listMessage wrapper'ı ile gönder
+    // Format: { listMessage: { text, title, buttonText, sections, footer? } }
+    const listMessageContent = {
+      listMessage: finalContent
+    };
+    
+    logger.debug({ 
+      accountId, 
+      jid, 
+      listMessageContent: JSON.stringify(listMessageContent, null, 2),
+      contentKeys: Object.keys(finalContent),
+      sectionsCount: finalContent.sections?.length
+    }, "List mesajı listMessage wrapper ile gönderiliyor");
+    
+    // Direkt sendMessage ile listMessage wrapper'ı ile gönder
+    const result = await sock.sendMessage(jid, listMessageContent);
+    
+    logger.info({ 
+      accountId, 
+      jid, 
+      sectionCount: sections.length, 
+      totalRows: sections.reduce((sum, s) => sum + (s.rows?.length || 0), 0),
+      messageId: result?.key?.id,
+      resultKeys: result ? Object.keys(result) : []
+    }, "List mesajı gönderildi");
+    
+    return result;
   } catch (error) {
-    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "List mesajı gönderilemedi");
-    throw error;
+    logger.error({ 
+      error: {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+        code: error?.code,
+        status: error?.status
+      }, 
+      accountId, 
+      jid, 
+      content: JSON.stringify(content, null, 2) 
+    }, "List mesajı gönderilemedi");
+    throw new Error(`List mesajı gönderilemedi: ${error.message}`);
   }
 
   return { accountId: getAccountId(accountId), jid, status: "queued" };
@@ -178,15 +328,73 @@ export const sendTemplateMessage = async (accountId, to, templateName, languageC
   const jid = normalizeJid(to);
   const sock = ensureSocket(accountId);
 
-  const content = {
-    template: {
+  // WhatsApp Business API şablon formatı
+  // Components formatı: [{ type: "body"|"header"|"footer"|"button", parameters: [...] }]
+  const templateContent = {
       name: templateName,
       language: {
         code: languageCode,
         policy: "deterministic"
-      },
-      components: components.length > 0 ? components : undefined
     }
+  };
+
+  // Components varsa ekle (boş array değilse ve geçerliyse)
+  if (components && Array.isArray(components) && components.length > 0) {
+    // Components formatını doğrula ve düzenle
+    templateContent.components = components.map(comp => {
+      const component = {
+        type: comp.type // "body", "header", "footer", "button"
+      };
+      
+      // Parameters varsa ekle
+      if (comp.parameters && comp.parameters.length > 0) {
+        component.parameters = comp.parameters.map(param => {
+          const paramObj = {
+            type: param.type // "text", "image", "video", "document", "payload"
+          };
+          
+          // Type'a göre uygun alanı ekle
+          if (param.type === "text" && param.text) {
+            paramObj.text = param.text;
+          } else if (param.type === "image" && param.image) {
+            // Image formatı: { url: string } veya direkt image objesi
+            paramObj.image = typeof param.image === 'string' 
+              ? { url: param.image } 
+              : param.image;
+          } else if (param.type === "video" && param.video) {
+            // Video formatı: { url: string } veya direkt video objesi
+            paramObj.video = typeof param.video === 'string' 
+              ? { url: param.video } 
+              : param.video;
+          } else if (param.type === "document" && param.document) {
+            // Document formatı: { url: string, filename?: string } veya direkt document objesi
+            paramObj.document = typeof param.document === 'string' 
+              ? { url: param.document } 
+              : param.document;
+          } else if (param.type === "payload" && param.payload) {
+            paramObj.payload = param.payload;
+          }
+          
+          return paramObj;
+        });
+      }
+      
+      // Button için sub_type ve index ekle
+      if (comp.type === "button" && comp.sub_type) {
+        component.sub_type = comp.sub_type; // "quick_reply" veya "url"
+      }
+      if (comp.type === "button" && comp.index !== undefined) {
+        component.index = comp.index; // Button index (0, 1, 2)
+      }
+      
+      return component;
+    });
+  }
+
+  // Baileys'in beklediği format: template wrapper'ı ile gönder
+  // Format: { template: { name, language: { code, policy }, components?: [...] } }
+  const content = {
+    template: templateContent
   };
 
   try {
@@ -194,8 +402,17 @@ export const sendTemplateMessage = async (accountId, to, templateName, languageC
     await sock.sendMessage(jid, content);
     logger.info({ accountId, jid }, "Template mesajı gönderildi");
   } catch (error) {
-    logger.error({ error, accountId, jid, content: JSON.stringify(content, null, 2) }, "Template mesajı gönderilemedi");
-    throw error;
+    logger.error({ 
+      error: {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      }, 
+      accountId, 
+      jid, 
+      content: JSON.stringify(content, null, 2) 
+    }, "Template mesajı gönderilemedi");
+    throw new Error(`Template mesajı gönderilemedi: ${error.message}`);
   }
 
   return { accountId: getAccountId(accountId), jid, status: "queued" };

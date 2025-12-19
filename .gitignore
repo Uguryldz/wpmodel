@@ -13,5 +13,3 @@ prisma/dev.db-journal
 dist/
 .vite/
 
-# SSL certificates (development)
-.cert/

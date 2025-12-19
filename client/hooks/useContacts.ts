@@ -32,11 +32,51 @@ export function useContacts({
       }
 
       console.log('=== Contact\'lar API\'den yükleniyor ===', { sessionId, forceReload });
-      const contactsData = await api.getContacts(sessionId).catch(() => []);
+      
+      // Önce DB'den contact'ları yükle (cihaz rehberi)
+      let contactsData = await api.getContacts(sessionId).catch(() => []);
+      
+      // Eğer boşsa veya azsa, cihaz rehberinden de yükle
+      if (!contactsData || contactsData.length === 0 || forceReload) {
+        try {
+          const deviceContacts = await getDeviceContacts(sessionId);
+          if (deviceContacts && deviceContacts.length > 0) {
+            console.log('Cihaz rehberinden contact\'lar yüklendi:', deviceContacts.length);
+            // Cihaz rehberindeki contact'ları mevcut listeye ekle (telefon numarası mapping'i için)
+            const existingIds = new Set(contactsData.map((c: any) => c.id));
+            deviceContacts.forEach((deviceContact: any) => {
+              if (!existingIds.has(deviceContact.id)) {
+                contactsData.push(deviceContact);
+              } else {
+                // Mevcut contact'ı güncelle (cihaz rehberindeki isim öncelikli)
+                const index = contactsData.findIndex((c: any) => c.id === deviceContact.id);
+                if (index >= 0) {
+                  contactsData[index] = {
+                    ...contactsData[index],
+                    name: deviceContact.name || contactsData[index].name, // Cihaz rehberindeki isim öncelikli
+                    notify: contactsData[index].notify || deviceContact.notify,
+                    verifiedName: contactsData[index].verifiedName || deviceContact.verifiedName,
+                    imgUrl: contactsData[index].imgUrl || deviceContact.imgUrl,
+                    status: contactsData[index].status || deviceContact.status,
+                  };
+                }
+              }
+            });
+          }
+        } catch (deviceError) {
+          console.warn('Cihaz rehberinden contact\'lar yüklenemedi:', deviceError);
+        }
+      }
       
       const contactsMap = new Map<string, any>();
       if (contactsData && Array.isArray(contactsData)) {
         contactsData.forEach((contact: any) => {
+          // Telefon numarası mapping'i - JID'den telefon numarasını çıkar
+          const phoneFromJid = extractPhoneFromJid(contact.id);
+          if (phoneFromJid && !contact.name && !contact.notify) {
+            // Eğer isim yoksa, telefon numarasını göster
+            contact.displayPhone = phoneFromJid;
+          }
           contactsMap.set(contact.id, contact);
         });
         contactsCacheRef.current.set(sessionId, {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Smile, Paperclip, Mic, Send, Square, FileText } from 'lucide-react';
+import { X, Smile, Paperclip, Mic, Send, Square, FileText, Loader2 } from 'lucide-react';
 
 interface Message {
   id?: string;
@@ -27,6 +27,8 @@ interface MessageInputProps {
   onSendVoiceMessage?: (audioBlob: Blob) => void;
   activeAccountId?: string;
   onOpenTemplates?: () => void;
+  isSending?: boolean;
+  onSendMedia?: (file: File, type: 'image' | 'video' | 'document') => void;
 }
 
 export default function MessageInput({
@@ -47,6 +49,8 @@ export default function MessageInput({
   onSendVoiceMessage,
   activeAccountId,
   onOpenTemplates,
+  isSending = false,
+  onSendMedia,
 }: MessageInputProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -55,6 +59,8 @@ export default function MessageInput({
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Mikrofon izni kontrolü
   useEffect(() => {
@@ -222,17 +228,46 @@ export default function MessageInput({
       {/* Mesaj Giriş Alanı */}
       <div className="bg-gray-100 p-3 flex items-center space-x-3 relative">
         {showEmojiPicker && (
-          <div className="absolute bottom-16 left-3 bg-white rounded-lg shadow-2xl p-4 w-80 max-h-64 overflow-y-auto z-50">
-            <div className="grid grid-cols-8 gap-2">
-              {emojis.map((emoji, index) => (
+          <div className="absolute bottom-16 left-3 bg-white rounded-lg shadow-2xl w-80 max-h-80 flex flex-col z-50">
+            {/* Emoji kategorileri */}
+            <div className="flex border-b px-2 py-1 overflow-x-auto">
+              {['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '😚', '😙', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '😶‍🌫️', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'].slice(0, 8).map((emoji, index) => (
                 <button
                   key={index}
                   onClick={() => onInsertEmoji(emoji)}
-                  className="text-2xl hover:bg-gray-100 rounded p-1 transition-colors"
+                  className="text-xl hover:bg-gray-100 rounded p-1 transition-colors flex-shrink-0"
                 >
                   {emoji}
                 </button>
               ))}
+            </div>
+            {/* Emoji grid */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="grid grid-cols-8 gap-2">
+                {emojis.map((emoji, index) => (
+                  <button
+                    key={index}
+                    onClick={() => onInsertEmoji(emoji)}
+                    className="text-2xl hover:bg-gray-100 rounded p-1 transition-colors"
+                    title={emoji}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Arama */}
+            <div className="border-t px-2 py-2">
+              <input
+                type="text"
+                placeholder="Emoji ara..."
+                className="w-full px-2 py-1 border rounded text-sm"
+                onChange={(e) => {
+                  // Basit filtreleme - gerçek bir emoji arama kütüphanesi kullanılabilir
+                  const searchTerm = e.target.value.toLowerCase();
+                  // Bu basit bir örnek, gerçek uygulamada emoji veritabanı kullanılmalı
+                }}
+              />
             </div>
           </div>
         )}
@@ -240,6 +275,18 @@ export default function MessageInput({
         {showAttachMenu && (
           <div className="absolute bottom-16 left-14 bg-white rounded-lg shadow-2xl p-3 w-56 z-50">
             <div className="space-y-2">
+              <button
+                onClick={() => {
+                  fileInputRef.current?.click();
+                  onSetShowAttachMenu(false);
+                }}
+                className="w-full flex items-center space-x-3 p-3 hover:bg-gray-50 rounded-lg transition-colors"
+              >
+                <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white text-xl">
+                  📎
+                </div>
+                <span className="font-medium text-gray-700">Dosya Seç</span>
+              </button>
               {attachmentOptions.map((option, index) => (
                 <button
                   key={index}
@@ -287,16 +334,27 @@ export default function MessageInput({
             <FileText size={24} />
           </button>
         )}
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyPress={(e) => {
-            if (e.key === 'Enter') {
-              if (replyingTo) {
-                onReplyMessage(replyingTo);
-              } else {
-                onSendMessage();
+          onChange={(e) => {
+            setMessage(e.target.value);
+            // Otomatik yükseklik ayarla
+            if (textareaRef.current) {
+              textareaRef.current.style.height = 'auto';
+              textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+            }
+          }}
+          onKeyDown={(e) => {
+            // Shift+Enter ile yeni satır, Enter ile gönder
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              if (!isSending && message.trim()) {
+                if (replyingTo) {
+                  onReplyMessage(replyingTo);
+                } else {
+                  onSendMessage();
+                }
               }
             }
           }}
@@ -304,8 +362,34 @@ export default function MessageInput({
             onSetShowEmojiPicker(false);
             onSetShowAttachMenu(false);
           }}
-          placeholder="Bir mesaj yazın"
-          className="flex-1 bg-white rounded-lg px-4 py-2 outline-none"
+              placeholder="Bir mesaj yazın (Shift+Enter ile yeni satır)"
+              className="flex-1 bg-white rounded-lg px-4 py-2 outline-none resize-none overflow-y-auto max-h-[120px]"
+              rows={1}
+              disabled={isSending}
+              maxLength={4096}
+            />
+        {/* Gizli file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,video/*,.pdf,.doc,.docx,.txt"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file && onSendMedia) {
+              if (file.type.startsWith('image/')) {
+                onSendMedia(file, 'image');
+              } else if (file.type.startsWith('video/')) {
+                onSendMedia(file, 'video');
+              } else {
+                onSendMedia(file, 'document');
+              }
+            }
+            // Reset input
+            if (fileInputRef.current) {
+              fileInputRef.current.value = '';
+            }
+          }}
         />
         {isRecording ? (
           <div className="flex items-center space-x-2 bg-red-100 px-3 py-1 rounded-full">
@@ -326,13 +410,26 @@ export default function MessageInput({
               <X size={20} />
             </button>
           </div>
+        ) : isSending ? (
+          <div className="flex items-center space-x-2 text-gray-500">
+            <Loader2 size={20} className="animate-spin" />
+            <span className="text-xs">Gönderiliyor...</span>
+          </div>
         ) : message ? (
-          <button 
-            onClick={onSendMessage}
-            className="text-green-600 hover:text-green-700"
-          >
-            <Send size={24} />
-          </button>
+          <div className="flex flex-col items-end space-y-1">
+            <button 
+              onClick={onSendMessage}
+              className="text-green-600 hover:text-green-700"
+              disabled={isSending}
+            >
+              <Send size={24} />
+            </button>
+            {message.length > 0 && (
+              <span className={`text-xs ${message.length > 4000 ? 'text-red-500' : message.length > 3500 ? 'text-orange-500' : 'text-gray-400'}`}>
+                {message.length}/4096
+              </span>
+            )}
+          </div>
         ) : (
           <button 
             onClick={() => {

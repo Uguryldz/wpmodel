@@ -23,7 +23,31 @@ export function useMessages() {
           console.log('Cache\'den mesajlar yüklendi:', cachedMessages.length);
           setMessages(cachedMessages);
           currentChatKeyRef.current = messagesKey;
-          // Cache'den gösterdikten sonra arka planda güncelle
+          // Cache'den gösterdikten sonra arka planda DB'den güncelle
+          setTimeout(async () => {
+            try {
+              const dbData = await api.getMessages(sessionId, chatId, limit);
+              if (dbData && dbData.length > 0) {
+                // DB'den gelen mesajları cache ile birleştir
+                const existingIds = new Set(cachedMessages.map(m => m.id || m.key?.id));
+                const newMessages = dbData.filter((msg: any) => {
+                  const msgId = msg.id || msg.key?.id;
+                  return msgId && !existingIds.has(msgId);
+                });
+                if (newMessages.length > 0) {
+                  const merged = [...cachedMessages, ...newMessages].sort((a, b) => {
+                    const aTime = a.timestamp || a.messageTimestamp || 0;
+                    const bTime = b.timestamp || b.messageTimestamp || 0;
+                    return aTime - bTime;
+                  });
+                  messagesCacheRef.current.set(messagesKey, merged);
+                  setMessages(merged);
+                }
+              }
+            } catch (dbError) {
+              console.debug('DB\'den mesaj güncelleme hatası:', dbError);
+            }
+          }, 1000);
         } else {
           setMessages([]);
           messagesInitialLoadRef.current.delete(messagesKey);
@@ -32,6 +56,51 @@ export function useMessages() {
       
       const data = await api.getMessages(sessionId, chatId, limit);
       console.log('Mesajlar alındı (ham data):', data?.length || 0);
+      
+      // Eğer data boşsa ve DB'den yüklenmemişse, DB'den tekrar dene
+      if ((!data || data.length === 0) && !append) {
+        console.log('Mesajlar boş, DB\'den tekrar deneniyor...');
+        try {
+          const dbData = await api.getMessages(sessionId, chatId, limit);
+          if (dbData && dbData.length > 0) {
+            console.log('DB\'den mesajlar yüklendi:', dbData.length);
+            // DB'den gelen veriyi kullan
+            const mapped: Message[] = (dbData || []).map((msg: any) => {
+              const text = msg.text || extractMessageText(msg);
+              const body = msg.body || text;
+              
+              const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+
+              const fromMe = msg.fromMe !== undefined 
+                ? Boolean(msg.fromMe) 
+                : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+
+              return {
+                ...msg,
+                id: msgId,
+                text: text || body,
+                body: body || text,
+                fromMe: fromMe,
+                timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+              };
+            });
+
+            mapped.sort((a, b) => {
+              const aTime = a.timestamp || a.messageTimestamp || 0;
+              const bTime = b.timestamp || b.messageTimestamp || 0;
+              return aTime - bTime;
+            });
+
+            setMessages(mapped);
+            messagesCacheRef.current.set(messagesKey, mapped);
+            currentChatKeyRef.current = messagesKey;
+            messagesInitialLoadRef.current.set(messagesKey, true);
+            return;
+          }
+        } catch (dbError) {
+          console.warn('DB\'den mesajlar yüklenemedi:', dbError);
+        }
+      }
       
       if (!append && data && data.length > 0) {
         messagesInitialLoadRef.current.set(messagesKey, true);

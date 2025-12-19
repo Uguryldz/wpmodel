@@ -444,26 +444,36 @@ export const formatChat = (chat, sessionId = null) => {
   let chatName = chat.name || chat.displayName || chat.subject || chat.id;
   let verifiedName = null;
   
+  // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
+  // Örnek: chat.id = "52523188617453@lid", chat.lidJid = "905538781507@s.whatsapp.net"
+  let chatId = chat.id;
+  if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+    // Gerçek JID'yi lidJid'den al
+    chatId = chat.lidJid;
+    console.log(`[formatChat] @lid formatı düzeltildi: ${chat.id} -> ${chatId}`);
+  }
+  
   if (sessionId) {
     const instance = instances.get(sessionId);
     if (instance) {
-      if (chat.id.includes('@g.us')) {
+      if (chatId.includes('@g.us')) {
         imgUrl = chat.imgUrl || null;
       } else {
-        const contact = instance.contactsStore.get(chat.id);
+        // Gerçek JID ile contact'ı bul
+        const contact = instance.contactsStore.get(chatId);
         if (contact) {
           if (contact.imgUrl) {
             imgUrl = contact.imgUrl;
           }
           verifiedName = contact.verifiedName || null;
-          chatName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+          chatName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chatId;
         }
       }
     }
   }
   
   return {
-    id: chat.id,
+    id: chatId, // Gerçek JID'yi kullan
     name: chatName,
     verifiedName: verifiedName,
     unreadCount: chat.unreadCount ?? 0,
@@ -471,6 +481,7 @@ export const formatChat = (chat, sessionId = null) => {
     isMuted: Boolean(chat.isMuted),
     archived: chat.archived ?? false,
     imgUrl: imgUrl,
+    lidJid: chat.lidJid || null, // Orijinal lidJid'yi de sakla (gerekirse)
   };
 };
 

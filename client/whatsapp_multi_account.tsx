@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX, RefreshCcw, Reply, Forward, Trash2, Star, StarOff, Eye } from 'lucide-react';
 import * as api from './api';
+import { pinChat, muteChat } from './api/chats';
 import * as QRCode from 'qrcode';
 import AddAccountModal from './components/AddAccountModal';
 import ContactsModal from './components/ContactsModal';
@@ -11,6 +12,8 @@ import AccountSidebar from './components/AccountSidebar';
 import ChatList from './components/ChatList';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
+import Toast from './components/Toast';
+import ContactProfileModal from './components/ContactProfileModal';
 import { normalizePhoneNumber, extractPhoneFromJid } from './utils/contactUtils';
 import { extractMessageText } from './utils/messageUtils';
 import { COLORS, EMOJIS, ATTACHMENT_OPTIONS, CONTACTS_CACHE_TTL, PROFILE_PICTURE_BATCH_SIZE, PROFILE_PICTURE_DEBOUNCE_MS, PROFILE_PICTURE_BATCH_DELAY_MS } from './constants/appConstants';
@@ -62,6 +65,7 @@ export default function WhatsAppMultiAccount() {
     chatProfilePictures,
     setChatProfilePictures,
     queueProfilePicture,
+    messagesCacheRef: messagesHook.messagesCacheRef, // Mesaj cache'i için ref'i geç
   });
   
   // Account oluşturulduğunda contact ve chat'leri yükle
@@ -88,6 +92,11 @@ export default function WhatsAppMultiAccount() {
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
   const [currentPage, setCurrentPage] = useState<string>('main');
+  const [isSending, setIsSending] = useState(false);
+  const [messageSearchTerm, setMessageSearchTerm] = useState('');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
+  const [showContactProfile, setShowContactProfile] = useState(false);
+  const [selectedContactForProfile, setSelectedContactForProfile] = useState<api.Contact | null>(null);
   // Refs (WebSocket ve diğer)
   const chatsPollRef = useRef<NodeJS.Timeout | null>(null);
   const activeAccountRef = useRef<Account | undefined>(undefined);
@@ -145,14 +154,25 @@ export default function WhatsAppMultiAccount() {
       const sessionId = activeAccount.id;
       const hasInitialLoad = chatsHook.chatsInitialLoadRef.current.get(sessionId);
       
+      // Contact'ları her zaman yükle (DB senkronizasyonu için)
+      const cachedContacts = contactsHook.contactsCacheRef.current.get(sessionId);
+      if (!cachedContacts || cachedContacts.data.size === 0) {
+        console.log('Contact\'lar yüklenmemiş, yükleniyor...', sessionId);
+        contactsHook.loadContacts(sessionId, false).then(() => {
+          console.log('Contact\'lar yüklendi');
+        }).catch((error) => {
+          console.warn('Contact\'lar yüklenemedi:', error);
+        });
+      }
+      
       // Sadece ilk bağlantıda veya bağlantı durumu değiştiğinde yükle
       if (activeAccount.status === 'open' && !hasInitialLoad) {
         console.log('İlk bağlantı - sohbetler yükleniyor, sessionId:', sessionId);
         chatsHook.chatsInitialLoadRef.current.set(sessionId, true);
         chatsHook.chatsLoadedRef.current.set(sessionId, false);
         
-        // İlk bağlantıda contact'ları da yükle
-        contactsHook.loadContacts(sessionId).then(() => {
+        // İlk bağlantıda contact'ları da yükle (eğer yüklenmemişse)
+        contactsHook.loadContacts(sessionId, false).then(() => {
           // Sadece sohbet listesi boşsa yükle
           if (chatsHook.chats.length === 0) {
             chatsHook.loadChats(sessionId, 50, true);
@@ -162,6 +182,10 @@ export default function WhatsAppMultiAccount() {
         // Bağlı değilse de DB'den yükle (uygulama yeniden başladığında sohbetler görünsün)
         console.log('Hesap bağlı değil ama sohbetler yok - DB\'den yükleniyor');
         chatsHook.chatsInitialLoadRef.current.set(sessionId, true);
+        chatsHook.loadChats(sessionId, 50, true);
+      } else if (hasInitialLoad && chatsHook.chats.length === 0) {
+        // DB'den tekrar yükle (senkronizasyon için)
+        console.log('DB\'den sohbetler tekrar yükleniyor (senkronizasyon)...');
         chatsHook.loadChats(sessionId, 50, true);
       }
     } else {
@@ -210,30 +234,54 @@ export default function WhatsAppMultiAccount() {
     if (!activeAccount) return;
     
     try {
-      // Yeni bir chat oluştur veya mevcut chat'i aç
       const chatId = contact.id;
       
-      // Mesaj gönderme işlemi için chat'i seç
-      const newChat: Chat = {
-        id: chatId,
-        name: contact.name || contact.notify || contact.id,
-        unreadCount: 0,
-        conversationTimestamp: null,
-        isMuted: false
-      };
+      // Önce mevcut chat'lerde bu kişi için bir chat var mı kontrol et
+      const existingChat = chatsHook.chats.find(chat => chat.id === chatId);
       
-      chatsHook.setSelectedChat(newChat);
+      if (existingChat) {
+        // Mevcut chat'i aç
+        console.log('Mevcut chat açılıyor:', existingChat.id);
+        chatsHook.setSelectedChat(existingChat);
+        
+        // Mesajları yükle
+        await messagesHook.loadMessages(activeAccount.id, chatId);
+      } else {
+        // Yeni bir chat oluştur
+        console.log('Yeni chat oluşturuluyor:', chatId);
+        const contactFromMap = contactsMap.get(chatId);
+        const displayName = contactFromMap?.verifiedName || contactFromMap?.name || contactFromMap?.notify || contact.name || contact.notify || contact.verifiedName || contact.id;
+        
+        const newChat: Chat = {
+          id: chatId,
+          name: displayName,
+          verifiedName: contact.verifiedName || contactFromMap?.verifiedName,
+          profilePicture: contact.imgUrl || contactFromMap?.imgUrl || chatProfilePictures.get(chatId),
+          unreadCount: 0,
+          conversationTimestamp: null,
+          archived: false,
+          pinned: null,
+          lastMessage: '',
+          time: '',
+          isMuted: false
+        };
+        
+        chatsHook.setSelectedChat(newChat);
+        
+        // Mesajları yükle (boş olabilir)
+        await messagesHook.loadMessages(activeAccount.id, chatId);
+        
+        // Sohbet listesini de yenile (yeni chat eklenmiş olabilir) - force ile
+        chatsHook.loadChats(activeAccount.id, 50, true);
+      }
+      
+      // Modal'ları kapat
       setShowContactSelector(false);
+      setShowContactsModal(false);
       contactsHook.setContactSearchTerm('');
-      
-      // Mesajları yükle
-      await messagesHook.loadMessages(activeAccount.id, chatId);
-      
-      // Sohbet listesini de yenile (yeni chat eklenmiş olabilir) - force ile
-      chatsHook.loadChats(activeAccount.id, 50, true);
     } catch (error) {
       console.error('Kişi seçilemedi:', error);
-      alert('Kişi seçilemedi');
+      alert('Kişi seçilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
 
@@ -340,8 +388,9 @@ export default function WhatsAppMultiAccount() {
   };
 
   const sendMessage = async () => {
-    if (!messagesHook.message.trim() || !activeAccount || !chatsHook.selectedChat) return;
+    if (!messagesHook.message.trim() || !activeAccount || !chatsHook.selectedChat || isSending) return;
     
+    setIsSending(true);
     const messageText = messagesHook.message.trim();
     const tempMessageId = `temp-${Date.now()}`;
     
@@ -435,6 +484,90 @@ export default function WhatsAppMultiAccount() {
       
       // Kullanıcıya bilgi ver
       alert(`Mesaj gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // Medya mesajı gönderme handler'ı
+  const handleSendMedia = async (file: File, type: 'image' | 'video' | 'document') => {
+    if (!activeAccount || !chatsHook.selectedChat || isSending) return;
+    
+    setIsSending(true);
+    const tempMessageId = `temp-media-${Date.now()}`;
+    
+    try {
+      // Mimetype belirle
+      let mimetype = file.type || 'application/octet-stream';
+      if (type === 'image' && !mimetype.startsWith('image/')) {
+        mimetype = 'image/jpeg';
+      } else if (type === 'video' && !mimetype.startsWith('video/')) {
+        mimetype = 'video/mp4';
+      }
+      
+      // Optimistic UI mesajı
+      const optimisticMessage: Message = {
+        id: tempMessageId,
+        text: type === 'image' ? '📷 Resim' : type === 'video' ? '🎥 Video' : `📎 ${file.name}`,
+        body: type === 'image' ? '📷 Resim' : type === 'video' ? '🎥 Video' : `📎 ${file.name}`,
+        fromMe: true,
+        timestamp: Math.floor(Date.now() / 1000),
+        from: chatsHook.selectedChat.id,
+        status: 'sending',
+        type: type === 'image' ? 'imageMessage' : type === 'video' ? 'videoMessage' : 'documentMessage',
+      };
+      
+      messagesHook.setMessages(prev => {
+        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+        if (existingIds.has(optimisticMessage.id)) {
+          return prev;
+        }
+        return [...prev, optimisticMessage].sort((a, b) => {
+          const normalizeTimestamp = (ts: number | undefined) => {
+            if (!ts) return 0;
+            return ts > 1000000000000 ? ts : ts * 1000;
+          };
+          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
+          return aTime - bTime;
+        });
+      });
+      
+      // Medya mesajını gönder
+      await api.sendMediaMessage(
+        activeAccount.id,
+        chatsHook.selectedChat.id,
+        file,
+        mimetype,
+        undefined, // caption
+        type === 'video' ? { ptv: true } : undefined
+      );
+      
+      // Optimistic mesajı güncelle
+      messagesHook.setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return { ...m, status: 'sent' };
+          }
+          return m;
+        })
+      );
+    } catch (error: any) {
+      console.error('Medya mesajı gönderilemedi:', error);
+      
+      // Hata durumunda mesajı güncelle
+      messagesHook.setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return { ...m, status: 'error', error: error.message || 'Medya gönderilemedi' };
+          }
+          return m;
+        })
+      );
+      
+      alert(`Medya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -455,7 +588,6 @@ export default function WhatsAppMultiAccount() {
       await api.replyToMessage(activeAccount.id, chatsHook.selectedChat.id, msg.id || '', textToSend);
       messagesHook.setMessage('');
       setReplyingTo(null);
-      messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
       
       // Chat listesindeki ilgili chat'i güncelle (yeniden sıralama yapmadan)
       chatsHook.setChats(prevChats => {
@@ -473,9 +605,17 @@ export default function WhatsAppMultiAccount() {
         }
         return prevChats;
       });
+      
+      // Mesajları yeniden yükle
+      setTimeout(() => {
+        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+      }, 500);
     } catch (error) {
       console.error('Mesaj yanıtlanamadı:', error);
-      alert('Mesaj yanıtlanamadı');
+      setToast({ 
+        message: 'Mesaj yanıtlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
     }
   };
 
@@ -486,12 +626,20 @@ export default function WhatsAppMultiAccount() {
       await api.forwardMessage(activeAccount.id, chatsHook.selectedChat?.id || '', toJid, msg.id || '');
       setShowForwardSelector(false);
       setForwardingMessage(null);
+      
+      setToast({ message: 'Mesaj iletildi', type: 'success' });
+      
       if (chatsHook.selectedChat) {
-        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
+        setTimeout(() => {
+          messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+        }, 500);
       }
     } catch (error) {
       console.error('Mesaj iletilemedi:', error);
-      alert('Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+      setToast({ 
+        message: 'Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
     }
   };
 
@@ -544,11 +692,35 @@ export default function WhatsAppMultiAccount() {
     }
     
     try {
-      await api.deleteMessage(activeAccount.id, chatsHook.selectedChat.id, msg.id || '', deleteForEveryone);
-      messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
+      // Optimistic UI: Mesajı hemen kaldır
+      const messageId = msg.id || msg.key?.id;
+      if (messageId) {
+        messagesHook.setMessages(prev => prev.filter(m => {
+          const mId = m.id || m.key?.id;
+          return mId !== messageId;
+        }));
+      }
+      
+      await api.deleteMessage(activeAccount.id, chatsHook.selectedChat.id, messageId || '', deleteForEveryone);
+      
+      // Toast notification göster
+      setToast({ 
+        message: deleteForEveryone ? 'Mesaj herkes için silindi' : 'Mesaj silindi', 
+        type: 'success' 
+      });
+      
+      // Mesajları yeniden yükle (güncel durumu görmek için)
+      setTimeout(() => {
+        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+      }, 500);
     } catch (error) {
       console.error('Mesaj silinemedi:', error);
-      alert('Mesaj silinemedi');
+      setToast({ 
+        message: 'Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
+      // Hata durumunda mesajları yeniden yükle
+      messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     }
   };
 
@@ -602,6 +774,30 @@ export default function WhatsAppMultiAccount() {
     }
   };
 
+  const handlePinChat = async (chat: Chat, pin: boolean) => {
+    if (!activeAccount) return;
+    
+    try {
+      await pinChat(activeAccount.id, chat.id, pin);
+      chatsHook.loadChats(activeAccount.id, 50);
+    } catch (error) {
+      console.error('Chat pinlenemedi:', error);
+      alert('Chat pinlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+    }
+  };
+
+  const handleMuteChat = async (chat: Chat, durationMs: number | null) => {
+    if (!activeAccount) return;
+    
+    try {
+      await muteChat(activeAccount.id, chat.id, durationMs);
+      chatsHook.loadChats(activeAccount.id, 50);
+    } catch (error) {
+      console.error('Chat sessize alınamadı:', error);
+      alert('Chat sessize alınamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+    }
+  };
+
   const handleArchiveChat = async (chat: Chat, archive: boolean) => {
     if (!activeAccount) return;
     
@@ -625,15 +821,39 @@ export default function WhatsAppMultiAccount() {
     }
     
     try {
+      // Chat'i animasyonlu olarak kaldır
+      const chatIndex = chatsHook.chats.findIndex(c => c.id === chat.id);
+      if (chatIndex >= 0) {
+        // Chat'i state'den kaldır (animasyon için)
+        chatsHook.setChats(prevChats => {
+          const updated = [...prevChats];
+          updated.splice(chatIndex, 1);
+          return updated;
+        });
+      }
+      
       await api.deleteChat(activeAccount.id, chat.id);
-      chatsHook.loadChats(activeAccount.id, 50);
+      
       if (chatsHook.selectedChat?.id === chat.id) {
         chatsHook.setSelectedChat(null);
         messagesHook.setMessages([]);
       }
+      
+      // Toast notification göster
+      setToast({ message: 'Sohbet başarıyla silindi', type: 'success' });
+      
+      // Chat listesini yenile
+      setTimeout(() => {
+        chatsHook.loadChats(activeAccount.id, 50);
+      }, 300);
     } catch (error) {
       console.error('Sohbet silinemedi:', error);
-      alert('Sohbet silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+      setToast({ 
+        message: 'Sohbet silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
+      // Hata durumunda chat listesini yenile
+      chatsHook.loadChats(activeAccount.id, 50);
     }
   };
 
@@ -665,9 +885,133 @@ export default function WhatsAppMultiAccount() {
     messagesHook.setMessage(messagesHook.message + emoji);
   };
 
-  const handleAttachment = (type: string) => {
-    console.log(`${type} seçildi`);
+  const handleAttachment = async (type: string) => {
+    if (!activeAccount || !chatsHook.selectedChat) {
+      alert('Lütfen önce bir sohbet seçin');
+      setShowAttachMenu(false);
+      return;
+    }
+
     setShowAttachMenu(false);
+
+    try {
+      // Dosya seçme input'u oluştur
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.style.display = 'none';
+
+      // Tip'e göre accept ve multiple ayarları
+      switch (type) {
+        case 'Fotoğraf':
+          input.accept = 'image/*';
+          break;
+        case 'Video':
+          input.accept = 'video/*';
+          break;
+        case 'Ses':
+          input.accept = 'audio/*';
+          break;
+        case 'Belge':
+          input.accept = '*/*'; // Tüm dosya tipleri
+          break;
+        case 'Kişi':
+          alert('Kişi gönderme özelliği henüz desteklenmiyor');
+          return;
+        case 'Konum':
+          alert('Konum gönderme özelliği henüz desteklenmiyor');
+          return;
+        default:
+          console.warn('Bilinmeyen attachment tipi:', type);
+          return;
+      }
+
+      // Dosya seçildiğinde
+      input.onchange = async (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+
+        try {
+          // MIME type'ı belirle
+          let mimetype = file.type || 'application/octet-stream';
+          
+          // MIME type yoksa dosya uzantısına göre belirle
+          if (!mimetype || mimetype === 'application/octet-stream') {
+            const ext = file.name.split('.').pop()?.toLowerCase();
+            const mimeMap: Record<string, string> = {
+              'jpg': 'image/jpeg',
+              'jpeg': 'image/jpeg',
+              'png': 'image/png',
+              'gif': 'image/gif',
+              'webp': 'image/webp',
+              'mp4': 'video/mp4',
+              'mov': 'video/quicktime',
+              'avi': 'video/x-msvideo',
+              'mp3': 'audio/mpeg',
+              'wav': 'audio/wav',
+              'ogg': 'audio/ogg',
+              'pdf': 'application/pdf',
+              'doc': 'application/msword',
+              'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              'xls': 'application/vnd.ms-excel',
+              'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            };
+            mimetype = mimeMap[ext || ''] || 'application/octet-stream';
+          }
+
+          // Caption için prompt göster (opsiyonel)
+          let caption = '';
+          if (type === 'Fotoğraf' || type === 'Video') {
+            const captionInput = prompt('Mesaj eklemek ister misiniz? (Boş bırakabilirsiniz)');
+            if (captionInput !== null) {
+              caption = captionInput;
+            }
+          }
+
+          // Medya mesajını gönder
+          await api.sendMediaMessage(
+            activeAccount.id,
+            chatsHook.selectedChat!.id,
+            file,
+            mimetype,
+            caption || undefined,
+            type === 'Ses' ? { ptt: true } : undefined // Ses mesajları için push-to-talk
+          );
+
+          // Mesajları yenile
+          messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+          
+          // Chat listesini güncelle
+          chatsHook.setChats(prevChats => {
+            const index = prevChats.findIndex(c => c.id === chatsHook.selectedChat!.id);
+            if (index >= 0) {
+              const updatedChats = [...prevChats];
+              const now = Math.floor(Date.now() / 1000);
+              updatedChats[index] = {
+                ...updatedChats[index],
+                conversationTimestamp: now,
+                lastMessage: type === 'Fotoğraf' ? '📷 Fotoğraf' : type === 'Video' ? '📹 Video' : type === 'Ses' ? '🎵 Ses' : '📄 Belge',
+                time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+              };
+              return updatedChats;
+            }
+            return prevChats;
+          });
+        } catch (error: any) {
+          console.error('Dosya gönderilemedi:', error);
+          alert(`Dosya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
+        } finally {
+          // Input'u temizle
+          document.body.removeChild(input);
+        }
+      };
+
+      // Input'u DOM'a ekle ve tıkla
+      document.body.appendChild(input);
+      input.click();
+    } catch (error: any) {
+      console.error('Attachment hatası:', error);
+      alert(`Hata: ${error.message || 'Bilinmeyen hata'}`);
+    }
   };
 
   // EMOJIS ve ATTACHMENT_OPTIONS artık constants'tan import ediliyor
@@ -690,6 +1034,7 @@ export default function WhatsAppMultiAccount() {
     queueProfilePicture,
     loadChats: chatsHook.loadChats,
     updateMessagesCache: messagesHook.updateMessagesCache,
+    messagesCacheRef: messagesHook.messagesCacheRef, // Mesaj cache'i için ref'i geç
   });
 
   // Cleanup - useAccounts ve useWebSocket hook'ları kendi cleanup'larını yapıyor
@@ -992,6 +1337,13 @@ export default function WhatsAppMultiAccount() {
           onArchiveChat={handleArchiveChat}
           onDeleteChat={handleDeleteChat}
           onMarkChatRead={handleMarkChatRead}
+          onPinChat={handlePinChat}
+          onMuteChat={handleMuteChat}
+          onShowContactProfile={(chat: Chat) => {
+            const contact = contactsHook.contacts.find(c => c.id === chat.id);
+            setSelectedContactForProfile(contact || null);
+            setShowContactProfile(true);
+          }}
         />
 
         <div className="flex-1 flex flex-col">
@@ -1039,6 +1391,8 @@ export default function WhatsAppMultiAccount() {
             onPinMessage={handlePinMessage}
             onRejectCall={handleRejectCall}
             onDeleteMessageForMe={handleDeleteMessageForMe}
+            searchTerm={messageSearchTerm}
+            onSearchChange={setMessageSearchTerm}
           />
           {chatsHook.selectedChat && (
             <MessageInput
@@ -1061,6 +1415,8 @@ export default function WhatsAppMultiAccount() {
               onOpenTemplates={() => {
                 setShowTemplateSelector(true);
               }}
+              isSending={isSending}
+              onSendMedia={handleSendMedia}
             />
           )}
         </div>
@@ -1076,6 +1432,7 @@ export default function WhatsAppMultiAccount() {
         isLoadingContacts={contactsHook.isLoadingContacts}
         chatProfilePictures={chatProfilePictures}
         onRefresh={contactsHook.handleRefreshContacts}
+        onSelectContact={handleSelectContactForMessage}
         onClose={() => {
           setShowContactsModal(false);
           contactsHook.setContacts([]);
@@ -1161,6 +1518,37 @@ export default function WhatsAppMultiAccount() {
         pendingAccountId={accountsHook.pendingAccountId}
         onGenerateQR={accountsHook.generateQR}
         onClose={accountsHook.handleCloseModal}
+      />
+
+      {/* Toast Notification */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+
+      {/* Contact Profile Modal */}
+      <ContactProfileModal
+        isOpen={showContactProfile}
+        contact={selectedContactForProfile || undefined}
+        chat={chatsHook.selectedChat}
+        profilePicture={
+          selectedContactForProfile 
+            ? (chatProfilePictures.get(selectedContactForProfile.id) || selectedContactForProfile.imgUrl || undefined)
+            : (chatsHook.selectedChat?.profilePicture || chatProfilePictures.get(chatsHook.selectedChat?.id || '') || undefined)
+        }
+        onClose={() => {
+          setShowContactProfile(false);
+          setSelectedContactForProfile(null);
+        }}
+        onSendMessage={() => {
+          if (chatsHook.selectedChat) {
+            chatsHook.setSelectedChat(chatsHook.selectedChat);
+            messagesHook.loadMessages(activeAccount!.id, chatsHook.selectedChat.id);
+          }
+        }}
       />
     </div>
   );

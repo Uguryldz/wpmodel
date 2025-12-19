@@ -12,6 +12,7 @@ interface ContactsModalProps {
   isLoadingContacts: boolean;
   chatProfilePictures: Map<string, string>;
   onRefresh: () => void;
+  onSelectContact?: (contact: api.Contact) => void;
   onClose: () => void;
 }
 
@@ -24,6 +25,7 @@ export default function ContactsModal({
   isLoadingContacts,
   chatProfilePictures,
   onRefresh,
+  onSelectContact,
   onClose,
 }: ContactsModalProps) {
   if (!isOpen) return null;
@@ -92,7 +94,12 @@ export default function ContactsModal({
                     return (
                       <div
                         key={contact.id}
-                        className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
+                        onClick={() => {
+                          if (onSelectContact) {
+                            onSelectContact(contact);
+                          }
+                        }}
+                        className="p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
                       >
                         <div className="flex items-center space-x-3">
                           {hasProfilePicture ? (

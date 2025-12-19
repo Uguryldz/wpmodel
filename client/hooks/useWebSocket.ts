@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Chat, Message } from '../types';
 import { extractMessageText } from '../utils/messageUtils';
+import { extractPhoneFromJid, normalizeJid, areJidsSamePerson, normalizePhoneNumber } from '../utils/contactUtils';
 
 interface UseWebSocketProps {
   activeAccountRef: React.MutableRefObject<any>;
@@ -20,6 +21,7 @@ interface UseWebSocketProps {
   queueProfilePicture: (sessionId: string, jid: string) => void;
   loadChats?: (sessionId: string, limit: number, force: boolean) => void;
   updateMessagesCache?: (sessionId: string, chatId: string, messages: Message[]) => void;
+  messagesCacheRef?: React.MutableRefObject<Map<string, Message[]>>; // Mesaj cache'i için ref
 }
 
 export function useWebSocket({
@@ -39,6 +41,7 @@ export function useWebSocket({
   queueProfilePicture,
   loadChats,
   updateMessagesCache,
+  messagesCacheRef,
 }: UseWebSocketProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const isMountedRef = useRef<boolean>(true);
@@ -59,6 +62,37 @@ export function useWebSocket({
         ws.onopen = () => {
           console.log('[WebSocket] ✅ Bağlantı kuruldu');
           reconnectTimeout = null;
+          
+          // Bağlantı kurulduğunda aktif hesabı bildir (opsiyonel)
+          const currentActiveAccount = activeAccountRef.current;
+          if (currentActiveAccount) {
+            console.log('[WebSocket] Aktif hesap:', currentActiveAccount.id);
+          }
+        };
+        
+        ws.onerror = (error) => {
+          console.error('[WebSocket] ❌ Hata:', error);
+        };
+        
+        ws.onclose = (event) => {
+          console.warn('[WebSocket] ⚠️ Bağlantı kapandı:', event.code, event.reason);
+          wsRef.current = null;
+          
+          // Normal kapanma kodları (1000, 1001) için yeniden bağlanma
+          // Anormal kapanma kodları için daha uzun bekle
+          const isNormalClose = event.code === 1000 || event.code === 1001;
+          const reconnectDelay = isNormalClose ? 3000 : 5000;
+          
+          // Otomatik yeniden bağlanma
+          if (isMountedRef.current && !reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+              reconnectTimeout = null; // Timeout'u temizle
+              if (isMountedRef.current && (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED)) {
+                console.log('[WebSocket] 🔄 Yeniden bağlanılıyor...');
+                connectWebSocket();
+              }
+            }, reconnectDelay);
+          }
         };
 
         ws.onmessage = (event) => {
@@ -72,10 +106,26 @@ export function useWebSocket({
             // chats.set veya chats.upsert
             if ((data.type === 'chats.set' || data.type === 'chats.upsert') && data.sessionId === currentActiveAccount?.id) {
               console.log('[WebSocket] Sohbet listesi güncelleniyor...', data.chats?.length || 0);
-              
+
               if (data.chats && Array.isArray(data.chats)) {
+                // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
+                const normalizedChats = data.chats.map((chat: any) => {
+                  let chatId = chat.id;
+                  
+                  // Eğer @lid formatındaysa ve lidJid varsa, gerçek JID'yi kullan
+                  if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+                    chatId = chat.lidJid;
+                    console.log(`[WebSocket] @lid formatı düzeltildi: ${chat.id} -> ${chatId}`);
+                  }
+                  
+                  return {
+                    ...chat,
+                    id: normalizeJid(chatId), // Gerçek JID'yi normalize et
+                  };
+                });
+                
                 // Profil resimlerini cache'e ekle (sadece yeni chat'ler için)
-                data.chats.forEach((chat: any) => {
+                normalizedChats.forEach((chat: any) => {
                   if (chat.imgUrl) {
                     setChatProfilePictures(prev => new Map(prev).set(chat.id, chat.imgUrl));
                   }
@@ -88,12 +138,19 @@ export function useWebSocket({
                 if (hasInitialLoad && chatsLoadedRef.current.get(data.sessionId)) {
                   // Chat listesi zaten yüklü, sadece yeni/güncellenen chat'leri işle
                   if (data.type === 'chats.upsert') {
-                    setChats(prevChats => {
-                      let hasChanges = false;
-                      const updatedChats = [...prevChats];
-                      
-                      data.chats.forEach((chat: any) => {
-                        const index = updatedChats.findIndex(c => c.id === chat.id);
+                    try {
+                      setChats(prevChats => {
+                        let hasChanges = false;
+                        const updatedChats = [...prevChats];
+
+                      normalizedChats.forEach((chat: any) => {
+                        // Normalize edilmiş chat ID ile ara
+                        const normalizedChatId = normalizeJid(chat.id);
+                        const index = updatedChats.findIndex(c => {
+                          const cNormalized = normalizeJid(c.id);
+                          return cNormalized === normalizedChatId || c.id === normalizedChatId;
+                        });
+                        
                         if (index >= 0) {
                           const oldChat = updatedChats[index];
                           const newUnreadCount = chat.unreadCount ?? oldChat.unreadCount;
@@ -102,6 +159,7 @@ export function useWebSocket({
                           if (newUnreadCount !== oldChat.unreadCount || newTimestamp !== oldChat.conversationTimestamp) {
                             updatedChats[index] = {
                               ...oldChat,
+                              id: normalizedChatId, // Normalize edilmiş JID kullan
                               unreadCount: newUnreadCount,
                               conversationTimestamp: newTimestamp,
                               name: chat.name || oldChat.name,
@@ -112,14 +170,34 @@ export function useWebSocket({
                             hasChanges = true;
                           }
                         } else {
+                          // Yeni chat - contact bilgilerini kontrol et
+                          const cached = contactsCacheRef.current.get(data.sessionId);
+                          const contactsMap = cached ? cached.data : new Map<string, any>();
+                          const contact = contactsMap.get(normalizedChatId);
+                          
+                          let displayName = chat.name || chat.displayName || normalizedChatId;
+                          let verifiedName = chat.verifiedName;
+                          
+                          if (!normalizedChatId.includes('@g.us') && contact) {
+                            verifiedName = contact.verifiedName || chat.verifiedName;
+                            displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || normalizedChatId;
+                          } else if (!normalizedChatId.includes('@g.us')) {
+                            // Telefon numarasını göster
+                            const phoneMatch = normalizedChatId.match(/^(\d+)@/);
+                            if (phoneMatch) {
+                              displayName = phoneMatch[1];
+                            }
+                          }
+                          
                           updatedChats.push({
-                            id: chat.id,
-                            name: chat.name || chat.displayName || chat.id,
-                            verifiedName: chat.verifiedName,
+                            id: normalizedChatId, // Normalize edilmiş JID kullan
+                            name: displayName,
+                            verifiedName: verifiedName,
                             profilePicture: chat.imgUrl,
                             unreadCount: chat.unreadCount || 0,
                             conversationTimestamp: chat.conversationTimestamp || 0,
                             archived: chat.archived || false,
+                            pinned: chat.pinned ? new Date(chat.pinned) : null,
                             lastMessage: '',
                             time: chat.conversationTimestamp 
                               ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
@@ -131,24 +209,102 @@ export function useWebSocket({
                       
                       return hasChanges ? updatedChats : prevChats;
                     });
+                    } catch (error) {
+                      console.error('[WebSocket] ❌ chats.upsert hatası:', error);
+                    }
                   }
                 } else if (data.type === 'chats.set') {
                   // İlk bağlantı - tüm sohbetleri set et
                   const cached = contactsCacheRef.current.get(data.sessionId);
-                  const contactsMap = cached ? cached.data : new Map<string, any>();
+                  let contactsMap = cached ? cached.data : new Map<string, any>();
                   
-                  const formattedChats = data.chats.map((chat: any) => {
-                    const contact = contactsMap.get(chat.id);
-                    const existingChat = chats.find(c => c.id === chat.id);
+                  // Eğer contact'lar yüklenmemişse, yükle
+                  if (contactsMap.size === 0) {
+                    try {
+                      // API'den contact'ları yükle (async)
+                      import('../api').then(async (apiModule) => {
+                        const contactsData = await apiModule.getContacts(data.sessionId);
+                        if (contactsData && contactsData.length > 0) {
+                          contactsData.forEach((contact: any) => {
+                            contactsMap.set(contact.id, contact);
+                          });
+                          contactsCacheRef.current.set(data.sessionId, {
+                            data: contactsMap,
+                            timestamp: Date.now()
+                          });
+                          // Chat'leri tekrar formatla ve güncelle
+                          const updatedChats = normalizedChats.map((chat: any) => {
+                            const contact = contactsMap.get(chat.id);
+                            const existingChat = chats.find(c => c.id === chat.id);
+                            
+                            let displayName = chat.name || chat.displayName || chat.id;
+                            let verifiedName = chat.verifiedName;
+                            
+                            if (!chat.id.includes('@g.us') && contact) {
+                              verifiedName = contact.verifiedName || chat.verifiedName;
+                              displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+                            } else if (!chat.id.includes('@g.us')) {
+                              // Telefon numarasını göster
+                              const phoneMatch = chat.id.match(/^(\d+)@/);
+                              if (phoneMatch) {
+                                displayName = phoneMatch[1];
+                              }
+                            }
+                            
+                            return {
+                              id: chat.id,
+                              name: displayName,
+                              verifiedName: verifiedName,
+                              profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
+                              unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
+                              conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
+                              archived: chat.archived ?? existingChat?.archived ?? false,
+                              pinned: chat.pinned ? new Date(chat.pinned) : existingChat?.pinned || null,
+                              lastMessage: existingChat?.lastMessage || '',
+                              time: chat.conversationTimestamp 
+                                ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                                : existingChat?.time || '',
+                            };
+                          });
+                          
+                          setChats(updatedChats);
+                        }
+                      }).catch((error) => {
+                        console.warn('[WebSocket] Contact yükleme hatası:', error);
+                      });
+                    } catch (error) {
+                      console.warn('[WebSocket] Contact yükleme hatası:', error);
+                    }
+                  }
+                  
+                  try {
+                    const formattedChats = normalizedChats.map((chat: any) => {
+                      const contact = contactsMap.get(chat.id);
+                      const existingChat = chats.find(c => c.id === chat.id);
+                    
+                    let displayName = chat.name || chat.displayName || chat.id;
+                    let verifiedName = chat.verifiedName;
+                    
+                    if (!chat.id.includes('@g.us') && contact) {
+                      verifiedName = contact.verifiedName || chat.verifiedName;
+                      displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+                    } else if (!chat.id.includes('@g.us')) {
+                      // Telefon numarasını göster
+                      const phoneMatch = chat.id.match(/^(\d+)@/);
+                      if (phoneMatch) {
+                        displayName = phoneMatch[1];
+                      }
+                    }
                     
                     return {
                       id: chat.id,
-                      name: chat.name || chat.displayName || chat.id,
-                      verifiedName: contact?.verifiedName || chat.verifiedName,
+                      name: displayName,
+                      verifiedName: verifiedName,
                       profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
                       unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
                       conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
                       archived: chat.archived ?? existingChat?.archived ?? false,
+                      pinned: chat.pinned ? new Date(chat.pinned) : existingChat?.pinned || null,
                       lastMessage: existingChat?.lastMessage || '',
                       time: chat.conversationTimestamp 
                         ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
@@ -156,9 +312,16 @@ export function useWebSocket({
                     };
                   });
                   
-                  setChats(formattedChats);
-                  chatsLoadedRef.current.set(data.sessionId, true);
-                  console.log('[WebSocket] Sohbet listesi direkt güncellendi:', formattedChats.length);
+                  try {
+                    setChats(formattedChats);
+                    chatsLoadedRef.current.set(data.sessionId, true);
+                    console.log('[WebSocket] Sohbet listesi direkt güncellendi:', formattedChats.length);
+                  } catch (error) {
+                    console.error('[WebSocket] ❌ setChats hatası:', error);
+                  }
+                  } catch (error) {
+                    console.error('[WebSocket] ❌ formattedChats oluşturma hatası:', error);
+                  }
                 } else if (!hasInitialLoad && loadChats) {
                   // WebSocket'ten chat gelmediyse API'den yükle
                   loadChats(data.sessionId, 50, true);
@@ -211,36 +374,86 @@ export function useWebSocket({
             // messages.upsert
             // README'ye göre: "In messages.upsert it's recommended to use a loop like for (const message of event.messages)"
             else if (data.type === 'messages.upsert' && data.sessionId === currentActiveAccount?.id) {
-              console.log('[WebSocket] Yeni mesajlar alındı:', data.messages.length);
+              console.log('[WebSocket] 📩 Yeni mesajlar alındı:', data.messages?.length || 0, 'eventType:', data.eventType);
               
-              // README'ye göre best practice: loop kullan
-              const relevantMessages: any[] = [];
-              for (const msg of data.messages) {
-                if (currentSelectedChat && (msg.from || msg.key?.remoteJid) === currentSelectedChat.id) {
-                  relevantMessages.push(msg);
-                }
+              if (!data.messages || !Array.isArray(data.messages) || data.messages.length === 0) {
+                console.warn('[WebSocket] ⚠️ messages.upsert event boş mesajlar içeriyor');
+                return;
               }
               
-              if (relevantMessages.length > 0) {
-                // Seçili sohbetin mesajlarıysa ekle
-                console.log('[WebSocket] Seçili sohbetin mesajlarına yeni mesajlar ekleniyor...');
+              // Tüm mesajları chat bazında grupla
+              // MESAJ KAYBI OLMAMASI İÇİN: Telefon numarasına göre grupla
+              const messagesByChat = new Map<string, any[]>();
+              const phoneToChatIdMap = new Map<string, string>(); // Telefon numarası -> normalize edilmiş chatId
+              
+              for (const msg of data.messages) {
+                let chatId = msg.from || msg.key?.remoteJid;
+                if (!chatId || chatId.includes('@broadcast')) continue;
                 
-                setMessages(prev => {
-                  const existingIds = new Set(prev.map(m => {
-                    const id = m.id || m.key?.id;
-                    return id && id.toString().startsWith('temp-') ? id : id;
-                  }));
-                  
-                  // Cache'i güncelle
-                  if (updateMessagesCache && currentSelectedChat) {
-                    const messagesKey = `${currentActiveAccount?.id}-${currentSelectedChat.id}`;
-                    const updatedMessages = [...prev, ...relevantMessages];
-                    updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, updatedMessages);
+                // @lid formatındaki chat'ler için gerçek JID'yi bul
+                // Eğer mesaj @lid formatındaysa ve lidJid bilgisi varsa, gerçek JID'yi kullan
+                if (chatId.includes('@lid')) {
+                  // Backend'den gelen chat bilgilerinde lidJid olabilir
+                  // Ama mesajlarda genelde direkt gerçek JID gelir, yine de kontrol edelim
+                  // Şimdilik normalizeJid ile @lid'i @s.whatsapp.net'e çeviriyoruz
+                  // Ama ideal olarak lidJid'den gerçek JID'yi bulmalıyız
+                }
+                
+                // Grup chat'leri için direkt kullan
+                if (chatId.includes('@g.us')) {
+                  if (!messagesByChat.has(chatId)) {
+                    messagesByChat.set(chatId, []);
                   }
+                  messagesByChat.get(chatId)!.push(msg);
+                  continue;
+                }
+                
+                // Bireysel chat'ler için: Telefon numarasına göre normalize et
+                const phoneNumber = extractPhoneFromJid(chatId);
+                if (phoneNumber) {
+                  // Eğer bu telefon numarası için zaten bir normalize edilmiş chatId varsa, onu kullan
+                  if (phoneToChatIdMap.has(phoneNumber)) {
+                    chatId = phoneToChatIdMap.get(phoneNumber)!;
+                  } else {
+                    // İlk kez görülen telefon numarası, normalize et
+                    const normalizedChatId = normalizeJid(chatId);
+                    phoneToChatIdMap.set(phoneNumber, normalizedChatId);
+                    chatId = normalizedChatId;
+                  }
+                } else {
+                  // Telefon numarası çıkarılamadıysa, normalize et
+                  chatId = normalizeJid(chatId);
+                }
+                
+                if (!messagesByChat.has(chatId)) {
+                  messagesByChat.set(chatId, []);
+                }
+                messagesByChat.get(chatId)!.push(msg);
+              }
+              
+              // Her chat için mesajları işle
+              // MESAJ KAYBI OLMAMASI İÇİN: Normalize edilmiş chatId kullan
+              for (const [chatId, chatMessages] of messagesByChat.entries()) {
+                // Grup chat'leri için direkt kullan, bireysel chat'ler için normalize edilmiş chatId kullan
+                const normalizedChatId = chatId.includes('@g.us') ? chatId : normalizeJid(chatId);
+                const isSelectedChat = currentSelectedChat && (
+                  normalizedChatId === currentSelectedChat.id || 
+                  (!currentSelectedChat.id.includes('@g.us') && extractPhoneFromJid(normalizedChatId) === extractPhoneFromJid(currentSelectedChat.id))
+                );
+                
+                if (isSelectedChat && chatMessages.length > 0) {
+                  // Seçili sohbetin mesajlarıysa ekle (normalize edilmiş chatId kullan)
+                  console.log('[WebSocket] Seçili sohbetin mesajlarına yeni mesajlar ekleniyor...', normalizedChatId);
                   
-                  // README'ye göre best practice: loop kullan
-                  const newMessages: Message[] = [];
-                  for (const msg of relevantMessages) {
+                  setMessages(prev => {
+                    const existingIds = new Set(prev.map(m => {
+                      const id = m.id || m.key?.id;
+                      return id && id.toString().startsWith('temp-') ? id : id;
+                    }));
+                    
+                    // README'ye göre best practice: loop kullan
+                    const newMessages: Message[] = [];
+                    for (const msg of chatMessages) {
                       const text = msg.text || extractMessageText(msg);
                       const body = msg.body || text;
                       const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
@@ -248,58 +461,59 @@ export function useWebSocket({
                         ? Boolean(msg.fromMe) 
                         : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
                       
-                    // Duplicate kontrolü
-                    if (msgId && !existingIds.has(msgId)) {
-                      newMessages.push({
-                        ...msg,
-                        id: msgId,
-                        text: text || body,
-                        body: body || text,
-                        fromMe: fromMe,
-                        timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                      // Duplicate kontrolü
+                      if (msgId && !existingIds.has(msgId)) {
+                        newMessages.push({
+                          ...msg,
+                          id: msgId,
+                          text: text || body,
+                          body: body || text,
+                          fromMe: fromMe,
+                          timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                        });
+                      }
+                    }
+                    
+                    if (newMessages.length === 0) return prev;
+                    
+                    // Temp mesajları kaldır
+                    let filteredPrev = prev;
+                    newMessages.forEach(newMsg => {
+                      if (newMsg.fromMe && newMsg.text) {
+                        filteredPrev = filteredPrev.filter(m => {
+                          const mId = m.id || m.key?.id;
+                          return !(mId && mId.toString().startsWith('temp-') && m.text === newMsg.text && m.fromMe === true);
+                        });
+                      }
                     });
+                    
+                    // Birleştir ve sırala
+                    const merged = [...filteredPrev, ...newMessages];
+                    merged.sort((a, b) => {
+                      const normalizeTimestamp = (ts: number | undefined) => {
+                        if (!ts) return 0;
+                        return ts > 1000000000000 ? ts : ts * 1000;
+                      };
+                      const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
+                      const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
+                      return aTime - bTime;
+                    });
+                    
+                    // Cache'i güncelle (normalize edilmiş chatId kullan)
+                    if (updateMessagesCache && currentSelectedChat) {
+                      updateMessagesCache(currentActiveAccount?.id || '', normalizedChatId, merged);
                     }
-                  }
-                  
-                  if (newMessages.length === 0) return prev;
-                  
-                  // Temp mesajları kaldır
-                  let filteredPrev = prev;
-                  newMessages.forEach(newMsg => {
-                    if (newMsg.fromMe && newMsg.text) {
-                      filteredPrev = filteredPrev.filter(m => {
-                        const mId = m.id || m.key?.id;
-                        return !(mId && mId.toString().startsWith('temp-') && m.text === newMsg.text && m.fromMe === true);
-                      });
-                    }
+                    
+                    return merged;
                   });
-                  
-                  // Birleştir ve sırala
-                  const merged = [...filteredPrev, ...newMessages];
-                  merged.sort((a, b) => {
-                    const normalizeTimestamp = (ts: number | undefined) => {
-                      if (!ts) return 0;
-                      return ts > 1000000000000 ? ts : ts * 1000;
-                    };
-                    const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
-                    const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-                    return aTime - bTime;
-                  });
-                  
-                  // Cache'i güncelle
-                  if (updateMessagesCache && currentSelectedChat) {
-                    updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, merged);
-                  }
-                  
-                  return merged;
-                });
+                }
                 
-                // Chat listesindeki bilgileri güncelle
-                // README'ye göre best practice: loop kullan
-                if (relevantMessages.length > 0) {
+                // Chat listesindeki bilgileri güncelle (tüm chat'ler için)
+                // MESAJ KAYBI OLMAMASI İÇİN: Normalize edilmiş chatId kullan
+                if (chatMessages.length > 0) {
                   // En son mesajı bul (timestamp'e göre sırala)
-                  let lastMessage = relevantMessages[0];
-                  for (const msg of relevantMessages) {
+                  let lastMessage = chatMessages[0];
+                  for (const msg of chatMessages) {
                     const msgTime = msg.timestamp || msg.messageTimestamp || 0;
                     const lastTime = lastMessage.timestamp || lastMessage.messageTimestamp || 0;
                     if (msgTime > lastTime) {
@@ -309,55 +523,109 @@ export function useWebSocket({
                   
                   const messageText = lastMessage.text || extractMessageText(lastMessage) || '';
                   const messageTimestamp = lastMessage.timestamp || lastMessage.messageTimestamp || Math.floor(Date.now() / 1000);
+                  const fromMe = lastMessage.fromMe !== undefined 
+                    ? Boolean(lastMessage.fromMe) 
+                    : (lastMessage.key?.fromMe === true || lastMessage.key?.fromMe === 'true' || lastMessage.key?.fromMe === 1);
                   
                   setChats(prevChats => {
-                    const index = prevChats.findIndex(c => c.id === currentSelectedChat.id);
+                    // Grup chat'leri için direkt eşleşme ara
+                    if (normalizedChatId.includes('@g.us')) {
+                      const index = prevChats.findIndex(c => c.id === normalizedChatId);
+                      if (index >= 0) {
+                        // Mevcut chat'i güncelle
+                        const updatedChats = [...prevChats];
+                        updatedChats[index] = {
+                          ...updatedChats[index],
+                          conversationTimestamp: messageTimestamp,
+                          lastMessage: messageText,
+                          time: new Date(messageTimestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                          unreadCount: isSelectedChat ? updatedChats[index].unreadCount : (updatedChats[index].unreadCount || 0) + 1,
+                        };
+                        updatedChats.sort((a, b) => {
+                          const aTime = a.conversationTimestamp || 0;
+                          const bTime = b.conversationTimestamp || 0;
+                          return Number(bTime) - Number(aTime);
+                        });
+                        return updatedChats;
+                      }
+                    }
+                    
+                    // Bireysel chat'ler için: NORMALIZE EDİLMİŞ TELEFON NUMARASINA GÖRE ARA
+                    const phoneNumberRaw = extractPhoneFromJid(normalizedChatId); // Örnek: 905538781507
+                    const phoneNumberNormalized = normalizePhoneNumber(phoneNumberRaw); // 05538781507 -> 905538781507
+                    
+                    // Aynı normalize edilmiş telefon numarasına sahip chat'i ara
+                    let index = prevChats.findIndex(c => {
+                      if (c.id.includes('@g.us')) return false; // Grup chat'leri hariç
+                      const cPhoneRaw = extractPhoneFromJid(c.id); // Chat'in telefon numarasını çıkar
+                      const cPhoneNormalized = normalizePhoneNumber(cPhoneRaw); // Normalize et
+                      // RAW veya normalize edilmiş telefon numaraları eşleşiyor mu?
+                      return cPhoneRaw === phoneNumberRaw || cPhoneNormalized === phoneNumberNormalized;
+                    });
+                    
                     if (index >= 0) {
+                      // Mevcut chat'i güncelle
                       const updatedChats = [...prevChats];
+                      const existingChat = updatedChats[index];
+                      const normalizedChatId = normalizeJid(chatId); // 905538781507@s.whatsapp.net formatına getir
+                      
                       updatedChats[index] = {
-                        ...updatedChats[index],
+                        ...existingChat,
+                        id: normalizedChatId, // Her zaman normalize edilmiş JID kullan
                         conversationTimestamp: messageTimestamp,
                         lastMessage: messageText,
                         time: new Date(messageTimestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                        unreadCount: isSelectedChat ? existingChat.unreadCount : (existingChat.unreadCount || 0) + 1,
                       };
+                      
+                      // Sıralamayı güncelle (en son mesaj alan chat en üste)
+                      updatedChats.sort((a, b) => {
+                        const aTime = a.conversationTimestamp || 0;
+                        const bTime = b.conversationTimestamp || 0;
+                        return Number(bTime) - Number(aTime);
+                      });
+                      return updatedChats;
+                    } else {
+                      // Yeni chat oluştur
+                      console.log('[WebSocket] Yeni chat oluşturuluyor:', chatId);
+                      const cached = contactsCacheRef.current.get(data.sessionId);
+                      const contactsMap = cached ? cached.data : new Map<string, any>();
+                      const contact = contactsMap.get(chatId);
+                      
+                      let displayName = chatId;
+                      let verifiedName: string | undefined = undefined;
+                      
+                      if (!chatId.includes('@g.us') && contact) {
+                        verifiedName = contact.verifiedName;
+                        displayName = contact.verifiedName || contact.name || contact.notify || chatId;
+                      } else if (!chatId.includes('@g.us')) {
+                        const phoneMatch = chatId.match(/^(\d+)@/);
+                        if (phoneMatch) {
+                          displayName = phoneMatch[1];
+                        }
+                      }
+                      
+                      // Normalize edilmiş JID kullan
+                      const normalizedChatId = normalizeJid(chatId);
+                      
+                      const newChat: Chat = {
+                        id: normalizedChatId, // Normalize edilmiş JID kullan
+                        name: displayName,
+                        verifiedName: verifiedName,
+                        profilePicture: contact?.imgUrl || chatProfilePictures.get(chatId) || chatProfilePictures.get(normalizedChatId),
+                        unreadCount: isSelectedChat ? 0 : 1,
+                        conversationTimestamp: messageTimestamp,
+                        archived: false,
+                        pinned: null,
+                        lastMessage: messageText,
+                        time: new Date(messageTimestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                        isMuted: false,
+                      };
+                      
+                      // Yeni chat'i en başa ekle
+                      const updatedChats = [newChat, ...prevChats];
                       return updatedChats;
                     }
-                    return prevChats;
-                  });
-                }
-              } else {
-                // Seçili olmayan sohbetlere mesaj geldi
-                const affectedChats = new Map<string, { text: string, timestamp: number }>();
-                data.messages.forEach((msg: any) => {
-                  const msgFrom = msg.from || msg.key?.remoteJid;
-                  if (msgFrom && msgFrom !== currentSelectedChat?.id) {
-                    const messageText = msg.text || extractMessageText(msg) || '';
-                    const messageTimestamp = msg.timestamp || msg.messageTimestamp || Math.floor(Date.now() / 1000);
-                    const existing = affectedChats.get(msgFrom);
-                    if (!existing || messageTimestamp > existing.timestamp) {
-                      affectedChats.set(msgFrom, { text: messageText, timestamp: messageTimestamp });
-                    }
-                  }
-                });
-                
-                if (affectedChats.size > 0) {
-                  setChats(prevChats => {
-                    let hasChanges = false;
-                    const updatedChats = prevChats.map(chat => {
-                      const chatUpdate = affectedChats.get(chat.id);
-                      if (chatUpdate) {
-                        hasChanges = true;
-                        return {
-                          ...chat,
-                          unreadCount: (chat.unreadCount || 0) + 1,
-                          conversationTimestamp: chatUpdate.timestamp,
-                          lastMessage: chatUpdate.text,
-                          time: new Date(chatUpdate.timestamp * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-                        };
-                      }
-                      return chat;
-                    });
-                    return hasChanges ? updatedChats : prevChats;
                   });
                 }
               }
@@ -408,17 +676,30 @@ export function useWebSocket({
                   return aTime - bTime;
                 });
                 
-                messagesInitialLoadRef.current.set(messagesKey, true);
-                setMessages(formattedMessages);
-                
-                // Cache'i güncelle
-                if (updateMessagesCache && currentSelectedChat) {
-                  updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, formattedMessages);
-                }
+                    try {
+                      messagesInitialLoadRef.current.set(messagesKey, true);
+                      setMessages(formattedMessages);
+                      
+                      // Cache'i güncelle
+                      if (updateMessagesCache && currentSelectedChat) {
+                        updateMessagesCache(currentActiveAccount?.id || '', currentSelectedChat.id, formattedMessages);
+                      }
+                    } catch (error) {
+                      console.error('[WebSocket] ❌ setMessages hatası:', error);
+                    }
               }
             }
           } catch (error) {
-            console.error('[WebSocket] Mesaj parse hatası:', error);
+            console.error('[WebSocket] ❌ Mesaj işleme hatası:', error);
+            // Hata oluştuğunda sayfanın çökmesini önle
+            // Sadece log'la ve devam et
+            if (error instanceof Error) {
+              console.error('[WebSocket] Hata detayları:', {
+                message: error.message,
+                stack: error.stack,
+                name: error.name
+              });
+            }
           }
         };
 

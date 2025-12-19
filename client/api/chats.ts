@@ -96,6 +96,33 @@ export const deleteChat = async (sessionId: string, jid: string, lastMessage?: a
 };
 
 /**
+ * Sohbeti sabitle/kaldır (Pin/Unpin Chat)
+ */
+export const pinChat = async (sessionId: string, jid: string, pin: boolean = true): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  });
+  if (!response.ok) throw new Error('Sohbet sabitleme başarısız');
+  return response.json();
+};
+
+/**
+ * Sohbeti sessize al/kaldır (Mute/Unmute Chat)
+ * durationMs: milliseconds cinsinden (8h: 86400000, 7d: 604800000), null ise sessizliği kaldır
+ */
+export const muteChat = async (sessionId: string, jid: string, durationMs: number | null = null): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/mute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ durationMs }),
+  });
+  if (!response.ok) throw new Error('Sohbet sessize alma başarısız');
+  return response.json();
+};
+
+/**
  * Chat geçmişi sorgula (Query Chat History)
  */
 export const queryChatHistory = async (sessionId: string, jid: string, quantity: number = 50, oldestMessage?: any): Promise<any> => {
