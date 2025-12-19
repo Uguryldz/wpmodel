@@ -17,54 +17,78 @@ import { instances } from "../shared.js";
  * Baileys'i başlat (socket'i başlatmadan, sadece hazırlık yap)
  */
 export const initBaileys = async (accountId) => {
-  const instance = getOrCreateInstance(accountId);
-  if (instance.sock) {
-    return instance.sock;
+  try {
+    const instance = getOrCreateInstance(accountId);
+    if (instance.sock) {
+      return instance.sock;
+    }
+
+    // Eğer auth state ve version zaten yüklenmişse, socket'i başlatma
+    if (instance.authState && instance.waVersion) {
+      return null; // Socket başlatılmadı, manuel başlatılmalı
+    }
+
+    const authDir = `${AUTH_FOLDER}/${instance.id}`;
+    logger.info({ accountId, authDir }, "Auth state yükleniyor...");
+    
+    const auth = await useMultiFileAuthState(authDir);
+    instance.authState = auth.state;
+    instance.saveCredsFn = auth.saveCreds;
+
+    logger.info({ accountId }, "Baileys version bilgisi alınıyor...");
+    const versionInfo = await fetchLatestBaileysVersion();
+    instance.waVersion = versionInfo.version;
+
+    instance.connectionState.version = instance.waVersion.join(".");
+    instance.connectionState.isLatest = versionInfo.isLatest;
+    instance.connectionState.startedAt = new Date().toISOString();
+
+    logger.info({ accountId, version: instance.connectionState.version }, "initBaileys tamamlandı");
+
+    // Socket'i otomatik başlatma - kullanıcı manuel olarak başlatmalı
+    // startSocket(instance);
+
+    return null; // Socket başlatılmadı
+  } catch (error) {
+    logger.error({ error, accountId }, "initBaileys hatası");
+    throw error;
   }
-
-  // Eğer auth state ve version zaten yüklenmişse, socket'i başlatma
-  if (instance.authState && instance.waVersion) {
-    return null; // Socket başlatılmadı, manuel başlatılmalı
-  }
-
-  const authDir = `${AUTH_FOLDER}/${instance.id}`;
-  const auth = await useMultiFileAuthState(authDir);
-  instance.authState = auth.state;
-  instance.saveCredsFn = auth.saveCreds;
-
-  const versionInfo = await fetchLatestBaileysVersion();
-  instance.waVersion = versionInfo.version;
-
-  instance.connectionState.version = instance.waVersion.join(".");
-  instance.connectionState.isLatest = versionInfo.isLatest;
-  instance.connectionState.startedAt = new Date().toISOString();
-
-  // Socket'i otomatik başlatma - kullanıcı manuel olarak başlatmalı
-  // startSocket(instance);
-
-  return null; // Socket başlatılmadı
 };
 
 /**
  * Bağlantıyı başlat (QR üretimi için socket'i başlat)
  */
 export const startConnection = async (accountId) => {
-  const instance = getOrCreateInstance(accountId);
-  
-  // Eğer socket zaten varsa, mevcut socket'i döndür
-  if (instance.sock) {
+  try {
+    const instance = getOrCreateInstance(accountId);
+    
+    // Eğer socket zaten varsa, mevcut socket'i döndür
+    if (instance.sock) {
+      return instance.sock;
+    }
+
+    // Auth state ve version yüklenmemişse, önce initBaileys çağır
+    if (!instance.authState || !instance.waVersion) {
+      await initBaileys(accountId);
+    }
+
+    // Auth state ve version kontrolü
+    if (!instance.authState || !instance.waVersion) {
+      throw new Error(`Auth state veya version yüklenemedi: ${accountId}`);
+    }
+
+    // Socket'i başlat (QR üretimi burada tetiklenecek)
+    startSocket(instance);
+
+    if (!instance.sock) {
+      throw new Error(`Socket oluşturulamadı: ${accountId}`);
+    }
+
     return instance.sock;
+  } catch (error) {
+    logger.error({ error, accountId }, "startConnection hatası");
+    throw error;
   }
-
-  // Auth state ve version yüklenmemişse, önce initBaileys çağır
-  if (!instance.authState || !instance.waVersion) {
-    await initBaileys(accountId);
-  }
-
-  // Socket'i başlat (QR üretimi burada tetiklenecek)
-  startSocket(instance);
-
-  return instance.sock;
 };
 
 /**

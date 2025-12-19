@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import * as api from '../api';
 import * as QRCode from 'qrcode';
 import { Account } from '../types';
@@ -21,6 +21,13 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const sseRef = useRef<(() => void) | null>(null);
   const qrIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // newAccountName'in güncel değerini takip etmek için ref kullan (closure sorunu için)
+  const newAccountNameRef = useRef<string>('');
+  
+  // newAccountName değiştiğinde ref'i güncelle
+  useEffect(() => {
+    newAccountNameRef.current = newAccountName;
+  }, [newAccountName]);
 
   const loadAccounts = async () => {
     try {
@@ -200,16 +207,27 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
         if (data.status === 'open') {
           console.log('[handleAddAccount] Bağlantı açıldı, hesap adı kaydediliyor...');
           
-          // Hesap adını localStorage'dan kontrol et (kullanıcı "Hesap Adını Kaydet" butonuna tıklamış olabilir)
+          // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
+          // Ref kullanarak güncel değeri al (closure sorunu için)
+          const currentAccountName = newAccountNameRef.current;
           const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
-          const savedName = accountNames[tempAccountId];
-          const accountName = savedName || tempAccountId;
+          let accountName: string;
           
-          // Hesap adını kaydet (eğer kaydedilmemişse)
-          if (!savedName) {
-            accountNames[tempAccountId] = accountName;
-            localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+          if (currentAccountName && currentAccountName.trim()) {
+            // Kullanıcı hesap adı girmişse onu kullan
+            accountName = currentAccountName.trim();
+            console.log('[handleAddAccount] Kullanıcı hesap adı girdi:', accountName);
+          } else {
+            // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
+            const existingCount = Object.keys(accountNames).length;
+            accountName = `Hesap ${existingCount + 1}`;
+            console.log('[handleAddAccount] Otomatik hesap adı atandı:', accountName);
           }
+          
+          // Hesap adını kaydet
+          accountNames[tempAccountId] = accountName;
+          localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+          console.log('[handleAddAccount] Hesap adı kaydedildi:', accountName, 'Session ID:', tempAccountId);
           
           if (sseRef.current) {
             sseRef.current();
@@ -258,7 +276,50 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
               });
           }
           
-          if (status.status === 'open' || checkCount >= maxChecks) {
+          if (status.status === 'open') {
+            console.log('[handleAddAccount] Bağlantı açıldı (alternatif kontrol), hesap adı kaydediliyor...');
+            
+            // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
+            // Ref kullanarak güncel değeri al (closure sorunu için)
+            const currentAccountName = newAccountNameRef.current;
+            const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
+            let accountName: string;
+            
+            if (currentAccountName && currentAccountName.trim()) {
+              // Kullanıcı hesap adı girmişse onu kullan
+              accountName = currentAccountName.trim();
+              console.log('[handleAddAccount] Kullanıcı hesap adı girdi (alternatif):', accountName);
+            } else {
+              // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
+              const existingCount = Object.keys(accountNames).length;
+              accountName = `Hesap ${existingCount + 1}`;
+              console.log('[handleAddAccount] Otomatik hesap adı atandı (alternatif):', accountName);
+            }
+            
+            // Hesap adını kaydet
+            accountNames[tempAccountId] = accountName;
+            localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+            console.log('[handleAddAccount] Hesap adı kaydedildi (alternatif):', accountName, 'Session ID:', tempAccountId);
+            
+            clearInterval(checkQRInterval);
+            setQrCode(null);
+            setIsLoadingQR(false);
+            setPendingAccountId(null);
+            setShowAddAccountModal(false);
+            loadAccounts();
+            
+            if (onAccountCreated) {
+              onAccountCreated(tempAccountId);
+            } else {
+              setTimeout(() => {
+                if (onLoadContacts && onLoadChats) {
+                  onLoadContacts(tempAccountId).then(() => {
+                    onLoadChats(tempAccountId, 50);
+                  });
+                }
+              }, 1000);
+            }
+          } else if (checkCount >= maxChecks) {
             clearInterval(checkQRInterval);
           }
         } catch (error) {
@@ -343,6 +404,30 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
             });
         }
         if (data.status === 'open') {
+          console.log('[generateQR] Bağlantı açıldı, hesap adı kaydediliyor...');
+          
+          // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
+          // Ref kullanarak güncel değeri al (closure sorunu için)
+          const currentAccountName = newAccountNameRef.current;
+          const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
+          let accountName: string;
+          
+          if (currentAccountName && currentAccountName.trim()) {
+            // Kullanıcı hesap adı girmişse onu kullan
+            accountName = currentAccountName.trim();
+            console.log('[generateQR] Kullanıcı hesap adı girdi:', accountName);
+          } else {
+            // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
+            const existingCount = Object.keys(accountNames).length;
+            accountName = `Hesap ${existingCount + 1}`;
+            console.log('[generateQR] Otomatik hesap adı atandı:', accountName);
+          }
+          
+          // Hesap adını kaydet
+          accountNames[pendingAccountId] = accountName;
+          localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+          console.log('[generateQR] Hesap adı kaydedildi:', accountName, 'Session ID:', pendingAccountId);
+          
           if (sseRef.current) {
             sseRef.current();
             sseRef.current = null;

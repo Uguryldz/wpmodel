@@ -237,23 +237,50 @@ const asyncHandler =
     try {
       await handler(req, res, next);
     } catch (error) {
+      // Eğer response zaten gönderilmişse, sadece log'la
+      if (res.headersSent) {
+        console.error('[asyncHandler] Response zaten gönderilmiş, hata loglanıyor:', error);
+        return;
+      }
+      // Response gönderilmemişse, error handler'a gönder
       next(error);
     }
   };
 
-const waitForQrOrStatus = async (sessionId, { timeoutMs = 15000, intervalMs = 200 } = {}) => {
+const waitForQrOrStatus = async (sessionId, { timeoutMs = 20000, intervalMs = 200 } = {}) => {
   const started = Date.now();
+  let lastState = null;
+  
   while (Date.now() - started < timeoutMs) {
     const state = getConnectionState(sessionId);
-    if (!state) break;
+    if (!state) {
+      // State yoksa biraz bekle ve tekrar dene
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      continue;
+    }
+    
+    lastState = state;
+    
     // QR kod geldiyse veya bağlantı açıldıysa döndür
     if (state.lastQr || state.status === "open") {
       return state;
     }
+    
+    // Hata durumu varsa döndür
+    if (state.status === "close" && state.lastError) {
+      console.warn(`[waitForQrOrStatus] Bağlantı hatası: ${sessionId}`, state.lastError);
+      return state;
+    }
+    
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+  
   // Timeout sonrası mevcut state'i döndür (QR kod gelmemiş olsa bile)
-  return getConnectionState(sessionId);
+  const finalState = getConnectionState(sessionId) || lastState;
+  if (finalState) {
+    console.log(`[waitForQrOrStatus] Timeout: ${sessionId}, durum: ${finalState.status}, QR: ${!!finalState.lastQr}`);
+  }
+  return finalState;
 };
 
 app.get("/health", (_req, res) => {
@@ -296,30 +323,119 @@ app.get(
 app.post(
   "/sessions/add",
   asyncHandler(async (req, res) => {
-    const { sessionId } = req.body || {};
-    if (!sessionId) {
-      return res.status(400).json({ error: "sessionId zorunludur" });
-    }
+    let sessionId = null;
+    try {
+      sessionId = req.body?.sessionId;
+      console.log(`[POST /sessions/add] İstek alındı:`, { sessionId, body: req.body });
+      
+      if (!sessionId) {
+        console.error(`[POST /sessions/add] sessionId eksik`);
+        return res.status(400).json({ error: "sessionId zorunludur", status: "error" });
+      }
 
-    if (sessionExists(sessionId)) {
-      return res.status(400).json({ error: "Session already exists" });
-    }
+      if (sessionExists(sessionId)) {
+        console.warn(`[POST /sessions/add] Session zaten var: ${sessionId}`);
+        return res.status(400).json({ error: "Session already exists", status: "error" });
+      }
 
-    // Session'ı hazırla ve socket'i başlat (QR üretimi için)
-    await initBaileys(sessionId);
-    await startConnection(sessionId);
-    
-    // QR kodun gelmesi için bekle (maksimum 15 saniye)
-    // QR kod Baileys'in connection.update event'inde gelir
-    const state = await waitForQrOrStatus(sessionId, { timeoutMs: 15000, intervalMs: 200 });
-    
-    // Response'da QR kod varsa direkt döndür (WebSocket/SSE gerekmez)
-    const response = {
-      ...state,
-      qr: state?.lastQr || null, // QR kod hem 'qr' hem de 'lastQr' field'ında döner
-    };
-    
-    res.json(response || { error: "Session could not be initialized" });
+      console.log(`[POST /sessions/add] Session oluşturuluyor: ${sessionId}`);
+      
+      // Session'ı hazırla ve socket'i başlat (QR üretimi için)
+      try {
+        await initBaileys(sessionId);
+        console.log(`[POST /sessions/add] initBaileys tamamlandı: ${sessionId}`);
+      } catch (initError) {
+        console.error(`[POST /sessions/add] initBaileys hatası: ${sessionId}`, initError);
+        return res.status(500).json({ 
+          error: `initBaileys hatası: ${initError.message || initError.toString()}`,
+          status: "error"
+        });
+      }
+      
+      try {
+        await startConnection(sessionId);
+        console.log(`[POST /sessions/add] startConnection tamamlandı: ${sessionId}`);
+      } catch (startError) {
+        console.error(`[POST /sessions/add] startConnection hatası: ${sessionId}`, startError);
+        return res.status(500).json({ 
+          error: `startConnection hatası: ${startError.message || startError.toString()}`,
+          status: "error"
+        });
+      }
+      
+      // QR kodun gelmesi için bekle (maksimum 20 saniye - artırıldı)
+      // QR kod Baileys'in connection.update event'inde gelir
+      let state;
+      try {
+        state = await waitForQrOrStatus(sessionId, { timeoutMs: 20000, intervalMs: 200 });
+      } catch (waitError) {
+        console.error(`[POST /sessions/add] waitForQrOrStatus hatası: ${sessionId}`, waitError);
+        return res.status(500).json({ 
+          error: `QR kod beklenirken hata: ${waitError.message || waitError.toString()}`,
+          status: "error"
+        });
+      }
+      
+      if (!state) {
+        console.error(`[POST /sessions/add] State alınamadı: ${sessionId}`);
+        return res.status(500).json({ 
+          error: "Session state alınamadı",
+          status: "error"
+        });
+      }
+      
+      // QR kod gelmediyse ama bağlantı açıldıysa, başarılı say
+      if (state.status === "open") {
+        console.log(`[POST /sessions/add] Bağlantı açıldı: ${sessionId}`);
+        return res.json({
+          ...state,
+          qr: null,
+          status: "open"
+        });
+      }
+      
+      // QR kod varsa döndür
+      if (state.lastQr) {
+        console.log(`[POST /sessions/add] QR kod oluşturuldu: ${sessionId}`);
+        return res.json({
+          ...state,
+          qr: state.lastQr,
+          status: state.status || "connecting"
+        });
+      }
+      
+      // QR kod gelmediyse ama connecting durumundaysa, SSE ile takip etmesi için bilgi ver
+      console.warn(`[POST /sessions/add] QR kod henüz gelmedi, SSE ile takip edilmeli: ${sessionId}`);
+      return res.json({
+        ...state,
+        qr: null,
+        status: state.status || "connecting",
+        message: "QR kod oluşturuluyor, lütfen SSE endpoint'ini kullanarak takip edin"
+      });
+      
+    } catch (error) {
+      console.error(`[POST /sessions/add] Beklenmeyen hata: ${sessionId}`, {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        fullError: error
+      });
+      
+      // Response zaten gönderilmişse, sadece log'la
+      if (res.headersSent) {
+        console.error(`[POST /sessions/add] Response zaten gönderilmiş, hata loglanıyor`);
+        return;
+      }
+      
+      return res.status(500).json({ 
+        error: error.message || error.toString() || "Session oluşturulamadı",
+        status: "error",
+        ...(process.env.NODE_ENV === 'development' && { 
+          details: error.stack,
+          name: error.name
+        })
+      });
+    }
   })
 );
 
@@ -2758,10 +2874,26 @@ app.use((err, _req, res, _next) => {
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
   
-  console.error(err);
-  const status = err.status || 500;
+  console.error('[Error Handler] Hata yakalandı:', {
+    message: err.message,
+    stack: err.stack,
+    status: err.status,
+    name: err.name,
+    code: err.code,
+    fullError: err
+  });
+  
+  const status = err.status || err.statusCode || 500;
+  const errorMessage = err.message || err.toString() || "Beklenmeyen bir hata oluştu.";
+  
   res.status(status).json({
-    error: err.message || "Beklenmeyen bir hata oluştu.",
+    error: errorMessage,
+    status: "error",
+    ...(process.env.NODE_ENV === 'development' && { 
+      details: err.stack,
+      name: err.name,
+      code: err.code
+    })
   });
 });
 

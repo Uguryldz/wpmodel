@@ -8,7 +8,6 @@ interface AddAccountModalProps {
   qrCode: string | null;
   isLoadingQR: boolean;
   pendingAccountId: string | null;
-  onCreateAccount: () => void;
   onGenerateQR: () => void;
   onClose: () => void;
 }
@@ -20,7 +19,6 @@ export default function AddAccountModal({
   qrCode,
   isLoadingQR,
   pendingAccountId,
-  onCreateAccount,
   onGenerateQR,
   onClose,
 }: AddAccountModalProps) {
@@ -86,17 +84,9 @@ export default function AddAccountModal({
           ) : null}
 
           <div className="flex space-x-2">
-            {qrCode && (
-              <button
-                onClick={onCreateAccount}
-                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors"
-              >
-                Hesap Adını Kaydet
-              </button>
-            )}
             <button
               onClick={onClose}
-              className={`${qrCode ? 'px-4' : 'flex-1'} py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors`}
+              className="flex-1 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               {qrCode ? 'İptal' : 'Kapat'}
             </button>

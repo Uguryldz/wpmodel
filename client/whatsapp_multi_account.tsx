@@ -848,6 +848,8 @@ export default function WhatsAppMultiAccount() {
             </button>
           </div>
         </div>
+        
+        {/* AddAccountModal - Hesap yokken de göster */}
         <AddAccountModal
           isOpen={accountsHook.showAddAccountModal}
           newAccountName={accountsHook.newAccountName}
@@ -855,7 +857,6 @@ export default function WhatsAppMultiAccount() {
           qrCode={accountsHook.qrCode}
           isLoadingQR={accountsHook.isLoadingQR}
           pendingAccountId={accountsHook.pendingAccountId}
-          onCreateAccount={accountsHook.createAccount}
           onGenerateQR={accountsHook.generateQR}
           onClose={accountsHook.handleCloseModal}
         />
@@ -871,6 +872,18 @@ export default function WhatsAppMultiAccount() {
           <Loader2 className="mx-auto text-gray-400 mb-4 animate-spin" size={64} />
           <p className="text-gray-600">Hesap yükleniyor...</p>
         </div>
+        
+        {/* AddAccountModal - Aktif hesap yokken de göster */}
+        <AddAccountModal
+          isOpen={accountsHook.showAddAccountModal}
+          newAccountName={accountsHook.newAccountName}
+          setNewAccountName={accountsHook.setNewAccountName}
+          qrCode={accountsHook.qrCode}
+          isLoadingQR={accountsHook.isLoadingQR}
+          pendingAccountId={accountsHook.pendingAccountId}
+          onGenerateQR={accountsHook.generateQR}
+          onClose={accountsHook.handleCloseModal}
+        />
       </div>
     );
   }
@@ -1191,6 +1204,18 @@ export default function WhatsAppMultiAccount() {
           }}
         />
       )}
+
+      {/* AddAccountModal - Her zaman render edilir (hesap varken de yokken de) */}
+      <AddAccountModal
+        isOpen={accountsHook.showAddAccountModal}
+        newAccountName={accountsHook.newAccountName}
+        setNewAccountName={accountsHook.setNewAccountName}
+        qrCode={accountsHook.qrCode}
+        isLoadingQR={accountsHook.isLoadingQR}
+        pendingAccountId={accountsHook.pendingAccountId}
+        onGenerateQR={accountsHook.generateQR}
+        onClose={accountsHook.handleCloseModal}
+      />
     </div>
   );
 }

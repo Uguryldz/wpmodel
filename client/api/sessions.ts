@@ -30,13 +30,73 @@ export const getSessions = async (): Promise<Session[]> => {
 };
 
 export const createSession = async (sessionId: string): Promise<SessionStatus> => {
-  const response = await fetch(`${API_BASE}/sessions/add`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-  });
-  if (!response.ok) throw new Error('Session oluşturulamadı');
-  return response.json();
+  try {
+    console.log('[createSession] İstek gönderiliyor:', { sessionId, url: `${API_BASE}/sessions/add` });
+    
+    const response = await fetch(`${API_BASE}/sessions/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    
+    console.log('[createSession] Response alındı:', { 
+      status: response.status, 
+      statusText: response.statusText,
+      ok: response.ok,
+      headers: Object.fromEntries(response.headers.entries())
+    });
+    
+    // Response body'yi oku (hem başarılı hem hatalı durumlar için)
+    const responseText = await response.text();
+    console.log('[createSession] Response body (raw):', responseText.substring(0, 500));
+    
+    let responseData;
+    try {
+      responseData = JSON.parse(responseText);
+      console.log('[createSession] Response data (parsed):', responseData);
+    } catch (parseError) {
+      console.error('[createSession] JSON parse hatası:', parseError, 'Raw text:', responseText);
+      throw new Error(`Backend yanıtı parse edilemedi: ${responseText.substring(0, 200)}`);
+    }
+    
+    if (!response.ok) {
+      const errorMessage = responseData?.error || responseData?.message || `HTTP ${response.status}: ${response.statusText}`;
+      console.error('[createSession] Backend hatası:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorMessage,
+        fullResponse: responseData
+      });
+      throw new Error(errorMessage);
+    }
+    
+    console.log('[createSession] Session başarıyla oluşturuldu:', { 
+      sessionId, 
+      status: responseData.status, 
+      hasQr: !!responseData.qr,
+      hasLastQr: !!responseData.lastQr
+    });
+    return responseData;
+  } catch (error: any) {
+    console.error('[createSession] Hata detayları:', {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+      cause: error.cause
+    });
+    
+    // Network hatası ise daha açıklayıcı mesaj ver
+    if (error.message?.includes('Failed to fetch') || error.message?.includes('ECONNREFUSED') || error.name === 'TypeError') {
+      throw new Error('Backend bağlantı hatası. Backend çalışıyor mu kontrol edin. (http://localhost:3000)');
+    }
+    
+    // Eğer error.message yoksa, error'ın kendisini string'e çevir
+    if (!error.message) {
+      throw new Error(`Bilinmeyen hata: ${String(error)}`);
+    }
+    
+    throw error;
+  }
 };
 
 // QR üretimi için bağlantıyı başlat
