@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, Edit2, FileText, List, Square, Package } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Edit2, FileText, X, Check, List, Square, Package } from 'lucide-react';
 import * as templatesApi from '../api/templates';
 
 export interface MessageTemplate {
@@ -543,193 +543,220 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
   return (
     <div className="flex h-screen bg-gray-100 flex-col">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={onBack}
-            className="text-gray-600 hover:text-gray-800 transition-colors"
-            title="Geri Dön"
-          >
-            <ArrowLeft size={24} />
-          </button>
-          <h1 className="text-2xl font-bold text-gray-800">Mesaj Şablonları</h1>
+      <div className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          {/* Sol Taraf - Başlık */}
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={onBack}
+              className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Geri Dön"
+            >
+              <ArrowLeft size={22} />
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Mesaj Şablonları</h1>
+              <p className="text-xs text-gray-500 mt-0.5">Hızlı mesaj şablonlarınızı yönetin</p>
+            </div>
+          </div>
+
+          {/* Sağ Taraf - Yeni Şablon Butonu */}
+          {!showAddForm && (
+            <button
+              onClick={() => {
+                resetForm();
+                setShowAddForm(true);
+              }}
+              className="bg-green-500 text-white px-5 py-2.5 rounded-lg hover:bg-green-600 transition-all shadow-md hover:shadow-lg flex items-center space-x-2 group"
+            >
+              <Plus size={20} className="group-hover:rotate-90 transition-transform duration-300" />
+              <span className="font-medium">Yeni Şablon</span>
+            </button>
+          )}
         </div>
-        {!showAddForm && (
-          <button
-            onClick={() => {
-              resetForm();
-              setShowAddForm(true);
-            }}
-            className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors flex items-center space-x-2"
-          >
-            <Plus size={20} />
-            <span>Yeni Şablon</span>
-          </button>
-        )}
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         {showAddForm ? (
-          <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold">
-                {editingTemplateId ? 'Şablonu Düzenle' : 'Yeni Şablon Oluştur'}
-              </h2>
+  <div className="max-w-4xl mx-auto">
+    <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-green-50 to-white px-6 py-4 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-900">
+            {editingTemplateId ? '✏️ Şablonu Düzenle' : '✨ Yeni Şablon Oluştur'}
+          </h2>
+          <button
+            onClick={() => {
+              setShowAddForm(false);
+              setEditingTemplateId(null);
+              resetForm();
+            }}
+            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X size={20} />
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="p-6 space-y-6 max-h-[calc(100vh-250px)] overflow-y-auto">
+        {/* Şablon Tipi */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-3">Şablon Tipi</label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { type: 'button', icon: Square, label: 'Buton', color: 'blue' },
+              { type: 'list', icon: List, label: 'Liste', color: 'purple' },
+              { type: 'template', icon: FileText, label: 'Şablon', color: 'orange' },
+              { type: 'product', icon: Package, label: 'Ürün', color: 'green' }
+            ].map(({ type, icon: Icon, label, color }) => (
               <button
-                onClick={() => {
-                  setShowAddForm(false);
-                  setEditingTemplateId(null);
-                  resetForm();
-                }}
-                className="text-gray-500 hover:text-gray-700"
+                key={type}
+                onClick={() => setTemplateType(type as any)}
+                className={`p-4 border-2 rounded-xl transition-all ${
+                  templateType === type 
+                    ? `border-${color}-100 bg-${color}-50 shadow-md` 
+                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                }`}
               >
-                İptal
+                <Icon 
+                  size={24} 
+                  className={`mx-auto mb-2 ${
+                    templateType === type ? `text-${color}-600` : 'text-gray-400'
+                  }`} 
+                />
+                <span className={`text-sm font-semibold ${
+                  templateType === type ? `text-${color}-700` : 'text-gray-600'
+                }`}>
+                  {label}
+                </span>
               </button>
-            </div>
+            ))}
+          </div>
+        </div>
 
-            {/* Template Type Selection */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Şablon Tipi</label>
-              <div className="grid grid-cols-4 gap-4">
-                <button
-                  onClick={() => setTemplateType('button')}
-                  className={`p-4 border-2 rounded-lg transition-colors ${
-                    templateType === 'button' ? 'border-green-500 bg-green-50' : 'border-gray-300'
-                  }`}
-                >
-                  <Square size={24} className="mx-auto mb-2" />
-                  <span className="text-sm font-medium">Buton</span>
-                </button>
-                <button
-                  onClick={() => setTemplateType('list')}
-                  className={`p-4 border-2 rounded-lg transition-colors ${
-                    templateType === 'list' ? 'border-green-500 bg-green-50' : 'border-gray-300'
-                  }`}
-                >
-                  <List size={24} className="mx-auto mb-2" />
-                  <span className="text-sm font-medium">Liste</span>
-                </button>
-                <button
-                  onClick={() => setTemplateType('template')}
-                  className={`p-4 border-2 rounded-lg transition-colors ${
-                    templateType === 'template' ? 'border-green-500 bg-green-50' : 'border-gray-300'
-                  }`}
-                >
-                  <FileText size={24} className="mx-auto mb-2" />
-                  <span className="text-sm font-medium">Şablon</span>
-                </button>
-                <button
-                  onClick={() => setTemplateType('product')}
-                  className={`p-4 border-2 rounded-lg transition-colors ${
-                    templateType === 'product' ? 'border-green-500 bg-green-50' : 'border-gray-300'
-                  }`}
-                >
-                  <Package size={24} className="mx-auto mb-2" />
-                  <span className="text-sm font-medium">Ürün</span>
-                </button>
-              </div>
-            </div>
+        {/* Şablon Adı */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            Şablon Adı <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+            placeholder="Örn: Hoş Geldin Mesajı"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          />
+        </div>
 
-            {/* Template Name */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Şablon Adı *</label>
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                placeholder="Örn: Hoş Geldin Mesajı"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+        {/* BUTON ŞABLONU */}
+        {templateType === 'button' && (
+          <div className="space-y-5 p-5 bg-blue-50/40 rounded-xl border-2 border-blue-100">
+            {/* Mesaj Metni */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                💬 Mesaj Metni <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={buttonText}
+                onChange={(e) => setButtonText(e.target.value)}
+                placeholder="Mesaj metnini buraya yazın"
+                rows={4}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
               />
             </div>
 
-            {/* Button Template Form */}
-            {templateType === 'button' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mesaj Metni *</label>
-                  <textarea
-                    value={buttonText}
-                    onChange={(e) => setButtonText(e.target.value)}
-                    placeholder="Mesaj metnini buraya yazın"
-                    rows={4}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Header (Opsiyonel)</label>
-                  <select
-                    value={buttonHeaderType}
-                    onChange={(e) => setButtonHeaderType(Number(e.target.value) as 1 | 2 | 3 | 4)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-green-500"
-                  >
-                    <option value={1}>Text Header</option>
-                    <option value={2}>Image Header</option>
-                    <option value={3}>Video Header</option>
-                    <option value={4}>Document Header</option>
-                  </select>
-                  {buttonHeaderType === 1 && (
-                    <input
-                      type="text"
-                      value={buttonHeaderText}
-                      onChange={(e) => setButtonHeaderText(e.target.value)}
-                      placeholder="Header metni"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                  )}
-                  {buttonHeaderType === 2 && (
-                    <input
-                      type="text"
-                      value={buttonHeaderImage}
-                      onChange={(e) => setButtonHeaderImage(e.target.value)}
-                      placeholder="Image URL veya path"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                  )}
-                  {buttonHeaderType === 3 && (
-                    <input
-                      type="text"
-                      value={buttonHeaderVideo}
-                      onChange={(e) => setButtonHeaderVideo(e.target.value)}
-                      placeholder="Video URL veya path"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                  )}
-                  {buttonHeaderType === 4 && (
-                    <input
-                      type="text"
-                      value={buttonHeaderDocument}
-                      onChange={(e) => setButtonHeaderDocument(e.target.value)}
-                      placeholder="Document URL veya path"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Alt Bilgi (Opsiyonel)</label>
-                  <input
-                    type="text"
-                    value={buttonFooter}
-                    onChange={(e) => setButtonFooter(e.target.value)}
-                    placeholder="Alt bilgi metni"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Butonlar (En fazla 3) *</label>
-                  {buttons.map((button, index) => (
-                    <div key={index} className="mb-3 p-3 border border-gray-300 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium">Buton {index + 1}</span>
-                        {buttons.length > 1 && (
-                          <button
-                            onClick={() => removeButton(index)}
-                            className="text-red-500 hover:text-red-700 text-sm"
-                          >
-                            Kaldır
-                          </button>
-                        )}
-                      </div>
+            {/* Header */}
+            <div className="p-4 bg-white rounded-lg border border-gray-200">
+              <label className="block text-sm font-semibold text-gray-700 mb-3">📌 Header (Opsiyonel)</label>
+              <select
+                value={buttonHeaderType}
+                onChange={(e) => setButtonHeaderType(Number(e.target.value) as 1 | 2 | 3 | 4)}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg mb-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value={1}>📝 Text</option>
+                <option value={2}>🖼️ Image</option>
+                <option value={3}>🎥 Video</option>
+                <option value={4}>📄 Document</option>
+              </select>
+              {buttonHeaderType === 1 && (
+                <input
+                  type="text"
+                  value={buttonHeaderText}
+                  onChange={(e) => setButtonHeaderText(e.target.value)}
+                  placeholder="Header metni"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              )}
+              {buttonHeaderType === 2 && (
+                <input
+                  type="text"
+                  value={buttonHeaderImage}
+                  onChange={(e) => setButtonHeaderImage(e.target.value)}
+                  placeholder="Image URL veya path"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              )}
+              {buttonHeaderType === 3 && (
+                <input
+                  type="text"
+                  value={buttonHeaderVideo}
+                  onChange={(e) => setButtonHeaderVideo(e.target.value)}
+                  placeholder="Video URL veya path"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              )}
+              {buttonHeaderType === 4 && (
+                <input
+                  type="text"
+                  value={buttonHeaderDocument}
+                  onChange={(e) => setButtonHeaderDocument(e.target.value)}
+                  placeholder="Document URL veya path"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              )}
+            </div>
+
+            {/* Footer */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">📝 Alt Bilgi (Opsiyonel)</label>
+              <input
+                type="text"
+                value={buttonFooter}
+                onChange={(e) => setButtonFooter(e.target.value)}
+                placeholder="Alt bilgi metni"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            {/* Butonlar */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                🔘 Butonlar (En fazla 3) <span className="text-red-500">*</span>
+              </label>
+              <div className="space-y-3">
+                {buttons.map((button, index) => (
+                  <div key={index} className="p-4 bg-white border-2 border-gray-200 rounded-xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-semibold text-gray-700 flex items-center space-x-2">
+                        <span className="w-6 h-6 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xs font-bold">
+                          {index + 1}
+                        </span>
+                        <span>Buton {index + 1}</span>
+                      </span>
+                      {buttons.length > 1 && (
+                        <button
+                          onClick={() => removeButton(index)}
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors flex items-center space-x-1"
+                        >
+                          <X size={14} />
+                          <span className="text-sm font-medium">Kaldır</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
                       <input
                         type="text"
                         value={button.displayText}
@@ -739,7 +766,7 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                           setButtons(newButtons);
                         }}
                         placeholder="Buton metni"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                       />
                       <select
                         value={button.type}
@@ -748,11 +775,11 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                           newButtons[index].type = Number(e.target.value) as 1 | 2 | 3;
                           setButtons(newButtons);
                         }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                       >
-                        <option value={1}>Hızlı Yanıt</option>
-                        <option value={2}>URL</option>
-                        <option value={3}>Arama</option>
+                        <option value={1}>⚡ Hızlı Yanıt</option>
+                        <option value={2}>🔗 URL</option>
+                        <option value={3}>📞 Arama</option>
                       </select>
                       {button.type === 2 && (
                         <input
@@ -763,8 +790,8 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                             newButtons[index].url = e.target.value;
                             setButtons(newButtons);
                           }}
-                          placeholder="URL (örn: https://example.com)"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="https://example.com"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                         />
                       )}
                       {button.type === 3 && (
@@ -776,98 +803,115 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                             newButtons[index].phoneNumber = e.target.value;
                             setButtons(newButtons);
                           }}
-                          placeholder="Telefon numarası (örn: +905551234567)"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="+905551234567"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                         />
                       )}
                     </div>
-                  ))}
-                  {buttons.length < 3 && (
-                    <button
-                      onClick={addButton}
-                      className="text-green-500 hover:text-green-700 text-sm font-medium"
-                    >
-                      + Buton Ekle
-                    </button>
-                  )}
-                </div>
+                  </div>
+                ))}
               </div>
-            )}
+              {buttons.length < 3 && (
+                <button
+                  onClick={addButton}
+                  className="mt-3 text-green-600 hover:text-green-700 hover:bg-green-50 px-4 py-2.5 rounded-lg transition-colors flex items-center space-x-2 font-semibold"
+                >
+                  <Plus size={18} />
+                  <span>Buton Ekle</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
-            {/* List Template Form */}
-            {templateType === 'list' && (
+        {/* LİSTE ŞABLONU */}
+        {templateType === 'list' && (
+          <div className="space-y-5 p-5 bg-purple-50/40 rounded-xl border-2 border-purple-100">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                💬 Mesaj Metni <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={listText}
+                onChange={(e) => setListText(e.target.value)}
+                placeholder="Mesaj metnini buraya yazın"
+                rows={3}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                📋 Liste Başlığı <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={listTitle}
+                onChange={(e) => setListTitle(e.target.value)}
+                placeholder="Liste başlığı"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                🔘 Buton Metni <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={listButtonText}
+                onChange={(e) => setListButtonText(e.target.value)}
+                placeholder="Seçenekleri Görüntüle"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">📝 Alt Bilgi (Opsiyonel)</label>
+              <input
+                type="text"
+                value={listFooter}
+                onChange={(e) => setListFooter(e.target.value)}
+                placeholder="Alt bilgi metni"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                📑 Bölümler ve Seçenekler (Max 10) <span className="text-red-500">*</span>
+              </label>
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mesaj Metni *</label>
-                  <textarea
-                    value={listText}
-                    onChange={(e) => setListText(e.target.value)}
-                    placeholder="Mesaj metnini buraya yazın"
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Liste Başlığı *</label>
-                  <input
-                    type="text"
-                    value={listTitle}
-                    onChange={(e) => setListTitle(e.target.value)}
-                    placeholder="Liste başlığı"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Buton Metni *</label>
-                  <input
-                    type="text"
-                    value={listButtonText}
-                    onChange={(e) => setListButtonText(e.target.value)}
-                    placeholder="Seçenekleri Görüntüle"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Alt Bilgi (Opsiyonel)</label>
-                  <input
-                    type="text"
-                    value={listFooter}
-                    onChange={(e) => setListFooter(e.target.value)}
-                    placeholder="Alt bilgi metni"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Bölümler ve Seçenekler (Toplam max 10 seçenek) *</label>
-                  {sections.map((section, sectionIndex) => {
-                    const totalRows = sections.reduce((sum, s) => sum + s.rows.length, 0);
-                    return (
-                      <div key={sectionIndex} className="mb-4 p-4 border border-gray-300 rounded-lg">
-                        <div className="flex items-center justify-between mb-3">
-                          <input
-                            type="text"
-                            value={section.title}
-                            onChange={(e) => {
-                              const newSections = [...sections];
-                              newSections[sectionIndex].title = e.target.value;
-                              setSections(newSections);
-                            }}
-                            placeholder="Bölüm başlığı"
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg mr-2 focus:outline-none focus:ring-2 focus:ring-green-500"
-                          />
-                          {sections.length > 1 && (
-                            <button
-                              onClick={() => removeSection(sectionIndex)}
-                              className="text-red-500 hover:text-red-700 text-sm px-2"
-                            >
-                              Bölümü Kaldır
-                            </button>
-                          )}
-                        </div>
+                {sections.map((section, sectionIndex) => {
+                  const totalRows = sections.reduce((sum, s) => sum + s.rows.length, 0);
+                  return (
+                    <div key={sectionIndex} className="p-4 bg-white border-2 border-gray-200 rounded-xl">
+                      <div className="flex items-center space-x-2 mb-3">
+                        <input
+                          type="text"
+                          value={section.title}
+                          onChange={(e) => {
+                            const newSections = [...sections];
+                            newSections[sectionIndex].title = e.target.value;
+                            setSections(newSections);
+                          }}
+                          placeholder="Bölüm başlığı"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                        {sections.length > 1 && (
+                          <button
+                            onClick={() => removeSection(sectionIndex)}
+                            className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-2">
                         {section.rows.map((row, rowIndex) => (
-                          <div key={rowIndex} className="mb-2 p-2 bg-gray-50 rounded">
+                          <div key={rowIndex} className="p-2 bg-gray-50 rounded-lg">
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs text-gray-500">Seçenek {rowIndex + 1}</span>
+                              <span className="text-xs font-medium text-gray-500">Seçenek {rowIndex + 1}</span>
                               {section.rows.length > 1 && (
                                 <button
                                   onClick={() => removeRow(sectionIndex, rowIndex)}
@@ -886,7 +930,7 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                                 setSections(newSections);
                               }}
                               placeholder="Seçenek başlığı"
-                              className="w-full px-2 py-1 border border-gray-300 rounded mb-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                              className="w-full px-2 py-1.5 border border-gray-300 rounded mb-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             />
                             <input
                               type="text"
@@ -897,130 +941,148 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                                 setSections(newSections);
                               }}
                               placeholder="Açıklama (opsiyonel)"
-                              className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                              className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             />
                           </div>
                         ))}
-                        {totalRows < 10 && (
-                          <button
-                            onClick={() => addRow(sectionIndex)}
-                            className="text-green-500 hover:text-green-700 text-sm font-medium mt-2"
-                          >
-                            + Seçenek Ekle
-                          </button>
-                        )}
                       </div>
-                    );
-                  })}
-                  <button
-                    onClick={addSection}
-                    className="text-green-500 hover:text-green-700 text-sm font-medium"
-                  >
-                    + Bölüm Ekle
-                  </button>
-                </div>
+                      {totalRows < 10 && (
+                        <button
+                          onClick={() => addRow(sectionIndex)}
+                          className="mt-2 text-green-600 hover:bg-green-50 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                        >
+                          + Seçenek Ekle
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            )}
+              <button
+                onClick={addSection}
+                className="mt-3 text-purple-600 hover:bg-purple-50 px-4 py-2.5 rounded-lg transition-colors flex items-center space-x-2 font-semibold"
+              >
+                <Plus size={18} />
+                <span>Bölüm Ekle</span>
+              </button>
+            </div>
+          </div>
+        )}
 
-            {/* Template Message Form */}
-            {templateType === 'template' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Şablon Adı (WhatsApp Business) *</label>
-                  <input
-                    type="text"
-                    value={templateNameInput}
-                    onChange={(e) => setTemplateNameInput(e.target.value)}
-                    placeholder="Onaylanmış şablon adı"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Dil Kodu</label>
-                  <select
-                    value={templateLanguageCode}
-                    onChange={(e) => setTemplateLanguageCode(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  >
-                    <option value="tr">Türkçe</option>
-                    <option value="en">İngilizce</option>
-                    <option value="de">Almanca</option>
-                    <option value="fr">Fransızca</option>
-                  </select>
-                </div>
-              </div>
-            )}
+        {/* TEMPLATE ŞABLONU */}
+        {templateType === 'template' && (
+          <div className="space-y-5 p-5 bg-orange-50/40 rounded-xl border-2 border-orange-100">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                📄 WhatsApp Business Şablon Adı <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={templateNameInput}
+                onChange={(e) => setTemplateNameInput(e.target.value)}
+                placeholder="Onaylanmış şablon adı"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
 
-            {/* Product Template Form */}
-            {templateType === 'product' && (
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">🌍 Dil Kodu</label>
+              <select
+                value={templateLanguageCode}
+                onChange={(e) => setTemplateLanguageCode(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="tr">🇹🇷 Türkçe</option>
+                <option value="en">🇬🇧 İngilizce</option>
+                <option value="de">🇩🇪 Almanca</option>
+                <option value="fr">🇫🇷 Fransızca</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* ÜRÜN ŞABLONU */}
+        {templateType === 'product' && (
+          <div className="space-y-5 p-5 bg-green-50/40 rounded-xl border-2 border-green-100">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                💬 Mesaj Metni <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={productText}
+                onChange={(e) => setProductText(e.target.value)}
+                placeholder="Mesaj metnini buraya yazın"
+                rows={3}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                👤 Business Owner JID <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={businessOwnerJid}
+                onChange={(e) => setBusinessOwnerJid(e.target.value)}
+                placeholder="905551234567@s.whatsapp.net"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">📝 Alt Bilgi (Opsiyonel)</label>
+              <input
+                type="text"
+                value={productFooter}
+                onChange={(e) => setProductFooter(e.target.value)}
+                placeholder="Alt bilgi metni"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">🖼️ Thumbnail URL (Opsiyonel)</label>
+              <input
+                type="text"
+                value={productThumbnail}
+                onChange={(e) => setProductThumbnail(e.target.value)}
+                placeholder="https://example.com/product.jpg"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                📦 Ürün Kategorileri <span className="text-red-500">*</span>
+              </label>
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mesaj Metni *</label>
-                  <textarea
-                    value={productText}
-                    onChange={(e) => setProductText(e.target.value)}
-                    placeholder="Mesaj metnini buraya yazın"
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Business Owner JID *</label>
-                  <input
-                    type="text"
-                    value={businessOwnerJid}
-                    onChange={(e) => setBusinessOwnerJid(e.target.value)}
-                    placeholder="905551234567@s.whatsapp.net"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Alt Bilgi (Opsiyonel)</label>
-                  <input
-                    type="text"
-                    value={productFooter}
-                    onChange={(e) => setProductFooter(e.target.value)}
-                    placeholder="Alt bilgi metni"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Thumbnail URL (Opsiyonel)</label>
-                  <input
-                    type="text"
-                    value={productThumbnail}
-                    onChange={(e) => setProductThumbnail(e.target.value)}
-                    placeholder="https://example.com/product.jpg"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Ürün Kategorileri *</label>
-                  {productList.map((category, categoryIndex) => (
-                    <div key={categoryIndex} className="mb-4 p-4 border border-gray-300 rounded-lg">
-                      <div className="flex items-center justify-between mb-3">
-                        <input
-                          type="text"
-                          value={category.title}
-                          onChange={(e) => {
-                            const newProductList = [...productList];
-                            newProductList[categoryIndex].title = e.target.value;
-                            setProductList(newProductList);
-                          }}
-                          placeholder="Kategori başlığı"
-                          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg mr-2 focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                        {productList.length > 1 && (
-                          <button
-                            onClick={() => removeProductCategory(categoryIndex)}
-                            className="text-red-500 hover:text-red-700 text-sm px-2"
-                          >
-                            Kategoriyi Kaldır
-                          </button>
-                        )}
-                      </div>
+                {productList.map((category, categoryIndex) => (
+                  <div key={categoryIndex} className="p-4 bg-white border-2 border-gray-200 rounded-xl">
+                    <div className="flex items-center space-x-2 mb-3">
+                      <input
+                        type="text"
+                        value={category.title}
+                        onChange={(e) => {
+                          const newProductList = [...productList];
+                          newProductList[categoryIndex].title = e.target.value;
+                          setProductList(newProductList);
+                        }}
+                        placeholder="Kategori başlığı"
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      {productList.length > 1 && (
+                        <button
+                          onClick={() => removeProductCategory(categoryIndex)}
+                          className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
                       {category.products.map((product, productIndex) => (
-                        <div key={productIndex} className="mb-2 flex items-center space-x-2">
+                        <div key={productIndex} className="flex items-center space-x-2">
                           <input
                             type="text"
                             value={product.productId}
@@ -1030,62 +1092,80 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                               setProductList(newProductList);
                             }}
                             placeholder="Ürün ID"
-                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                            className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                           />
                           {category.products.length > 1 && (
                             <button
                               onClick={() => removeProduct(categoryIndex, productIndex)}
                               className="text-red-500 hover:text-red-700 text-sm"
                             >
-                              Kaldır
+                              <X size={14} />
                             </button>
                           )}
                         </div>
                       ))}
-                      <button
-                        onClick={() => addProduct(categoryIndex)}
-                        className="text-green-500 hover:text-green-700 text-sm font-medium mt-2"
-                      >
-                        + Ürün Ekle
-                      </button>
                     </div>
-                  ))}
-                  <button
-                    onClick={addProductCategory}
-                    className="text-green-500 hover:text-green-700 text-sm font-medium"
-                  >
-                    + Kategori Ekle
-                  </button>
-                </div>
+                    <button
+                      onClick={() => addProduct(categoryIndex)}
+                      className="mt-2 text-green-600 hover:bg-green-50 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      + Ürün Ekle
+                    </button>
+                  </div>
+                ))}
               </div>
-            )}
-
-            {/* Save Button */}
-            <div className="mt-6 flex justify-end space-x-2">
               <button
-                onClick={() => {
-                  setShowAddForm(false);
-                  setEditingTemplateId(null);
-                  resetForm();
-                }}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                onClick={addProductCategory}
+                className="mt-3 text-green-600 hover:bg-green-50 px-4 py-2.5 rounded-lg transition-colors flex items-center space-x-2 font-semibold"
               >
-                İptal
-              </button>
-              <button
-                onClick={saveTemplate}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
-              >
-                {editingTemplateId ? 'Güncelle' : 'Kaydet'}
+                <Plus size={18} />
+                <span>Kategori Ekle</span>
               </button>
             </div>
           </div>
-        ) : (
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end space-x-3">
+        <button
+          onClick={() => {
+            setShowAddForm(false);
+            setEditingTemplateId(null);
+            resetForm();
+          }}
+          className="px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-all font-medium"
+        >
+          İptal
+        </button>
+        <button
+          onClick={saveTemplate}
+          className="px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all shadow-md hover:shadow-lg font-medium flex items-center space-x-2"
+        >
+          {editingTemplateId ? (
+            <>
+              <Check size={18} />
+              <span>Güncelle</span>
+            </>
+          ) : (
+            <>
+              <Plus size={18} />
+              <span>Kaydet</span>
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  </div>
+) : (
           <div className="max-w-6xl mx-auto">
             {templates.length === 0 ? (
               <div className="bg-white rounded-lg shadow-lg p-12 text-center">
-                <FileText size={64} className="mx-auto text-gray-400 mb-4" />
-                <p className="text-gray-600 mb-6">Henüz şablon oluşturulmamış</p>
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <FileText size={40} className="text-gray-400" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">Henüz şablon yok</h3>
+                <p className="text-gray-600 mb-6">İlk mesaj şablonunuzu oluşturarak başlayın</p>
                 <div className="space-y-4">
                   <button
                     onClick={() => {
@@ -1096,36 +1176,49 @@ export default function TemplatesPage({ activeAccountId, onBack }: TemplatesPage
                   >
                     İlk Şablonu Oluştur
                   </button>
-                  <div className="mt-6 pt-6 border-t border-gray-200">
-                    <p className="text-sm text-gray-500 mb-4">Veya hızlıca örnek şablonlar oluşturun:</p>
+                  <div className="mt-8 pt-8 border-t border-gray-200">
+                    <p className="text-sm font-semibold text-gray-700 mb-4 text-center">
+                      🚀 Hızlı Başlangıç - Örnek Şablonlar
+                    </p>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       <button
                         onClick={() => createExampleTemplate('button')}
-                        className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                        className="group bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 border-2 border-blue-200 hover:border-blue-300 text-blue-700 px-4 py-4 rounded-xl transition-all hover:shadow-lg hover:scale-105 relative overflow-hidden"
                       >
-                        <Square size={20} className="mx-auto mb-1" />
-                        Örnek Buton
+                        <div className="absolute top-0 right-0 w-12 h-12 bg-blue-200/30 rounded-bl-full"></div>
+                        <Square size={24} className="mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                        <span className="text-sm font-semibold block">Buton</span>
+                        <span className="text-xs text-blue-600 mt-1 block">Örnek Şablon</span>
                       </button>
+
                       <button
                         onClick={() => createExampleTemplate('list')}
-                        className="bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                        className="group bg-gradient-to-br from-purple-50 to-purple-100 hover:from-purple-100 hover:to-purple-200 border-2 border-purple-200 hover:border-purple-300 text-purple-700 px-4 py-4 rounded-xl transition-all hover:shadow-lg hover:scale-105 relative overflow-hidden"
                       >
-                        <List size={20} className="mx-auto mb-1" />
-                        Örnek Liste
+                        <div className="absolute top-0 right-0 w-12 h-12 bg-purple-200/30 rounded-bl-full"></div>
+                        <List size={24} className="mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                        <span className="text-sm font-semibold block">Liste</span>
+                        <span className="text-xs text-purple-600 mt-1 block">Örnek Şablon</span>
                       </button>
+
                       <button
                         onClick={() => createExampleTemplate('template')}
-                        className="bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-700 px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                        className="group bg-gradient-to-br from-orange-50 to-orange-100 hover:from-orange-100 hover:to-orange-200 border-2 border-orange-200 hover:border-orange-300 text-orange-700 px-4 py-4 rounded-xl transition-all hover:shadow-lg hover:scale-105 relative overflow-hidden"
                       >
-                        <FileText size={20} className="mx-auto mb-1" />
-                        Örnek Şablon
+                        <div className="absolute top-0 right-0 w-12 h-12 bg-orange-200/30 rounded-bl-full"></div>
+                        <FileText size={24} className="mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                        <span className="text-sm font-semibold block">Şablon</span>
+                        <span className="text-xs text-orange-600 mt-1 block">Örnek Şablon</span>
                       </button>
+
                       <button
                         onClick={() => createExampleTemplate('product')}
-                        className="bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                        className="group bg-gradient-to-br from-green-50 to-green-100 hover:from-green-100 hover:to-green-200 border-2 border-green-200 hover:border-green-300 text-green-700 px-4 py-4 rounded-xl transition-all hover:shadow-lg hover:scale-105 relative overflow-hidden"
                       >
-                        <Package size={20} className="mx-auto mb-1" />
-                        Örnek Ürün
+                        <div className="absolute top-0 right-0 w-12 h-12 bg-green-200/30 rounded-bl-full"></div>
+                        <Package size={24} className="mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                        <span className="text-sm font-semibold block">Ürün</span>
+                        <span className="text-xs text-green-600 mt-1 block">Örnek Şablon</span>
                       </button>
                     </div>
                   </div>

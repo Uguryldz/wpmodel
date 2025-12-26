@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X } from 'lucide-react';
+import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Check, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X } from 'lucide-react';
 import { extractMessageText } from '../utils/messageUtils';
 import { shouldShowDateSeparator } from '../utils/dateUtils';
 import DateSeparator from './DateSeparator';
@@ -59,7 +59,7 @@ interface MessageListProps {
   onDeleteMessage: (msg: Message, deleteForEveryone: boolean) => void;
   onForwardMessage: (msg: Message) => void;
   onLoadContacts: (sessionId: string) => void;
-  onOpenContactSelector: () => void;
+  //onOpenContactSelector: () => void;
   onMarkAsRead: () => void;
   onRetryMessage?: (msg: Message) => void;
   onPinMessage?: (msg: Message, type: number, time?: number) => void;
@@ -87,7 +87,7 @@ export default function MessageList({
   onDeleteMessage,
   onForwardMessage,
   onLoadContacts,
-  onOpenContactSelector,
+  //onOpenContactSelector,
   onMarkAsRead,
   onRetryMessage,
   onPinMessage,
@@ -126,85 +126,117 @@ export default function MessageList({
   return (
     <>
       {/* Chat Header */}
-      <div className="bg-gray-100 p-3 flex items-center justify-between border-b">
-        <div className="flex items-center space-x-3">
-          <div className="relative">
-            {selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? (
-              <img
-                src={selectedChat.profilePicture}
-                alt={selectedChat.name}
-                className="w-10 h-10 rounded-full object-cover"
-                loading="lazy"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  target.style.display = 'none';
-                  const parent = target.parentElement;
-                  if (parent) {
-                    const fallback = parent.querySelector('.chat-header-fallback') as HTMLElement;
-                    if (fallback) {
-                      fallback.style.display = 'flex';
+      <div className="bg-white border-b border-gray-200 p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          {/* Sol Taraf - Profil Bilgileri */}
+          <div className="flex items-center space-x-3 flex-1 min-w-0">
+            <div className="relative flex-shrink-0">
+              {selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? (
+                <img
+                  src={selectedChat.profilePicture}
+                  alt={selectedChat.name}
+                  className="w-12 h-12 rounded-full object-cover ring-2 ring-white shadow-md"
+                  loading="lazy"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    target.style.display = 'none';
+                    const parent = target.parentElement;
+                    if (parent) {
+                      const fallback = parent.querySelector('.chat-header-fallback') as HTMLElement;
+                      if (fallback) {
+                        fallback.style.display = 'flex';
+                      }
                     }
-                  }
+                  }}
+                />
+              ) : null}
+              <div 
+                className={`w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold text-white chat-header-fallback shadow-md ${
+                  selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? 'hidden' : ''
+                }`}
+                style={{
+                  backgroundColor: selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' 
+                    ? 'transparent' 
+                    : `hsl(${(selectedChat.id.charCodeAt(0) * 137.508) % 360}, 65%, 55%)`
                 }}
-              />
-            ) : null}
-            <div 
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-2xl chat-header-fallback ${
-                selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' ? 'hidden' : ''
-              }`}
-              style={{
-                backgroundColor: selectedChat.profilePicture && selectedChat.profilePicture !== '' && selectedChat.profilePicture !== 'NO_PICTURE' 
-                  ? 'transparent' 
-                  : `hsl(${(selectedChat.id.charCodeAt(0) * 137.508) % 360}, 70%, 50%)`
-              }}
-            >
-              {selectedChat.name[0]?.toUpperCase() || '?'}
+              >
+                {selectedChat.name[0]?.toUpperCase() || '?'}
+              </div>
+              {/* Online göstergesi */}
+              <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full"></div>
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-gray-900 truncate">
+                {selectedChat.verifiedName || selectedChat.name}
+              </div>
+              {/* <div className="flex items-center space-x-1 text-xs text-green-600 font-medium">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span>çevrimiçi</span>
+              </div> */}
             </div>
           </div>
-          <div>
-            <div className="font-semibold">{selectedChat.verifiedName || selectedChat.name}</div>
-            <div className="text-xs text-gray-500">çevrimiçi</div>
+
+          {/* Sağ Taraf - Aksiyon Butonları */}
+          <div className="flex items-center space-x-2">
+            {/* <button 
+              onClick={onOpenContactSelector}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-blue-600 group relative"
+              title="Kişi Seç"
+            >
+              <Users size={20} className="transition-colors" />
+            </button> */}
+
+            <button 
+              onClick={() => setShowSearch(!showSearch)}
+              className={`p-2 hover:bg-gray-100 rounded-lg transition-colors group relative ${
+                showSearch ? 'bg-gray-100 text-green-600' : 'text-gray-600 hover:text-green-600'
+              }`}
+              title="Mesajlarda ara"
+            >
+              <Search size={20} className="transition-colors" />
+            </button>
+
+            {/* <button 
+              onClick={onMarkAsRead}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-green-600 group relative"
+              title="Okundu olarak işaretle"
+            >
+              <Eye size={20} className="transition-colors" />
+            </button> */}
+
+            {/* Video Call (isteğe bağlı) */}
+            {/* <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-blue-600">
+              <Video size={20} />
+            </button> */}
+
+            {/* Phone Call (isteğe bağlı) */}
+            {/* <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-green-600">
+              <Phone size={20} />
+            </button> */}
+
+            {/* More Menu */}
+            {/* <button 
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-800"
+              title="Daha fazla"
+            >
+              <MoreVertical size={20} />
+            </button> */}
           </div>
-        </div>
-        <div className="flex space-x-4 text-gray-600">
-          <button 
-            onClick={onOpenContactSelector}
-            className="hover:text-gray-800"
-            title="Kişi Seç"
-          >
-            <Users size={20} />
-          </button>
-          <button className="hover:text-gray-800"><Video size={20} /></button>
-          <button className="hover:text-gray-800"><Phone size={20} /></button>
-          <button 
-            onClick={() => setShowSearch(!showSearch)}
-            className="hover:text-gray-800"
-            title="Mesajlarda ara"
-          >
-            <Search size={20} />
-          </button>
-          <button 
-            onClick={onMarkAsRead}
-            className="hover:text-gray-800"
-            title="Okundu olarak işaretle"
-          >
-            <Eye size={20} />
-          </button>
-          <button className="hover:text-gray-800"><MoreVertical size={20} /></button>
         </div>
       </div>
 
       {/* Mesaj Arama */}
       {showSearch && (
-        <div className="bg-white border-b p-2">
-          <div className="flex items-center space-x-2">
-            <Search size={18} className="text-gray-400" />
+        <div className="bg-white border-b border-gray-200 p-3 shadow-sm">
+          <div className="relative">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => onSearchChange?.(e.target.value)}
               placeholder="Mesajlarda ara..."
-              className="flex-1 outline-none text-sm"
+              className="w-full bg-gray-50 hover:bg-gray-100 focus:bg-white border border-gray-200 focus:border-green-500 rounded-lg pl-10 pr-10 py-2.5 outline-none text-sm transition-all duration-200 placeholder:text-gray-400 focus:ring-2 focus:ring-green-100"
               autoFocus
             />
             {searchTerm && (
@@ -213,15 +245,26 @@ export default function MessageList({
                   onSearchChange?.('');
                   setShowSearch(false);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-full bg-gray-300 hover:bg-gray-400 text-white transition-colors"
+                title="Temizle ve kapat"
               >
-                <X size={18} />
+                <X size={14} />
               </button>
             )}
           </div>
-          {searchTerm && (
-            <div className="text-xs text-gray-500 mt-1">
-              {filteredMessages.length} mesaj bulundu
+          
+          {searchTerm && filteredMessages.length > 0 && (
+            <div className="mt-2 text-xs text-gray-500 flex items-center space-x-1">
+              <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+              <span>
+                <span className="font-semibold text-green-600">{filteredMessages.length}</span> mesaj bulundu
+              </span>
+            </div>
+          )}
+          
+          {searchTerm && filteredMessages.length === 0 && (
+            <div className="mt-2 text-center text-xs text-gray-500 bg-yellow-50 py-2 rounded-lg">
+              Sonuç bulunamadı
             </div>
           )}
         </div>
@@ -230,10 +273,10 @@ export default function MessageList({
       {/* Mesajlar */}
       <div 
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]" 
-        style={{
-        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
-        }}
+        className="p-6 space-y-6 flex-1 min-h-0 overflow-y-auto bg-[#efeae2]" 
+        // style={{
+        // backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,.03) 10px, rgba(0,0,0,.03) 20px)'
+        // }}
       >
         <div className="space-y-2">
           {filteredMessages.length === 0 ? (
@@ -373,39 +416,44 @@ export default function MessageList({
                         )}
                       </div>
                     )}
-                    
                     {!isProtocol && isEditing ? (
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="text"
+                      <div className="bg-white p-2 rounded-lg border-2 border-green-300 shadow-md">
+                        <textarea
                           value={editingText}
                           onChange={(e) => onSetEditingText(e.target.value)}
-                          onKeyPress={(e) => {
-                            if (e.key === 'Enter') {
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
                               onEditMessage(msg, editingText);
                             } else if (e.key === 'Escape') {
                               onSetEditingMessage(null);
                               onSetEditingText('');
                             }
                           }}
-                          className="flex-1 px-2 py-1 border rounded"
+                          className="w-full px-2 py-1.5 border-0 focus:outline-none resize-none text-sm"
+                          rows={2}
                           autoFocus
+                          placeholder="Mesajı düzenle..."
                         />
-                        <button
-                          onClick={() => onEditMessage(msg, editingText)}
-                          className="text-blue-500 hover:text-blue-700"
-                        >
-                          Kaydet
-                        </button>
-                        <button
-                          onClick={() => {
-                            onSetEditingMessage(null);
-                            onSetEditingText('');
-                          }}
-                          className="text-gray-500 hover:text-gray-700"
-                        >
-                          İptal
-                        </button>
+                        <div className="flex items-center justify-end space-x-1 mt-1 pt-1 border-t border-gray-200">
+                          <button
+                            onClick={() => {
+                              onSetEditingMessage(null);
+                              onSetEditingText('');
+                            }}
+                            className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                            title="İptal (Esc)"
+                          >
+                            <X size={16} />
+                          </button>
+                          <button
+                            onClick={() => onEditMessage(msg, editingText)}
+                            className="p-1.5 text-white bg-green-500 hover:bg-green-600 rounded transition-colors"
+                            title="Kaydet"
+                          >
+                            <Check size={16} />
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <div className="break-words whitespace-pre-wrap leading-relaxed">
@@ -500,9 +548,19 @@ export default function MessageList({
 
       {/* Mesaj Context Menüsü */}
       {selectedMessage && (
-        <div className="fixed inset-0 z-50" onClick={() => onShowMessageMenu(false)}>
+        <>
+          {/* Backdrop */}
           <div 
-            className="absolute bg-white rounded-lg shadow-xl p-2 min-w-[200px] z-50"
+            className="fixed inset-0 bg-black/20 z-40" 
+            onClick={() => {
+              onShowMessageMenu(false);
+              onSelectMessage(null as any);
+            }}
+          />
+          
+          {/* Menu */}
+          <div 
+            className="fixed bg-white rounded-xl shadow-2xl py-2 w-56 z-50 border border-gray-200 animate-fade-in"
             style={{
               top: '50%',
               left: '50%',
@@ -510,138 +568,175 @@ export default function MessageList({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <button
-              onClick={() => {
-                onSetReplyingTo(selectedMessage);
-                onShowMessageMenu(false);
-                onSelectMessage(null as any);
-              }}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
-            >
-              <Reply size={16} />
-              <span>Yanıtla</span>
-            </button>
-            <button
-              onClick={() => {
-                onForwardMessage(selectedMessage);
-                onShowMessageMenu(false);
-                onSelectMessage(null as any);
-                if (activeAccountId) {
-                  onLoadContacts(activeAccountId);
-                }
-              }}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
-            >
-              <MoreVertical size={16} />
-              <span>İlet</span>
-            </button>
-            {selectedMessage.fromMe && (
-              <>
-                <button
-                  onClick={() => {
-                    onSetEditingMessage(selectedMessage);
-                    onSetEditingText(selectedMessage.text || selectedMessage.body || '');
-                    onShowMessageMenu(false);
-                    onSelectMessage(null as any);
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
-                >
-                  <Edit2 size={16} />
-                  <span>Düzenle</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onStarMessage(selectedMessage, !selectedMessage.starred);
-                    onShowMessageMenu(false);
-                    onSelectMessage(null as any);
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
-                >
-                  {selectedMessage.starred ? (
-                    <>
-                      <StarOff size={16} className="text-yellow-500" />
-                      <span>Yıldızı kaldır</span>
-                    </>
-                  ) : (
-                    <>
-                      <Star size={16} />
-                      <span>Yıldızla</span>
-                    </>
-                  )}
-                </button>
-              </>
-            )}
-            <hr className="my-1" />
-            <button
-              onClick={() => {
-                onDeleteMessage(selectedMessage, false);
-                onShowMessageMenu(false);
-                onSelectMessage(null as any);
-              }}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
-            >
-              <Trash2 size={16} />
-              <span>Sil</span>
-            </button>
-            {selectedMessage.fromMe && (
+            {/* Header */}
+            <div className="px-4 py-2 border-b border-gray-100">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mesaj İşlemleri</p>
+            </div>
+
+            {/* Menu Items */}
+            <div className="py-1">
               <button
                 onClick={() => {
-                  onDeleteMessage(selectedMessage, true);
+                  onSetReplyingTo(selectedMessage);
                   onShowMessageMenu(false);
                   onSelectMessage(null as any);
                 }}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
+                className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
               >
-                <Trash2 size={16} />
-                <span>Herkes için sil</span>
+                <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                  <Reply size={16} className="text-gray-600" />
+                </div>
+                <span className="text-sm font-medium">Yanıtla</span>
               </button>
-            )}
-            {/* Delete Message for Me - README'ye göre */}
-            {onDeleteMessageForMe && (
+
               <button
                 onClick={() => {
-                  onDeleteMessageForMe(selectedMessage);
+                  onForwardMessage(selectedMessage);
+                  onShowMessageMenu(false);
+                  onSelectMessage(null as any);
+                  if (activeAccountId) {
+                    onLoadContacts(activeAccountId);
+                  }
+                }}
+                className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+              >
+                <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                  <Forward size={16} className="text-gray-600" />
+                </div>
+                <span className="text-sm font-medium">İlet</span>
+              </button>
+
+              {selectedMessage.fromMe && (
+                <>
+                  <button
+                    onClick={() => {
+                      onSetEditingMessage(selectedMessage);
+                      onSetEditingText(selectedMessage.text || selectedMessage.body || '');
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                  >
+                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                      <Edit2 size={16} className="text-gray-600" />
+                    </div>
+                    <span className="text-sm font-medium">Düzenle</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      onStarMessage(selectedMessage, !selectedMessage.starred);
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                  >
+                    <div className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
+                      selectedMessage.starred 
+                        ? 'bg-yellow-50 group-hover:bg-yellow-100' 
+                        : 'bg-gray-100 group-hover:bg-gray-200'
+                    }`}>
+                      {selectedMessage.starred ? (
+                        <StarOff size={16} className="text-yellow-600" />
+                      ) : (
+                        <Star size={16} className="text-gray-600" />
+                      )}
+                    </div>
+                    <span className="text-sm font-medium">
+                      {selectedMessage.starred ? 'Yıldızı kaldır' : 'Yıldızla'}
+                    </span>
+                  </button>
+                </>
+              )}
+
+              {/* {onPinMessage && (
+                <>
+                  <button
+                    onClick={() => {
+                      if (selectedMessage.key) {
+                        onPinMessage(selectedMessage, 1, 86400);
+                        onShowMessageMenu(false);
+                        onSelectMessage(null as any);
+                      }
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                  >
+                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                      <Pin size={16} className="text-gray-600" />
+                    </div>
+                    <span className="text-sm font-medium">Sabitle</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (selectedMessage.key) {
+                        onPinMessage(selectedMessage, 0);
+                        onShowMessageMenu(false);
+                        onSelectMessage(null as any);
+                      }
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                  >
+                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                      <PinOff size={16} className="text-gray-600" />
+                    </div>
+                    <span className="text-sm font-medium">Sabitlemeyi kaldır</span>
+                  </button>
+                </>
+              )} */}
+
+              {/* Divider */}
+              <div className="my-1 border-t border-gray-100"></div>
+
+              {/* Delete Options */}
+              <button
+                onClick={() => {
+                  onDeleteMessage(selectedMessage, false);
                   onShowMessageMenu(false);
                   onSelectMessage(null as any);
                 }}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2 text-red-600"
+                className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
               >
-                <Trash2 size={16} />
-                <span>Sadece benim için sil</span>
+                <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                  <Trash2 size={16} className="text-red-600" />
+                </div>
+                <span className="text-sm font-medium">Sil</span>
               </button>
-            )}
-            {onPinMessage && (
-              <>
+
+              {selectedMessage.fromMe && (
                 <button
                   onClick={() => {
-                    if (selectedMessage.key) {
-                      onPinMessage(selectedMessage, 1, 86400); // Pin for 24h
-                      onShowMessageMenu(false);
-                      onSelectMessage(null as any);
-                    }
+                    onDeleteMessage(selectedMessage, true);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
                   }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
                 >
-                  <Pin size={16} />
-                  <span>Sabitle</span>
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                    <Trash2 size={16} className="text-red-600" />
+                  </div>
+                  <span className="text-sm font-medium">Herkes için sil</span>
                 </button>
+              )}
+
+              {onDeleteMessageForMe && (
                 <button
                   onClick={() => {
-                    if (selectedMessage.key) {
-                      onPinMessage(selectedMessage, 0); // Unpin
-                      onShowMessageMenu(false);
-                      onSelectMessage(null as any);
-                    }
+                    onDeleteMessageForMe(selectedMessage);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
                   }}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-100 rounded flex items-center space-x-2"
+                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
                 >
-                  <PinOff size={16} />
-                  <span>Sabitlemeyi kaldır</span>
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                    <Trash2 size={16} className="text-red-600" />
+                  </div>
+                  <span className="text-sm font-medium">Sadece benim için sil</span>
                 </button>
-              </>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </>
   );

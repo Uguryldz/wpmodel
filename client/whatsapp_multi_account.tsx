@@ -14,6 +14,7 @@ import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
 import Toast from './components/Toast';
 import ContactProfileModal from './components/ContactProfileModal';
+import MediaPreviewModal from './components/MediaPreviewModal';
 import { normalizePhoneNumber, extractPhoneFromJid } from './utils/contactUtils';
 import { extractMessageText } from './utils/messageUtils';
 import { COLORS, EMOJIS, ATTACHMENT_OPTIONS, CONTACTS_CACHE_TTL, PROFILE_PICTURE_BATCH_SIZE, PROFILE_PICTURE_DEBOUNCE_MS, PROFILE_PICTURE_BATCH_DELAY_MS } from './constants/appConstants';
@@ -97,6 +98,9 @@ export default function WhatsAppMultiAccount() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
   const [showContactProfile, setShowContactProfile] = useState(false);
   const [selectedContactForProfile, setSelectedContactForProfile] = useState<api.Contact | null>(null);
+  const [showMediaPreview, setShowMediaPreview] = useState(false);
+  const [selectedMediaFile, setSelectedMediaFile] = useState<File | null>(null);
+  const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | 'document'>('image');
   // Refs (WebSocket ve diğer)
   const chatsPollRef = useRef<NodeJS.Timeout | null>(null);
   const activeAccountRef = useRef<Account | undefined>(undefined);
@@ -490,7 +494,9 @@ export default function WhatsAppMultiAccount() {
   };
 
   // Medya mesajı gönderme handler'ı
-  const handleSendMedia = async (file: File, type: 'image' | 'video' | 'document') => {
+  //const handleSendMedia = async (file: File, type: 'image' | 'video' | 'document') => {
+  const handleSendMedia = async (file: File, type: 'image' | 'video' | 'document', caption?: string) => {
+
     if (!activeAccount || !chatsHook.selectedChat || isSending) return;
     
     setIsSending(true);
@@ -539,10 +545,12 @@ export default function WhatsAppMultiAccount() {
         chatsHook.selectedChat.id,
         file,
         mimetype,
-        undefined, // caption
+        caption,
+        //undefined, // caption
         type === 'video' ? { ptv: true } : undefined
       );
-      
+      setShowMediaPreview(false);
+      setSelectedMediaFile(null);
       // Optimistic mesajı güncelle
       messagesHook.setMessages(prev => 
         prev.map(m => {
@@ -931,76 +939,65 @@ export default function WhatsAppMultiAccount() {
         if (!file) return;
 
         try {
-          // MIME type'ı belirle
-          let mimetype = file.type || 'application/octet-stream';
-          
-          // MIME type yoksa dosya uzantısına göre belirle
-          if (!mimetype || mimetype === 'application/octet-stream') {
-            const ext = file.name.split('.').pop()?.toLowerCase();
-            const mimeMap: Record<string, string> = {
-              'jpg': 'image/jpeg',
-              'jpeg': 'image/jpeg',
-              'png': 'image/png',
-              'gif': 'image/gif',
-              'webp': 'image/webp',
-              'mp4': 'video/mp4',
-              'mov': 'video/quicktime',
-              'avi': 'video/x-msvideo',
-              'mp3': 'audio/mpeg',
-              'wav': 'audio/wav',
-              'ogg': 'audio/ogg',
-              'pdf': 'application/pdf',
-              'doc': 'application/msword',
-              'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              'xls': 'application/vnd.ms-excel',
-              'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            };
-            mimetype = mimeMap[ext || ''] || 'application/octet-stream';
-          }
-
-          // Caption için prompt göster (opsiyonel)
-          let caption = '';
-          if (type === 'Fotoğraf' || type === 'Video') {
-            const captionInput = prompt('Mesaj eklemek ister misiniz? (Boş bırakabilirsiniz)');
-            if (captionInput !== null) {
-              caption = captionInput;
-            }
-          }
-
-          // Medya mesajını gönder
-          await api.sendMediaMessage(
-            activeAccount.id,
-            chatsHook.selectedChat!.id,
-            file,
-            mimetype,
-            caption || undefined,
-            type === 'Ses' ? { ptt: true } : undefined // Ses mesajları için push-to-talk
-          );
-
-          // Mesajları yenile
-          messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
-          
-          // Chat listesini güncelle
-          chatsHook.setChats(prevChats => {
-            const index = prevChats.findIndex(c => c.id === chatsHook.selectedChat!.id);
-            if (index >= 0) {
-              const updatedChats = [...prevChats];
-              const now = Math.floor(Date.now() / 1000);
-              updatedChats[index] = {
-                ...updatedChats[index],
-                conversationTimestamp: now,
-                lastMessage: type === 'Fotoğraf' ? '📷 Fotoğraf' : type === 'Video' ? '📹 Video' : type === 'Ses' ? '🎵 Ses' : '📄 Belge',
-                time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+          // Resim veya Video ise modal aç
+          if (type === 'Fotoğraf') {
+            setSelectedMediaFile(file);
+            setSelectedMediaType('image');
+            setShowMediaPreview(true);
+          } else if (type === 'Video') {
+            setSelectedMediaFile(file);
+            setSelectedMediaType('video');
+            setShowMediaPreview(true);
+          } else {
+            // Ses ve Belge için direkt gönder (mevcut mantık)
+            let mimetype = file.type || 'application/octet-stream';
+            
+            if (!mimetype || mimetype === 'application/octet-stream') {
+              const ext = file.name.split('.').pop()?.toLowerCase();
+              const mimeMap: Record<string, string> = {
+                'mp3': 'audio/mpeg',
+                'wav': 'audio/wav',
+                'ogg': 'audio/ogg',
+                'pdf': 'application/pdf',
+                'doc': 'application/msword',
+                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'xls': 'application/vnd.ms-excel',
+                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
               };
-              return updatedChats;
+              mimetype = mimeMap[ext || ''] || 'application/octet-stream';
             }
-            return prevChats;
-          });
+
+            await api.sendMediaMessage(
+              activeAccount.id,
+              chatsHook.selectedChat!.id,
+              file,
+              mimetype,
+              undefined,
+              type === 'Ses' ? { ptt: true } : undefined
+            );
+
+            messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
+            
+            chatsHook.setChats(prevChats => {
+              const index = prevChats.findIndex(c => c.id === chatsHook.selectedChat!.id);
+              if (index >= 0) {
+                const updatedChats = [...prevChats];
+                const now = Math.floor(Date.now() / 1000);
+                updatedChats[index] = {
+                  ...updatedChats[index],
+                  conversationTimestamp: now,
+                  lastMessage: type === 'Ses' ? '🎵 Ses' : '📄 Belge',
+                  time: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+                };
+                return updatedChats;
+              }
+              return prevChats;
+            });
+          }
         } catch (error: any) {
           console.error('Dosya gönderilemedi:', error);
           alert(`Dosya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
         } finally {
-          // Input'u temizle
           document.body.removeChild(input);
         }
       };
@@ -1346,7 +1343,7 @@ export default function WhatsAppMultiAccount() {
           }}
         />
 
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col w-80">
           <MessageList
             selectedChat={chatsHook.selectedChat}
             messages={messagesHook.messages}
@@ -1547,6 +1544,21 @@ export default function WhatsAppMultiAccount() {
           if (chatsHook.selectedChat) {
             chatsHook.setSelectedChat(chatsHook.selectedChat);
             messagesHook.loadMessages(activeAccount!.id, chatsHook.selectedChat.id);
+          }
+        }}
+      />
+      {/* Media Preview Modal */}
+      <MediaPreviewModal
+        isOpen={showMediaPreview}
+        file={selectedMediaFile}
+        mediaType={selectedMediaType}
+        onClose={() => {
+          setShowMediaPreview(false);
+          setSelectedMediaFile(null);
+        }}
+        onSend={(caption) => {
+          if (selectedMediaFile) {
+            handleSendMedia(selectedMediaFile, selectedMediaType, caption);
           }
         }}
       />

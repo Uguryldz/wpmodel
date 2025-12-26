@@ -34,12 +34,12 @@ export function useContacts({
       console.log('=== Contact\'lar API\'den yükleniyor ===', { sessionId, forceReload });
       
       // Önce DB'den contact'ları yükle (cihaz rehberi)
-      let contactsData = await api.getContacts(sessionId).catch(() => []);
-      
+      //let contactsData = await api.getContacts(sessionId).catch(() => []);
+      let contactsData: api.Contact[] = await api.getContacts(sessionId).catch(() => []);
       // Eğer boşsa veya azsa, cihaz rehberinden de yükle
       if (!contactsData || contactsData.length === 0 || forceReload) {
         try {
-          const deviceContacts = await getDeviceContacts(sessionId);
+          const deviceContacts = await api.getDeviceContacts(sessionId);
           if (deviceContacts && deviceContacts.length > 0) {
             console.log('Cihaz rehberinden contact\'lar yüklendi:', deviceContacts.length);
             // Cihaz rehberindeki contact'ları mevcut listeye ekle (telefon numarası mapping'i için)
