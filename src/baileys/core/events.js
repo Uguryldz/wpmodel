@@ -829,8 +829,296 @@ export const bindSocketEvents = (instance) => {
   sock.ev.on("messages.upsert", messagesUpsertListener);
   instance.eventListeners.set("messages.upsert", messagesUpsertListener);
 
+  // messages.update: Mesaj güncellemeleri (okundu, düzenlendi, silindi, reaksiyon, poll votes)
+  // Baileys README'ye göre poll votes decrypt için kritik
+  const messagesUpdateListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    const formattedUpdates = [];
+
+    for (const update of updates) {
+      const { key, update: msgUpdate } = update;
+      if (!key || !key.remoteJid) {
+        continue;
+      }
+
+      const normalizedJid = jidNormalizedUser(key.remoteJid);
+      let updateType = "unknown";
+      let updateData = null;
+
+      // Poll votes decrypt (Baileys README'ye göre önemli)
+      if (msgUpdate.pollUpdates) {
+        try {
+          const { getMessageFromStore } = await import("../shared.js");
+          const pollCreation = await getMessageFromStore(key, sessionId);
+          
+          if (pollCreation) {
+            const { getAggregateVotesInPollMessage } = await import("baileys");
+            const aggregatedVotes = getAggregateVotesInPollMessage({
+              message: pollCreation,
+              pollUpdates: msgUpdate.pollUpdates,
+            });
+            
+            updateType = "poll_vote";
+            updateData = {
+              pollVotes: aggregatedVotes,
+              pollUpdates: msgUpdate.pollUpdates,
+            };
+            
+            logger.info({ sessionId, messageId: key.id }, "Poll vote güncellemesi alındı");
+          }
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Poll vote decrypt edilemedi");
+        }
+      }
+
+      // Mesaj okundu bilgisi (read receipt)
+      if (msgUpdate.receipt) {
+        updateType = "read_receipt";
+        updateData = {
+          receipt: msgUpdate.receipt,
+          receiptTimestamp: msgUpdate.receiptTimestamp,
+        };
+        
+        // Prisma'da mesajı güncelle (okundu olarak işaretle)
+        try {
+          await prisma.message.updateMany({
+            where: {
+              sessionId,
+              remoteJid: normalizedJid,
+              id: key.id,
+            },
+            data: {
+              read: true,
+              readTimestamp: msgUpdate.receiptTimestamp ? BigInt(msgUpdate.receiptTimestamp) : undefined,
+            },
+          });
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Mesaj okundu bilgisi güncellenemedi");
+        }
+      }
+
+      // Mesaj düzenleme
+      if (msgUpdate.message) {
+        updateType = "message_edit";
+        updateData = {
+          message: msgUpdate.message,
+        };
+        
+        // Prisma'da mesajı güncelle
+        try {
+          await prisma.message.updateMany({
+            where: {
+              sessionId,
+              remoteJid: normalizedJid,
+              id: key.id,
+            },
+            data: {
+              message: JSON.stringify(msgUpdate.message),
+            },
+          });
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Mesaj düzenleme kaydedilemedi");
+        }
+      }
+
+      // Mesaj silme
+      if (msgUpdate.messageStubType === 0 || msgUpdate.messageStubParameters) {
+        updateType = "message_delete";
+        updateData = {
+          messageStubType: msgUpdate.messageStubType,
+          messageStubParameters: msgUpdate.messageStubParameters,
+        };
+        
+        // Prisma'dan mesajı sil
+        try {
+          await prisma.message.deleteMany({
+            where: {
+              sessionId,
+              remoteJid: normalizedJid,
+              id: key.id,
+            },
+          });
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Mesaj silme işlemi başarısız");
+        }
+      }
+
+      // Reaksiyonlar
+      if (msgUpdate.reactions) {
+        updateType = "reaction";
+        updateData = {
+          reactions: msgUpdate.reactions,
+        };
+        
+        // Prisma'da mesajı güncelle (reaksiyonları ekle)
+        try {
+          const existingMessage = await prisma.message.findFirst({
+            where: {
+              sessionId,
+              remoteJid: normalizedJid,
+              id: key.id,
+            },
+          });
+          
+          if (existingMessage) {
+            const message = existingMessage.message ? (typeof existingMessage.message === "string" ? JSON.parse(existingMessage.message) : existingMessage.message) : {};
+            message.reactions = msgUpdate.reactions;
+            
+            await prisma.message.updateMany({
+              where: {
+                sessionId,
+                remoteJid: normalizedJid,
+                id: key.id,
+              },
+              data: {
+                message: JSON.stringify(message),
+              },
+            });
+          }
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Mesaj reaksiyonu kaydedilemedi");
+        }
+      }
+
+      // Memory store'dan mesajı güncelle
+      try {
+        const messages = instance.messagesStore.get(normalizedJid) || [];
+        const messageIndex = messages.findIndex(m => {
+          const msgId = m.key?.id || m.id;
+          return msgId === key.id;
+        });
+        
+        if (messageIndex !== -1) {
+          const existingMessage = messages[messageIndex];
+          
+          // Mesaj güncellemelerini uygula
+          if (msgUpdate.receipt) {
+            existingMessage.read = true;
+            existingMessage.readTimestamp = msgUpdate.receiptTimestamp;
+          }
+          if (msgUpdate.message) {
+            existingMessage.message = msgUpdate.message;
+          }
+          if (msgUpdate.reactions) {
+            if (!existingMessage.message) existingMessage.message = {};
+            existingMessage.message.reactions = msgUpdate.reactions;
+          }
+          
+          messages[messageIndex] = existingMessage;
+          instance.messagesStore.set(normalizedJid, messages);
+        }
+      } catch (error) {
+        logger.error({ error, sessionId, messageId: key.id }, "Memory store'da mesaj güncellenemedi");
+      }
+
+      formattedUpdates.push({
+        key,
+        updateType,
+        updateData,
+        jid: normalizedJid,
+      });
+    }
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn && formattedUpdates.length > 0) {
+      wsBroadcastFn({
+        type: "messages.update",
+        sessionId,
+        updates: formattedUpdates,
+      });
+      
+      logger.info({ sessionId, count: formattedUpdates.length }, "Mesaj güncellemeleri WebSocket'e gönderildi");
+    }
+  };
+  sock.ev.on("messages.update", messagesUpdateListener);
+  instance.eventListeners.set("messages.update", messagesUpdateListener);
+
+  // presence.update: Kullanıcı online durumu, typing, last seen
+  // Baileys README'ye göre presence güncellemeleri için
+  const presenceUpdateListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    const formattedPresences = [];
+
+    for (const update of updates) {
+      const { id, presences } = update;
+      if (!id) {
+        continue;
+      }
+
+      const normalizedJid = jidNormalizedUser(id);
+      
+      // Presence bilgilerini formatla
+      const presenceData = {
+        jid: normalizedJid,
+        presences: presences || {},
+      };
+
+      // Her bir presence tipini işle
+      for (const [participantJid, presence] of Object.entries(presences || {})) {
+        const normalizedParticipant = jidNormalizedUser(participantJid);
+        
+        // Presence tipleri: available, unavailable, composing, recording, last seen
+        const presenceInfo = {
+          jid: normalizedJid,
+          participant: normalizedParticipant,
+          presence: presence?.lastKnownPresence || presence?.presence || "unknown",
+          lastSeen: presence?.lastSeen || null,
+          isComposing: presence?.lastKnownPresence === "composing" || presence?.presence === "composing",
+          isRecording: presence?.lastKnownPresence === "recording" || presence?.presence === "recording",
+          isAvailable: presence?.lastKnownPresence === "available" || presence?.presence === "available",
+          isUnavailable: presence?.lastKnownPresence === "unavailable" || presence?.presence === "unavailable",
+        };
+
+        formattedPresences.push(presenceInfo);
+        
+        logger.debug({ 
+          sessionId, 
+          jid: normalizedJid, 
+          participant: normalizedParticipant,
+          presence: presenceInfo.presence,
+          lastSeen: presenceInfo.lastSeen 
+        }, "Presence güncellemesi alındı");
+      }
+
+      // Eğer presences boşsa, sadece JID'yi ekle
+      if (!presences || Object.keys(presences).length === 0) {
+        formattedPresences.push({
+          jid: normalizedJid,
+          participant: null,
+          presence: "unknown",
+          lastSeen: null,
+          isComposing: false,
+          isRecording: false,
+          isAvailable: false,
+          isUnavailable: false,
+        });
+      }
+    }
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn && formattedPresences.length > 0) {
+      wsBroadcastFn({
+        type: "presence.update",
+        sessionId,
+        presences: formattedPresences,
+      });
+      
+      logger.info({ sessionId, count: formattedPresences.length }, "Presence güncellemeleri WebSocket'e gönderildi");
+    }
+  };
+  sock.ev.on("presence.update", presenceUpdateListener);
+  instance.eventListeners.set("presence.update", presenceUpdateListener);
+
   // Groups metadata - Prisma'ya kaydet
   const groupsUpdateListener = async (updates) => {
+    const formattedGroups = [];
+    
     for (const update of updates) {
       try {
         const metadata = await sock.groupMetadata(update.id);
@@ -875,9 +1163,38 @@ export const bindSocketEvents = (instance) => {
             inviteCode: metadata.inviteCode || undefined,
           },
         });
+        
+        // WebSocket'e bildir
+        formattedGroups.push({
+          id: metadata.id,
+          subject: metadata.subject || "",
+          owner: metadata.owner || null,
+          subjectOwner: metadata.subjectOwner || null,
+          subjectTime: metadata.subjectTime || null,
+          creation: metadata.creation || null,
+          desc: metadata.desc || null,
+          descOwner: metadata.descOwner || null,
+          descId: metadata.descId || null,
+          restrict: metadata.restrict || false,
+          announce: metadata.announce || false,
+          size: metadata.participants?.length || 0,
+          participants: metadata.participants || [],
+          ephemeralDuration: metadata.ephemeralDuration || null,
+          inviteCode: metadata.inviteCode || null,
+        });
       } catch (error) {
         logger.error({ error, sessionId, groupId: update.id }, "Grup metadata kaydedilemedi");
       }
+    }
+    
+    // WebSocket'e bildir
+    if (wsBroadcastFn && formattedGroups.length > 0) {
+      wsBroadcastFn({
+        type: "groups.update",
+        sessionId,
+        groups: formattedGroups,
+      });
+      logger.info({ sessionId, count: formattedGroups.length }, "Grup güncellemeleri WebSocket'e gönderildi");
     }
   };
   sock.ev.on("groups.update", groupsUpdateListener);
@@ -893,11 +1210,30 @@ export const bindSocketEvents = (instance) => {
         `[${instance.id}] QR kodu üretildi (frontend'e gönderiliyor)`
       );
       // QR kod terminale yazdırılmıyor, sadece frontend'e gönderiliyor
+      
+      // WebSocket'e bildir
+      if (wsBroadcastFn) {
+        wsBroadcastFn({
+          type: "connection.update",
+          sessionId,
+          connection: "connecting",
+          qr: qr,
+        });
+      }
     }
 
     if (connection === "connecting") {
       connectionState.status = "connecting";
       connectionState.lastError = null;
+      
+      // WebSocket'e bildir
+      if (wsBroadcastFn) {
+        wsBroadcastFn({
+          type: "connection.update",
+          sessionId,
+          connection: "connecting",
+        });
+      }
     }
 
     if (connection === "open") {
@@ -908,6 +1244,15 @@ export const bindSocketEvents = (instance) => {
       instance.chatsSetReceived = false;
       instance.chatsUpsertTimer = null;
       console.log(`[${instance.id}] WhatsApp bağlantısı hazır ✅`);
+      
+      // WebSocket'e bildir
+      if (wsBroadcastFn) {
+        wsBroadcastFn({
+          type: "connection.update",
+          sessionId,
+          connection: "open",
+        });
+      }
       
       // WhatsApp numarasını al ve sessionId ile eşleştir
       (async () => {
@@ -1384,6 +1729,18 @@ export const bindSocketEvents = (instance) => {
         statusCode,
         shouldReconnect,
       });
+      
+      // WebSocket'e bildir
+      if (wsBroadcastFn) {
+        wsBroadcastFn({
+          type: "connection.update",
+          sessionId,
+          connection: "close",
+          statusCode: statusCode,
+          shouldReconnect: shouldReconnect,
+          error: connectionState.lastError,
+        });
+      }
 
       if (shouldReconnect) {
         clearTimeout(instance.reconnectTimer);
@@ -1447,6 +1804,27 @@ export const startSocket = (instance) => {
     },
     // markOnlineOnConnect: false (README'ye göre - notifications için)
     markOnlineOnConnect: false,
+    // YÜKSEK ÖNCELİK - Eksik özellikler
+    // 1. logger - Custom Pino logger (daha iyi log yönetimi için)
+    logger: logger.child({ sessionId }),
+    // 2. retryRequestDelay - İstek tekrar deneme gecikmesi (ms)
+    retryRequestDelay: 250,
+    // 3. connectTimeoutMs - Bağlantı timeout süresi (60 saniye)
+    connectTimeoutMs: 60000,
+    // 4. maxMsgRetryCount - Mesaj gönderme retry sayısı
+    maxMsgRetryCount: 5,
+    // ORTA ÖNCELİK - Eksik özellikler
+    // 5. generateHighQualityLinkPreview - Link preview'ler için yüksek kaliteli görsel
+    generateHighQualityLinkPreview: true,
+    // 6. defaultQueryTimeoutMs - Varsayılan query timeout süresi (60 saniye)
+    defaultQueryTimeoutMs: 60000,
+    // 7. keepAliveIntervalMs - Keep-alive ping interval (10 saniye)
+    keepAliveIntervalMs: 10000,
+    // 8. qrTimeout - QR kod timeout süresi (60 saniye)
+    qrTimeout: 60000,
+    // DÜŞÜK ÖNCELİK - Eksik özellikler
+    // 9. fireInitQueries - İlk bağlantıda query'leri çalıştır
+    fireInitQueries: true,
   });
 
   // Grup metadata cache'i güncelle (README'ye göre best practice)
@@ -1467,6 +1845,18 @@ export const startSocket = (instance) => {
       if (update && update.id) {
         const metadata = await instance.sock.groupMetadata(update.id);
         groupCache.set(update.id, metadata);
+        
+        // WebSocket'e bildir
+        const wsBroadcastFn = getWebSocketBroadcast();
+        if (wsBroadcastFn) {
+          wsBroadcastFn({
+            type: "group-participants.update",
+            sessionId: instance.id,
+            groupId: update.id,
+            participants: update.participants || [],
+            action: update.action || null,
+          });
+        }
       }
     } catch (error) {
       const update = Array.isArray(event) ? event[0] : event;

@@ -1,8 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import * as api from '../api';
 import { Chat, Message } from '../types';
-import { extractMessageText } from '../utils/messageUtils';
-import { normalizeJid, areJidsSamePerson, extractPhoneFromJid, normalizePhoneNumber } from '../utils/contactUtils';
+import { normalizeJid, extractPhoneFromJid, normalizePhoneNumber } from '../utils/contactUtils';
 
 interface UseChatsProps {
   activeAccountId: string | undefined;
@@ -41,10 +40,11 @@ export function useChats({
     for (const chat of chats) {
       // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
       let chatId = chat.id;
-      if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+      const chatAny = chat as any;
+      if (chat.id && chat.id.includes('@lid') && chatAny.lidJid) {
         // Gerçek JID'yi lidJid'den al
-        chatId = chat.lidJid;
-        console.log('[removeDuplicateChats] @lid formatı düzeltildi: ${chat.id} -> ${chatId}');
+        chatId = chatAny.lidJid;
+        console.log(`[removeDuplicateChats] @lid formatı düzeltildi: ${chat.id} -> ${chatId}`);
       }
       
       // Grup chat'leri için duplicate kontrolü yapma (grup chat'lerde telefon numarası yok)
@@ -82,8 +82,9 @@ export function useChats({
         if (messagesCacheRef && sessionId) {
           // Eski chat'in JID'sini normalize et (eğer @lid formatındaysa)
           let oldJid = existingChat.id;
-          if (oldJid && oldJid.includes('@lid') && existingChat.lidJid) {
-            oldJid = existingChat.lidJid;
+          const existingChatAny = existingChat as any;
+          if (oldJid && oldJid.includes('@lid') && existingChatAny.lidJid) {
+            oldJid = existingChatAny.lidJid;
           }
           oldJid = normalizeJid(oldJid);
           const newJid = normalizedJid;
@@ -217,330 +218,145 @@ export function useChats({
 
   const loadChats = useCallback(async (sessionId: string, limit: number = 50, force: boolean = false) => {
     try {
-      // chats state'ini kontrol etmek yerine ref kullan
+      // WebSocket'ten chat'ler geliyor, API çağrısı sadece fallback olarak kullanılacak
       const isLoaded = chatsLoadedRef.current.get(sessionId);
-      if (!force && isLoaded) {
-        console.log('Sohbetler zaten yüklü, tekrar yüklenmiyor');
-        // Yine de DB'den güncel veriyi kontrol et (senkronizasyon için)
-        // Ama sadece arka planda güncelle
-        setTimeout(async () => {
-          try {
-            const chatsData = await api.getChats(sessionId, limit);
-            if (chatsData && chatsData.length > 0) {
-              // Mevcut chat'leri güncelle (sessizce)
-              setChats(prevChats => {
-                const updatedChats = [...prevChats];
-                chatsData.forEach((newChat: any) => {
-                  // Grup chat'leri için direkt eşleşme ara
-                  if (newChat.id.includes('@g.us')) {
-                    const index = updatedChats.findIndex(c => c.id === newChat.id);
-                    if (index >= 0) {
-                      // Mevcut chat'i güncelle
-                      updatedChats[index] = {
-                        ...updatedChats[index],
-                        unreadCount: newChat.unreadCount ?? updatedChats[index].unreadCount,
-                        conversationTimestamp: newChat.conversationTimestamp || updatedChats[index].conversationTimestamp,
-                        name: newChat.name || updatedChats[index].name,
-                        verifiedName: newChat.verifiedName || updatedChats[index].verifiedName,
-                        profilePicture: newChat.imgUrl || updatedChats[index].profilePicture,
-                        archived: newChat.archived ?? updatedChats[index].archived,
-                        pinned: newChat.pinned ? new Date(newChat.pinned) : updatedChats[index].pinned,
-                      };
-                    } else {
-                      // Yeni grup chat ekle
-                      updatedChats.push({
-                        id: newChat.id,
-                        name: newChat.name || newChat.displayName || newChat.id,
-                        verifiedName: newChat.verifiedName,
-                        profilePicture: newChat.imgUrl,
-                        unreadCount: newChat.unreadCount || 0,
-                        conversationTimestamp: newChat.conversationTimestamp || null,
-                        archived: newChat.archived || false,
-                        pinned: newChat.pinned ? new Date(newChat.pinned) : null,
-                        lastMessage: '',
-                        time: newChat.conversationTimestamp 
-                          ? new Date(Number(newChat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                          : '',
-                      });
-                    }
-                    return; // Grup chat'i işlendi, devam et
-                  }
-                  
-                  // Bireysel chat'ler için: SADECE TELEFON NUMARASINA GÖRE ARA
-                  const phoneNumber = extractPhoneFromJid(newChat.id); // Örnek: 905538781507
-                  const phoneNumberNormalized = normalizePhoneNumber(phoneNumber); // Normalize et
-                  
-                  // Aynı telefon numarasına sahip chat'i ara
-                  let index = updatedChats.findIndex(c => {
-                    if (c.id.includes('@g.us')) return false; // Grup chat'leri hariç
-                    const cPhone = extractPhoneFromJid(c.id); // Chat'in telefon numarasını çıkar
-                    const cPhoneNormalized = normalizePhoneNumber(cPhone); // Normalize et
-                    return cPhoneNormalized === phoneNumberNormalized || cPhone === phoneNumber; // Telefon numaraları eşleşiyor mu?
-                  });
-                  
-                  if (index >= 0) {
-                    // Mevcut chat'i güncelle (telefon numarasına göre bulundu)
-                    const existingChat = updatedChats[index];
-                    const normalizedJid = normalizeJid(newChat.id); // 905538781507@s.whatsapp.net formatına getir
-                    updatedChats[index] = {
-                      ...existingChat,
-                      id: normalizedJid, // Her zaman normalize edilmiş JID kullan
-                      unreadCount: newChat.unreadCount ?? existingChat.unreadCount,
-                      conversationTimestamp: newChat.conversationTimestamp || existingChat.conversationTimestamp,
-                      name: newChat.name || existingChat.name,
-                      verifiedName: newChat.verifiedName || existingChat.verifiedName,
-                      profilePicture: newChat.imgUrl || existingChat.profilePicture,
-                      archived: newChat.archived ?? existingChat.archived,
-                      pinned: newChat.pinned ? new Date(newChat.pinned) : existingChat.pinned,
-                    };
-                  } else {
-                    // Yeni chat ekle (bu telefon numarası için ilk kez görülüyor)
-                    const normalizedJid = normalizeJid(newChat.id); // 905538781507@s.whatsapp.net formatına getir
-                    updatedChats.push({
-                      id: normalizedJid, // Normalize edilmiş JID kullan
-                      name: newChat.name || newChat.displayName || normalizedJid,
-                      verifiedName: newChat.verifiedName,
-                      profilePicture: newChat.imgUrl,
-                      unreadCount: newChat.unreadCount || 0,
-                      conversationTimestamp: newChat.conversationTimestamp || null,
-                      archived: newChat.archived || false,
-                      pinned: newChat.pinned ? new Date(newChat.pinned) : null,
-                      lastMessage: '',
-                      time: newChat.conversationTimestamp 
-                        ? new Date(Number(newChat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                        : '',
-                    });
-                  }
-                });
-                
-                // Duplicate'leri temizle
-                const deduplicated = removeDuplicateChats(updatedChats);
-                
-                return deduplicated.sort((a, b) => {
-                  const aTime = a.conversationTimestamp || 0;
-                  const bTime = b.conversationTimestamp || 0;
-                  return Number(bTime) - Number(aTime);
-                });
-              });
-            }
-          } catch (error) {
-            // Sessizce devam et
-            console.debug('Arka plan chat güncelleme hatası:', error);
-          }
-        }, 5000); // 5 saniye sonra arka planda güncelle
+      const hasInitialLoad = chatsInitialLoadRef.current.get(sessionId);
+      
+      // Eğer zaten yüklendiyse ve force değilse, WebSocket'ten gelen güncellemeleri bekle
+      if (!force && isLoaded && hasInitialLoad) {
+        console.log('[useChats] Sohbetler WebSocket\'ten yüklendi, API çağrısı yapılmıyor');
         return;
       }
       
-      console.log('=== Sohbetler yükleniyor ===', { sessionId, limit, force });
-      
-      const chatsData = await api.getChats(sessionId, limit);
-      
-      console.log('Sohbetler alındı (ham data):', chatsData);
-      
-      if (!chatsData || chatsData.length === 0) {
-        console.warn('Sohbet listesi boş!');
-        // DB'den tekrar dene (fallback)
-        try {
-          const dbChats = await api.getChats(sessionId, limit);
-          if (dbChats && dbChats.length > 0) {
-            console.log('DB\'den sohbetler yüklendi:', dbChats.length);
-            chatsData = dbChats;
-          }
-        } catch (dbError) {
-          console.error('DB\'den sohbetler yüklenemedi:', dbError);
-        }
+      // WebSocket'ten chats.set gelmediyse, API'den yükle (fallback)
+      // WebSocket bağlantısı kurulduğunda chats.set event'i gelecek
+      // Eğer 5 saniye içinde gelmezse, API'den yükle
+      if (!hasInitialLoad) {
+        console.log('[useChats] WebSocket\'ten chats.set bekleniyor, 5 saniye sonra API fallback devreye girecek...');
         
-        if (!chatsData || chatsData.length === 0) {
-          return;
-        }
-      }
-      
-      chatsLoadedRef.current.set(sessionId, true);
-      
-      // Bu session için profil fotoğrafları zaten yüklendiyse tekrar yükleme
-      const alreadyLoaded = chatsProfilePicturesLoadedRef.current.get(sessionId);
-      
-      const sortedChats = [...chatsData].sort((a, b) => {
-        const aTime = a.conversationTimestamp || (a as any).lastMsgTimestamp || 0;
-        const bTime = b.conversationTimestamp || (b as any).lastMsgTimestamp || 0;
-        return Number(bTime) - Number(aTime);
-      }).slice(0, limit);
-      
-      // Güncel contactsMap'i ref'ten al
-      const currentContactsMap = contactsMapRef.current;
-      
-      // Eğer contact'lar yüklenmemişse, önce yükle
-      if (currentContactsMap.size === 0) {
-        try {
-          console.log('Contact\'lar yüklenmemiş, yükleniyor...');
-          const contactsData = await api.getContacts(sessionId);
-          if (contactsData && contactsData.length > 0) {
-            contactsData.forEach((contact: any) => {
-              currentContactsMap.set(contact.id, contact);
-            });
-            contactsMapRef.current = currentContactsMap;
-            console.log('Contact\'lar yüklendi:', contactsData.length);
-          }
-        } catch (contactError) {
-          console.warn('Contact\'lar yüklenemedi:', contactError);
-        }
-      }
-      
-      // JID'leri normalize et ve duplicate'leri kaldır
-      // @lid formatındaki chat'ler için lidJid'den gerçek JID'yi kullan
-      const normalizedChats = sortedChats.map(chat => {
-        let chatId = chat.id;
-        
-        // Eğer @lid formatındaysa ve lidJid varsa, gerçek JID'yi kullan
-        if (chat.id && chat.id.includes('@lid') && (chat as any).lidJid) {
-          chatId = (chat as any).lidJid;
-          console.log(`[useChats] @lid formatı düzeltildi: ${chat.id} -> ${chatId}`);
-        }
-        
-        return {
-          ...chat,
-          id: normalizeJid(chatId), // Gerçek JID'yi normalize et
-        };
-      });
-      
-      const formattedChats = normalizedChats.map(chat => {
-        let lastMessage = '';
-        if (chat.messages && Array.isArray(chat.messages) && chat.messages.length > 0) {
-          const lastMsg = chat.messages[chat.messages.length - 1];
-          lastMessage = extractMessageText(lastMsg);
-        } else if ((chat as any).lastMessage) {
-          lastMessage = extractMessageText((chat as any).lastMessage);
-        }
-        
-        let displayName = chat.name || (chat as any).displayName || chat.id;
-        let verifiedName: string | undefined = chat.verifiedName || undefined;
-        let profilePicture: string | undefined = chatProfilePictures.get(chat.id);
-        
-        if (!chat.id.includes('@g.us')) {
-          const contact = currentContactsMap.get(chat.id);
-          if (contact) {
-            verifiedName = verifiedName || contact.verifiedName;
-            // Contact bilgilerini önceliklendir - telefon rehberindeki isim öncelikli
-            displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.id;
+        const fallbackTimeout = setTimeout(async () => {
+          const stillNotLoaded = !chatsInitialLoadRef.current.get(sessionId);
+          if (stillNotLoaded) {
+            console.warn('[useChats] WebSocket\'ten chats.set gelmedi, API\'den yükleniyor (fallback)...');
             
-            if (contact.imgUrl) {
-              profilePicture = contact.imgUrl;
-              if (!chatProfilePictures.has(chat.id)) {
-                setChatProfilePictures(prev => new Map(prev).set(chat.id, contact.imgUrl));
+            try {
+              const chatsData = await api.getChats(sessionId, limit);
+              
+              if (chatsData && chatsData.length > 0) {
+                // API'den gelen chat'leri formatla ve set et
+                const normalizedChats = chatsData.map((chat: any) => {
+                  let chatId = chat.id;
+                  if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+                    chatId = chat.lidJid;
+                  }
+                  return {
+                    ...chat,
+                    id: normalizeJid(chatId),
+                  };
+                });
+                
+                const formattedChats = normalizedChats.map((chat: any) => {
+                  const contact = contactsMapRef.current.get(chat.id);
+                  let displayName = chat.name || chat.displayName || chat.id;
+                  let verifiedName = chat.verifiedName;
+                  
+                  if (!chat.id.includes('@g.us') && contact) {
+                    verifiedName = contact.verifiedName || chat.verifiedName;
+                    displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+                  } else if (!chat.id.includes('@g.us')) {
+                    const phoneMatch = chat.id.match(/^(\d+)@/);
+                    if (phoneMatch) {
+                      displayName = phoneMatch[1];
+                    }
+                  }
+                  
+                  return {
+                    ...chat,
+                    name: displayName,
+                    verifiedName: verifiedName,
+                    profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id),
+                    archived: chat.archived || false,
+                    lastMessage: '',
+                    time: chat.conversationTimestamp 
+                      ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                      : '',
+                  };
+                });
+                
+                const deduplicatedChats = removeDuplicateChats(formattedChats, sessionId);
+                setChats(deduplicatedChats);
+                chatsLoadedRef.current.set(sessionId, true);
+                chatsInitialLoadRef.current.set(sessionId, true);
+                console.log('[useChats] ✅ API fallback ile sohbetler yüklendi:', deduplicatedChats.length);
               }
-            } else if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
-              // Sadece ilk yüklemede profil fotoğraflarını çek
-              queueProfilePicture(sessionId, chat.id);
-            } else {
-              const cached = chatProfilePictures.get(chat.id);
-              profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
+            } catch (error) {
+              console.error('[useChats] ❌ API fallback hatası:', error);
             }
-          } else {
-            // Contact yoksa, telefon numarasını göster
-            const phoneMatch = chat.id.match(/^(\d+)@/);
-            if (phoneMatch) {
-              displayName = phoneMatch[1];
-            } else {
-              displayName = chat.name || chat.displayName || chat.id;
+          }
+        }, 5000); // 5 saniye bekle
+        
+        // Cleanup function - eğer WebSocket'ten chats.set gelirse timeout'u iptal et
+        return () => {
+          clearTimeout(fallbackTimeout);
+        };
+      }
+      
+      // Force reload durumunda API'den yükle
+      if (force) {
+        console.log('[useChats] Force reload: API\'den yükleniyor...');
+        
+        const chatsData = await api.getChats(sessionId, limit);
+        
+        if (chatsData && chatsData.length > 0) {
+          const normalizedChats = chatsData.map((chat: any) => {
+            let chatId = chat.id;
+            if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+              chatId = chat.lidJid;
             }
+            return {
+              ...chat,
+              id: normalizeJid(chatId),
+            };
+          });
+          
+          const formattedChats = normalizedChats.map((chat: any) => {
+            const contact = contactsMapRef.current.get(chat.id);
+            let displayName = chat.name || chat.displayName || chat.id;
+            let verifiedName = chat.verifiedName;
             
-            // Contact bilgilerini tekrar kontrol et (yukarıda yüklendi)
-            const foundContact = currentContactsMap.get(chat.id);
-            if (foundContact) {
-              verifiedName = foundContact.verifiedName;
-              displayName = foundContact.verifiedName || foundContact.name || foundContact.notify || displayName;
-              if (foundContact.imgUrl) {
-                profilePicture = foundContact.imgUrl;
-                if (!chatProfilePictures.has(chat.id)) {
-                  setChatProfilePictures(prev => new Map(prev).set(chat.id, foundContact.imgUrl));
-                }
+            if (!chat.id.includes('@g.us') && contact) {
+              verifiedName = contact.verifiedName || chat.verifiedName;
+              displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+            } else if (!chat.id.includes('@g.us')) {
+              const phoneMatch = chat.id.match(/^(\d+)@/);
+              if (phoneMatch) {
+                displayName = phoneMatch[1];
               }
             }
             
-            if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
-              // Sadece ilk yüklemede profil fotoğraflarını çek
-              queueProfilePicture(sessionId, chat.id);
-            } else {
-              const cached = chatProfilePictures.get(chat.id);
-              profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
-            }
-          }
-        } else {
-          if (!chatProfilePictures.has(chat.id) && !alreadyLoaded) {
-            // Sadece ilk yüklemede profil fotoğraflarını çek
-            queueProfilePicture(sessionId, chat.id);
-          } else {
-            const cached = chatProfilePictures.get(chat.id);
-            profilePicture = cached && cached !== '' && cached !== 'NO_PICTURE' ? cached : undefined;
-          }
+            return {
+              ...chat,
+              name: displayName,
+              verifiedName: verifiedName,
+              profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id),
+              archived: chat.archived || false,
+              lastMessage: '',
+              time: chat.conversationTimestamp 
+                ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                : '',
+            };
+          });
+          
+          const deduplicatedChats = removeDuplicateChats(formattedChats, sessionId);
+          setChats(deduplicatedChats);
+          chatsLoadedRef.current.set(sessionId, true);
+          chatsInitialLoadRef.current.set(sessionId, true);
+          console.log('[useChats] ✅ Force reload ile sohbetler yüklendi:', deduplicatedChats.length);
         }
-        
-        return {
-          ...chat,
-          name: displayName,
-          verifiedName: verifiedName,
-          profilePicture: profilePicture,
-          archived: chat.archived || false,
-          lastMessage: lastMessage || '',
-          time: chat.conversationTimestamp 
-            ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-            : (chat as any).lastMsgTimestamp
-            ? new Date(Number((chat as any).lastMsgTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-            : '',
-        };
-      });
-      
-      console.log('Formatlanmış sohbetler:', formattedChats);
-      
-      // Duplicate chat'leri birleştir (aynı telefon numarasına sahip chat'ler)
-      // MESAJ KAYBI OLMAMASI İÇİN: sessionId parametresini geç
-      const deduplicatedChats = removeDuplicateChats(formattedChats, sessionId);
-      if (formattedChats.length !== deduplicatedChats.length) {
-        console.log('✅ Duplicate chat\'ler temizlendi (mesajlar birleştirildi):', { önce: formattedChats.length, sonra: deduplicatedChats.length });
+        return;
       }
-      
-      // İlk yüklemede profil fotoğrafları yüklendiğini işaretle
-      if (!alreadyLoaded) {
-        chatsProfilePicturesLoadedRef.current.set(sessionId, true);
-      }
-      
-      setChats(deduplicatedChats);
-      setSelectedChat(prev => {
-        if (!prev) {
-          // Sadece selectedChat yoksa, ilk chat'i seç
-          if (deduplicatedChats.length > 0) {
-            return deduplicatedChats[0];
-          }
-          return null;
-        }
-        
-        // Grup chat'leri için direkt eşleşme ara
-        if (prev.id.includes('@g.us')) {
-          const foundChat = deduplicatedChats.find(c => c.id === prev.id);
-          return foundChat || prev;
-        }
-        
-        // Bireysel chat'ler için: SADECE TELEFON NUMARASINA GÖRE ARA
-        const prevPhone = extractPhoneFromJid(prev.id); // Örnek: 905538781507
-        const foundChat = deduplicatedChats.find(c => {
-          if (c.id.includes('@g.us')) return false; // Grup chat'leri hariç
-          const cPhone = extractPhoneFromJid(c.id); // Chat'in telefon numarasını çıkar
-          return cPhone === prevPhone; // Telefon numaraları eşleşiyor mu?
-        });
-        
-        if (foundChat) {
-          // Normalize edilmiş JID ile güncelle
-          return {
-            ...foundChat,
-            id: normalizeJid(foundChat.id), // 905538781507@s.whatsapp.net formatına getir
-          };
-        }
-        
-        return prev;
-      });
     } catch (error: any) {
-      console.error('Sohbetler yüklenemedi:', error);
-      console.warn(`Sohbetler yüklenemedi: ${error.message || 'Bilinmeyen hata'}`);
+      console.error('[useChats] ❌ loadChats hatası:', error);
     }
   }, [chatProfilePictures, setChatProfilePictures, queueProfilePicture, removeDuplicateChats]); // removeDuplicateChats dependency olarak eklendi
 

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MessageCircle, Plus, Search, MoreVertical, Users, Phone, Video, Smile, Paperclip, Mic, Send, Check, CheckCheck, X, Edit2, Loader2, LogOut, Volume2, VolumeX, RefreshCcw, Reply, Forward, Trash2, Star, StarOff, Eye } from 'lucide-react';
 import * as api from './api';
-import { pinChat, muteChat } from './api/chats';
 import * as QRCode from 'qrcode';
 import AddAccountModal from './components/AddAccountModal';
 import ContactsModal from './components/ContactsModal';
@@ -25,6 +24,7 @@ import { useChats } from './hooks/useChats';
 import { useMessages } from './hooks/useMessages';
 import { useContacts } from './hooks/useContacts';
 import { useWebSocket } from './hooks/useWebSocket';
+import { clearAllMediaCache } from './utils/mediaCache';
 
 // Chat ve Message interface'leri artık types.ts'den import ediliyor
 
@@ -143,8 +143,19 @@ export default function WhatsAppMultiAccount() {
   // Aktif hesap değiştiğinde sohbetleri yükle
   // activeAccount zaten yukarıda tanımlı (accountsHook.accounts'den)
   
-  // Ref'leri güncelle
+  // Ref'leri güncelle ve medya cache'ini temizle (session değiştiğinde)
+  const prevActiveAccountIdRef = useRef<string | null>(null);
   useEffect(() => {
+    const prevAccountId = prevActiveAccountIdRef.current;
+    const currentAccountId = activeAccount?.id;
+    
+    // Eğer aktif hesap değiştiyse medya cache'ini temizle
+    if (prevAccountId && currentAccountId && prevAccountId !== currentAccountId) {
+      console.log('[MediaCache] Aktif hesap değişti, medya cache temizleniyor:', prevAccountId, '->', currentAccountId);
+      clearAllMediaCache();
+    }
+    
+    prevActiveAccountIdRef.current = currentAccountId || null;
     activeAccountRef.current = activeAccount;
   }, [activeAccount]);
   
@@ -454,19 +465,23 @@ export default function WhatsAppMultiAccount() {
       });
       
       // Optimistik mesajı güncelle (gönderildi durumuna)
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return {
-              ...m,
-              status: 'sent',
-              // Gerçek mesaj ID'si varsa güncelle
-              id: response?.id || m.id,
-            };
-          }
-          return m;
-        })
-      );
+      // WebSocket'ten gerçek mesaj gelecek, bu yüzden temp mesajı kaldırmak yerine ID'sini güncelle
+      // WebSocket handler'ı temp mesajı otomatik olarak kaldıracak
+      if (response?.id) {
+        messagesHook.setMessages(prev => 
+          prev.map(m => {
+            if (m.id === tempMessageId) {
+              // Gerçek mesaj ID'si ile güncelle, WebSocket'ten gelince temp mesaj kaldırılacak
+              return {
+                ...m,
+                status: 'sent',
+                id: response.id,
+              };
+            }
+            return m;
+          })
+        );
+      }
       
       // WebSocket'ten gerçek mesaj geldiğinde optimistic mesaj replace edilecek
     } catch (error: any) {
@@ -794,7 +809,7 @@ export default function WhatsAppMultiAccount() {
     if (!activeAccount) return;
     
     try {
-      await pinChat(activeAccount.id, chat.id, pin);
+      await api.pinChat(activeAccount.id, chat.id, pin);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
       console.error('Chat pinlenemedi:', error);
@@ -806,7 +821,7 @@ export default function WhatsAppMultiAccount() {
     if (!activeAccount) return;
     
     try {
-      await muteChat(activeAccount.id, chat.id, durationMs);
+      await api.muteChat(activeAccount.id, chat.id, durationMs);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
       console.error('Chat sessize alınamadı:', error);

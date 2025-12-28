@@ -2,6 +2,7 @@
 import { Image, Video, File, Music, Download, Loader2, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import * as api from '../api';
+import { getCachedMediaUrl, setCachedMediaUrl, getMessageId } from '../utils/mediaCache';
 
 interface MediaMessageProps {
   message: any;
@@ -95,19 +96,32 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
     };
   }, [messageType, mediaData, message]);
 
-  // Media URL cleanup
-  useEffect(() => {
-    const currentMediaUrl = mediaUrl;
-    return () => {
-      if (currentMediaUrl && currentMediaUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(currentMediaUrl);
-      }
-    };
-  }, [mediaUrl]);
+  // Media URL cleanup - Artık cache'de tutulduğu için component unmount olduğunda temizleme yapmıyoruz
+  // Cache temizleme işlemi uygulama seviyesinde yapılacak (session değiştiğinde veya uygulama kapanırken)
+  // useEffect(() => {
+  //   const currentMediaUrl = mediaUrl;
+  //   return () => {
+  //     if (currentMediaUrl && currentMediaUrl.startsWith('blob:')) {
+  //       URL.revokeObjectURL(currentMediaUrl);
+  //     }
+  //   };
+  // }, [mediaUrl]);
 
-  // Medya URL'ini yükle
+  // Medya URL'ini yükle (cache kontrolü ile)
   useEffect(() => {
     if (!sessionId) return;
+    
+    // Mesaj ID'sini al
+    const msgId = getMessageId(message);
+    
+    // Önce cache'den kontrol et
+    const cachedUrl = getCachedMediaUrl(msgId);
+    if (cachedUrl) {
+      // Cache'den bulundu, direkt kullan
+      setMediaUrl(cachedUrl);
+      setImageLoaded(false);
+      return;
+    }
     
     // NOT: WhatsApp URL'leri (mmg.whatsapp.net) direkt kullanılamaz, authentication gerektirir
     // Bu yüzden her zaman backend'den indirmemiz gerekiyor
@@ -127,6 +141,8 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
       api.downloadMediaMessageAdvanced(sessionId, message)
         .then(url => {
           if (url) {
+            // Cache'e kaydet
+            setCachedMediaUrl(msgId, url);
             setMediaUrl(url);
             setImageLoaded(false); // Reset image loaded state
           } else {
@@ -186,11 +202,22 @@ export default function MediaMessage({ message, fromMe, sessionId }: MediaMessag
     
     // Thumbnail'e tıklandığında tam resmi yükle
     const handleThumbnailClick = () => {
+      const msgId = getMessageId(message);
+      const cachedUrl = getCachedMediaUrl(msgId);
+      
+      if (cachedUrl) {
+        // Cache'den bulundu
+        setMediaUrl(cachedUrl);
+        return;
+      }
+      
       if (!mediaUrl && sessionId && !isLoading) {
         setIsLoading(true);
         api.downloadMediaMessageAdvanced(sessionId, message)
           .then(url => {
             if (url) {
+              // Cache'e kaydet
+              setCachedMediaUrl(msgId, url);
               setMediaUrl(url);
             } else {
               setImageError(true);

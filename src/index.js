@@ -530,10 +530,14 @@ app.get(
   asyncHandler(async (req, res) => {
     const accountId = req.query.accountId;
     const limit = Number(req.query.limit) || 50;
-    console.log(`[GET /api/chats] AccountId: ${accountId}, Limit: ${limit}`);
 
     const result = await listChats(accountId, null, limit);
-    console.log(`[GET /api/chats] Result:`, safeStringify(result, 2));
+    
+    // Sadece hata durumunda log (boş sonuç veya hata varsa)
+    if (!result || !result.data || result.data.length === 0 || result.error) {
+      console.log(`[GET /api/chats] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+    }
+    
     res.json(result);
   })
 );
@@ -546,13 +550,17 @@ app.get(
   asyncHandler(async (req, res) => {
     const accountId = req.query.accountId;
     const limit = Number(req.query.limit) || 50;
-    console.log(`[GET /api/contacts] AccountId: ${accountId}, Limit: ${limit}`);
 
     const result = await listContacts(accountId, null, limit);
     if (result === null) {
       return res.status(404).json({ error: "Session not found" });
     }
-    console.log(`[GET /api/contacts] Result:`, safeStringify(result, 2));
+    
+    // Sadece hata durumunda log (boş sonuç veya hata varsa)
+    if (!result || !result.data || result.data.length === 0 || result.error) {
+      console.log(`[GET /api/contacts] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+    }
+    
     res.json(result);
   })
 );
@@ -642,9 +650,13 @@ app.get(
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
 
-    console.log(`[GET /${sessionId}/chats] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     const result = await listChats(sessionId, cursor, Number(limit) || 25);
-    console.log(`[GET /${sessionId}/chats] Result:`, safeStringify(result, 2));
+    
+    // Sadece hata durumunda log (boş sonuç veya hata varsa)
+    if (!result || !result.data || result.data.length === 0 || result.error) {
+      console.log(`[GET /${sessionId}/chats] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+    }
+    
     res.json(result);
   })
 );
@@ -671,14 +683,18 @@ app.get(
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
-    console.log(`[GET /${sessionId}/contacts] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     // Limit belirtilmediyse çok yüksek bir limit kullan (tüm contact'ları çekmek için)
     const contactLimit = limit ? Number(limit) : 100000;
     const result = await listContacts(sessionId, cursor, contactLimit);
     if (result === null) {
       return res.status(404).json({ error: "Session not found" });
     }
-    console.log(`[GET /${sessionId}/contacts] Result:`, safeStringify(result, 2));
+    
+    // Sadece hata durumunda log (boş sonuç veya hata varsa)
+    if (!result || !result.data || result.data.length === 0 || result.error) {
+      console.log(`[GET /${sessionId}/contacts] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+    }
+    
     res.json(result);
   })
 );
@@ -689,10 +705,14 @@ app.get(
   "/:sessionId/contacts/device",
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
-    console.log(`[GET /${sessionId}/contacts/device] Cihazdaki contact'lar çekiliyor...`);
     try {
       const result = await fetchDeviceContacts(sessionId);
-      console.log(`[GET /${sessionId}/contacts/device] ✅ ${result.data?.length || 0} contact çekildi`);
+      
+      // Sadece hata durumunda log (boş sonuç veya hata varsa)
+      if (!result || !result.data || result.data.length === 0 || result.error) {
+        console.log(`[GET /${sessionId}/contacts/device] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+      }
+      
       res.json(result);
     } catch (error) {
       console.error(`[GET /${sessionId}/contacts/device] ❌ Hata:`, error);
@@ -790,11 +810,15 @@ app.get(
   asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
     const { cursor, limit } = req.query;
-    console.log(`[GET /${sessionId}/groups] SessionId: ${sessionId}, Cursor: ${cursor}, Limit: ${limit}`);
     
     try {
       const result = await listGroups(sessionId, cursor, Number(limit) || 50);
-      console.log(`[GET /${sessionId}/groups] ✅ Başarılı: ${result.data?.length || 0} grup bulundu`);
+      
+      // Sadece hata durumunda log (boş sonuç veya hata varsa)
+      if (!result || !result.data || result.data.length === 0 || result.error) {
+        console.log(`[GET /${sessionId}/groups] ⚠️ Hata veya boş sonuç:`, safeStringify(result, 2));
+      }
+      
       res.json(result);
     } catch (error) {
       console.error(`[GET /${sessionId}/groups] ❌ Hata:`, error.message);

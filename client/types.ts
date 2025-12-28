@@ -88,4 +88,7 @@ export interface Message {
     from?: string;
     text?: string;
   };
+  read?: boolean; // Mesaj okundu mu? (messages.update için)
+  reactions?: any; // Mesaj reaksiyonları
+  pollVotes?: any; // Poll oyları
 }
