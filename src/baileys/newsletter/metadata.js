@@ -21,3 +21,4 @@ export const getNewsletterMetadata = async (accountId, newsletterJid) => {
 
 
 
+

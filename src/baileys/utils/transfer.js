@@ -21,3 +21,4 @@ export const transferDevice = async (accountId, targetJid, options = {}) => {
 
 
 
+
