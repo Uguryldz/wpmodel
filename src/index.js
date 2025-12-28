@@ -1283,8 +1283,25 @@ app.patch(
       return res.status(400).json({ error: "message zorunludur" });
     }
 
-    const result = await editMessage(sessionId, jid, messageId, message);
-    res.json(result);
+    try {
+      const result = await editMessage(sessionId, jid, messageId, message);
+      
+      // Result objesini güvenli şekilde serialize et (BigInt sorunlarını önle)
+      const safeResult = {
+        status: result.status || "edited",
+        messageId: result.messageId || messageId,
+        jid: result.jid || jid,
+        // result.key gibi BigInt içerebilecek objeleri stringify et
+        ...(result.result && { result: JSON.parse(JSON.stringify(result.result, (key, value) => 
+          typeof value === 'bigint' ? value.toString() : value
+        ))})
+      };
+      
+      res.json(safeResult);
+    } catch (error) {
+      console.error('[PATCH /:sessionId/messages/:jid/:messageId] Hata:', error);
+      throw error; // asyncHandler yakalayacak
+    }
   })
 );
 

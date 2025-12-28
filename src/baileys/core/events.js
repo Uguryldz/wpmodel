@@ -15,6 +15,7 @@ import {
   formatContactName,
   saveMessages,
   saveMessagesToPrisma,
+  extractText,
 } from "../shared.js";
 
 /**
@@ -660,9 +661,10 @@ export const bindSocketEvents = (instance) => {
                   sessionId,
                   contacts: allContacts.map((c) => ({
                     id: c.id,
-                    name: formatContactName(c),
-                    notify: c.notify || null,
-                    verifiedName: c.verifiedName || null,
+                    name: c.name || null, // Ham name alanı (cihaz rehberindeki isim)
+                    notify: c.notify || null, // WhatsApp'ta kayıtlı isim
+                    verifiedName: c.verifiedName || null, // Doğrulanmış isim
+                    displayName: formatContactName(c), // Formatlanmış isim (fallback ile)
                     imgUrl: c.imgUrl || null,
                     status: c.status || null,
                   })),
@@ -687,9 +689,10 @@ export const bindSocketEvents = (instance) => {
           sessionId,
           contacts: contacts.map((c) => ({
             id: c.id,
-            name: formatContactName(c),
-            notify: c.notify || null,
-            verifiedName: c.verifiedName || null,
+            name: c.name || null, // Ham name alanı (cihaz rehberindeki isim)
+            notify: c.notify || null, // WhatsApp'ta kayıtlı isim
+            verifiedName: c.verifiedName || null, // Doğrulanmış isim
+            displayName: formatContactName(c), // Formatlanmış isim (fallback ile)
             imgUrl: c.imgUrl || null,
             status: c.status || null,
           })),
@@ -747,9 +750,10 @@ export const bindSocketEvents = (instance) => {
         sessionId,
         contacts: contacts.map((c) => ({
           id: c.id,
-          name: formatContactName(c),
-          notify: c.notify || null,
-          verifiedName: c.verifiedName || null,
+          name: c.name || null, // Ham name alanı (cihaz rehberindeki isim)
+          notify: c.notify || null, // WhatsApp'ta kayıtlı isim
+          verifiedName: c.verifiedName || null, // Doğrulanmış isim
+          displayName: formatContactName(c), // Formatlanmış isim (fallback ile)
           imgUrl: c.imgUrl || null,
           status: c.status || null,
         })),
@@ -907,7 +911,25 @@ export const bindSocketEvents = (instance) => {
           message: msgUpdate.message,
         };
         
-        // Prisma'da mesajı güncelle
+        // Mesaj text'ini çıkar (veritabanına kaydetmek için)
+        let messageText = '';
+        if (msgUpdate.message.conversation) {
+          messageText = msgUpdate.message.conversation;
+        } else if (msgUpdate.message.extendedTextMessage?.text) {
+          messageText = msgUpdate.message.extendedTextMessage.text;
+        } else if (msgUpdate.message.text) {
+          messageText = msgUpdate.message.text;
+        }
+        
+        logger.info({ 
+          sessionId, 
+          messageId: key.id, 
+          jid: normalizedJid,
+          messageText: messageText.substring(0, 50),
+          messageStructure: Object.keys(msgUpdate.message || {})
+        }, "Mesaj düzenleme güncellemesi alındı");
+        
+        // Prisma'da mesajı güncelle (message JSON'unu güncelle)
         try {
           await prisma.message.updateMany({
             where: {
@@ -919,6 +941,13 @@ export const bindSocketEvents = (instance) => {
               message: JSON.stringify(msgUpdate.message),
             },
           });
+          
+          logger.info({ 
+            sessionId, 
+            messageId: key.id, 
+            jid: normalizedJid,
+            messageText: messageText.substring(0, 50)
+          }, "Mesaj düzenleme veritabanına kaydedildi");
         } catch (error) {
           logger.error({ error, sessionId, messageId: key.id }, "Mesaj düzenleme kaydedilemedi");
         }
@@ -1000,7 +1029,13 @@ export const bindSocketEvents = (instance) => {
             existingMessage.readTimestamp = msgUpdate.receiptTimestamp;
           }
           if (msgUpdate.message) {
+            // Mesaj düzenleme: message JSON'unu güncelle
             existingMessage.message = msgUpdate.message;
+            // Text'i de güncelle (formatMessage için)
+            const updatedText = extractText(msgUpdate.message);
+            if (updatedText) {
+              existingMessage.text = updatedText;
+            }
           }
           if (msgUpdate.reactions) {
             if (!existingMessage.message) existingMessage.message = {};
@@ -1009,16 +1044,28 @@ export const bindSocketEvents = (instance) => {
           
           messages[messageIndex] = existingMessage;
           instance.messagesStore.set(normalizedJid, messages);
+          
+          logger.info({ 
+            sessionId, 
+            messageId: key.id, 
+            jid: normalizedJid,
+            memoryStoreUpdated: true
+          }, "Memory store'da mesaj güncellendi");
         }
       } catch (error) {
         logger.error({ error, sessionId, messageId: key.id }, "Memory store'da mesaj güncellenemedi");
       }
 
       formattedUpdates.push({
-        key,
+        key: {
+          ...key,
+          id: key.id, // ID'yi garanti et
+        },
         updateType,
         updateData,
         jid: normalizedJid,
+        // Timestamp ekle (mesaj eşleştirmesi için)
+        timestamp: key.timestamp || update.update?.messageTimestamp || undefined,
       });
     }
 

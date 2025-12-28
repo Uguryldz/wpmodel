@@ -59,7 +59,7 @@ interface MessageListProps {
   onDeleteMessage: (msg: Message, deleteForEveryone: boolean) => void;
   onForwardMessage: (msg: Message) => void;
   onLoadContacts: (sessionId: string) => void;
-  //onOpenContactSelector: () => void;
+  onOpenContactSelector?: () => void;
   onMarkAsRead: () => void;
   onRetryMessage?: (msg: Message) => void;
   onPinMessage?: (msg: Message, type: number, time?: number) => void;

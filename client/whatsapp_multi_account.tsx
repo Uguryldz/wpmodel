@@ -677,7 +677,67 @@ export default function WhatsAppMultiAccount() {
   const handleEditMessage = async (msg: Message, newText: string) => {
     if (!activeAccount || !chatsHook.selectedChat || !newText.trim()) return;
     
-    const messageId = msg.id || msg.key?.id;
+    let messageId = msg.id || msg.key?.id;
+    if (!messageId) {
+      alert('Mesaj ID\'si bulunamadı');
+      return;
+    }
+    
+    // Eğer mesaj ID'si "temp-" ile başlıyorsa, gerçek mesaj ID'sini bul
+    if (String(messageId).startsWith('temp-')) {
+      console.log('[handleEditMessage] ⚠️ Temp ID tespit edildi, gerçek mesaj ID\'si aranıyor:', messageId);
+      
+      // Mesajlar listesinde aynı text ve timestamp'e sahip gerçek mesajı bul
+      const realMessage = messagesHook.messages.find(m => {
+        const mId = m.id || m.key?.id;
+        // Temp ID değilse ve text eşleşiyorsa
+        if (mId && !String(mId).startsWith('temp-')) {
+          // Sadece bizim gönderdiğimiz mesajlarda eşleştir (edit zaten fromMe olmalı)
+          const msgFromMe = msg.fromMe !== undefined ? Boolean(msg.fromMe) : (msg.key?.fromMe === true);
+          const mFromMe = m.fromMe !== undefined ? Boolean(m.fromMe) : (m.key?.fromMe === true);
+          if (!msgFromMe || !mFromMe) return false;
+
+          const msgText = msg.text || msg.body || '';
+          const mText = m.text || m.body || '';
+          if (msgText && mText && msgText.trim() === mText.trim()) {
+            // Timestamp'e göre de kontrol et (10 saniye içinde)
+            const msgTime = msg.timestamp || msg.messageTimestamp || 0;
+            const mTime = m.timestamp || m.messageTimestamp || 0;
+            if (msgTime > 0 && mTime > 0) {
+              const msgTimeNormalized = msgTime > 1000000000000 ? Math.floor(msgTime / 1000) : msgTime;
+              const mTimeNormalized = mTime > 1000000000000 ? Math.floor(mTime / 1000) : mTime;
+              const timeDiff = Math.abs(msgTimeNormalized - mTimeNormalized);
+              if (timeDiff < 10) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      });
+      
+      if (realMessage) {
+        const realId = realMessage.id || realMessage.key?.id;
+        if (realId) {
+          messageId = realId;
+          console.log('[handleEditMessage] ✅ Gerçek mesaj ID\'si bulundu:', messageId);
+        } else {
+          console.warn('[handleEditMessage] ⚠️ Gerçek mesaj ID\'si bulunamadı, temp ID kullanılacak:', messageId);
+        }
+      } else {
+        console.warn('[handleEditMessage] ⚠️ Gerçek mesaj ID\'si bulunamadı, temp ID kullanılacak:', messageId);
+      }
+
+      // Hâlâ temp ise backend'e gönderme — bu ID Baileys/DB tarafında yok
+      if (String(messageId).startsWith('temp-')) {
+        setToast({
+          message: 'Mesaj henüz gönderiliyor. Lütfen iletildikten sonra düzenleyin.',
+          type: 'error',
+        });
+        return;
+      }
+    }
+    
     if (!messageId) {
       alert('Mesaj ID\'si bulunamadı');
       return;
@@ -686,13 +746,25 @@ export default function WhatsAppMultiAccount() {
     try {
       console.log('[handleEditMessage] Mesaj düzenleniyor:', { messageId, newText, jid: chatsHook.selectedChat.id });
       
-      await api.editMessage(activeAccount.id, chatsHook.selectedChat.id, messageId, newText);
+      const result = await api.editMessage(activeAccount.id, chatsHook.selectedChat.id, messageId, newText);
+      console.log('[handleEditMessage] API response:', result);
       
-      // Mesajları yeniden yüklemek yerine, sadece düzenlenen mesajı güncelle
-      messagesHook.setMessages(prevMessages => 
-        prevMessages.map(m => {
+      // Backend'den başarılı response geldi, mesajı optimistic olarak güncelle
+      // WebSocket'ten messages.update event'i gelecek ve gerçek güncellemeyi yapacak
+      let updated = false;
+      messagesHook.setMessages(prevMessages => {
+        const newMessages = prevMessages.map(m => {
           const mId = m.id || m.key?.id;
-          if (mId === messageId) {
+          // Hem tam eşleşme hem de string karşılaştırması
+          if (String(mId) === String(messageId)) {
+            console.log('[handleEditMessage] Optimistic update:', { 
+              mId, 
+              messageId, 
+              newText,
+              oldText: m.text?.substring(0, 30),
+              oldBody: m.body?.substring(0, 30)
+            });
+            updated = true;
             return {
               ...m,
               text: newText,
@@ -702,16 +774,59 @@ export default function WhatsAppMultiAccount() {
             };
           }
           return m;
-        })
-      );
+        });
+        
+        if (!updated) {
+          console.warn('[handleEditMessage] ⚠️ Mesaj bulunamadı, optimistic update yapılamadı:', {
+            messageId,
+            availableIds: prevMessages.slice(0, 5).map(m => m.id || m.key?.id)
+          });
+        }
+        
+        return newMessages;
+      });
       
       setEditingMessage(null);
       setEditingText('');
       
-      console.log('[handleEditMessage] ✅ Mesaj başarıyla güncellendi');
-    } catch (error) {
+      console.log('[handleEditMessage] ✅ Mesaj başarıyla güncellendi (optimistic)');
+    } catch (error: any) {
       console.error('[handleEditMessage] ❌ Mesaj düzenlenemedi:', error);
-      alert('Mesaj düzenlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+      console.error('[handleEditMessage] Hata detayları:', {
+        message: error?.message,
+        stack: error?.stack,
+        response: error?.response,
+        status: error?.status
+      });
+      
+      // Hata mesajını daha detaylı göster
+      const errorMessage = error?.message || error?.toString() || 'Bilinmeyen hata';
+      
+      // Eğer hata mesajı "Baileys edit API'si çalışmıyor" içeriyorsa, 
+      // bu sadece bir uyarı olabilir - edit işlemi başarılı olmuş olabilir
+      if (errorMessage.includes("Baileys edit API'si çalışmıyor")) {
+        console.warn('[handleEditMessage] ⚠️ Baileys edit API uyarısı, ancak edit başarılı olabilir');
+        // Optimistic update yap ve WebSocket'ten gelen güncellemeyi bekle
+        messagesHook.setMessages(prevMessages => 
+          prevMessages.map(m => {
+            const mId = m.id || m.key?.id;
+            if (String(mId) === String(messageId)) {
+              return {
+                ...m,
+                text: newText,
+                body: newText,
+                edited: true,
+                editedAt: Date.now(),
+              };
+            }
+            return m;
+          })
+        );
+        setEditingMessage(null);
+        setEditingText('');
+      } else {
+        alert('Mesaj düzenlenemedi: ' + errorMessage);
+      }
     }
   };
 

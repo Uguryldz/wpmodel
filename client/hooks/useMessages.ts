@@ -23,31 +23,8 @@ export function useMessages() {
           console.log('Cache\'den mesajlar yüklendi:', cachedMessages.length);
           setMessages(cachedMessages);
           currentChatKeyRef.current = messagesKey;
-          // Cache'den gösterdikten sonra arka planda DB'den güncelle
-          setTimeout(async () => {
-            try {
-              const dbData = await api.getMessages(sessionId, chatId, limit);
-              if (dbData && dbData.length > 0) {
-                // DB'den gelen mesajları cache ile birleştir
-                const existingIds = new Set(cachedMessages.map(m => m.id || m.key?.id));
-                const newMessages = dbData.filter((msg: any) => {
-                  const msgId = msg.id || msg.key?.id;
-                  return msgId && !existingIds.has(msgId);
-                });
-                if (newMessages.length > 0) {
-                  const merged = [...cachedMessages, ...newMessages].sort((a, b) => {
-                    const aTime = a.timestamp || a.messageTimestamp || 0;
-                    const bTime = b.timestamp || b.messageTimestamp || 0;
-                    return aTime - bTime;
-                  });
-                  messagesCacheRef.current.set(messagesKey, merged);
-                  setMessages(merged);
-                }
-              }
-            } catch (dbError) {
-              console.debug('DB\'den mesaj güncelleme hatası:', dbError);
-            }
-          }, 1000);
+          // DB'den yükleme işlemini kaldırdık - sadece cache'den yükle
+          return;
         } else {
           setMessages([]);
           messagesInitialLoadRef.current.delete(messagesKey);
@@ -97,6 +74,9 @@ export function useMessages() {
                 body: body || text,
                 fromMe: fromMe,
                 timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                // Düzenlenmiş mesaj bilgilerini koru (eğer varsa)
+                edited: msg.edited,
+                editedAt: msg.editedAt,
               };
             });
 
@@ -106,10 +86,45 @@ export function useMessages() {
               return aTime - bTime;
             });
 
-            setMessages(mapped);
-            messagesCacheRef.current.set(messagesKey, mapped);
-            currentChatKeyRef.current = messagesKey;
-            messagesInitialLoadRef.current.set(messagesKey, true);
+            // DB'den yükleme işlemini kaldırdık - sadece ilk yüklemede DB'den yükle
+            // Mevcut state'i koru, DB'den gelen mesajları kullanma
+            setMessages(prev => {
+              // Eğer mevcut mesajlar varsa ve düzenlenmiş mesajlar varsa, onları koru
+              if (prev.length > 0) {
+                const editedMap = new Map<string, Message>();
+                prev.forEach(m => {
+                  const mId = m.id || m.key?.id;
+                  if (mId && (m.edited || m.editedAt)) {
+                    editedMap.set(String(mId), m);
+                  }
+                });
+                
+                // Sadece yeni mesajları ekle, mevcut düzenlenmiş mesajları koru
+                const existingIds = new Set(prev.map(m => String(m.id || m.key?.id)));
+                const newMessages = mapped.filter(msg => {
+                  const msgId = msg.id || msg.key?.id;
+                  return msgId && !existingIds.has(String(msgId));
+                });
+                
+                // Mevcut mesajları koru, sadece yeni mesajları ekle
+                const merged = [...prev, ...newMessages].sort((a, b) => {
+                  const aTime = a.timestamp || a.messageTimestamp || 0;
+                  const bTime = b.timestamp || b.messageTimestamp || 0;
+                  return aTime - bTime;
+                });
+                
+                messagesCacheRef.current.set(messagesKey, merged);
+                currentChatKeyRef.current = messagesKey;
+                messagesInitialLoadRef.current.set(messagesKey, true);
+                return merged;
+              }
+              
+              // İlk yükleme - DB'den yükle
+              messagesCacheRef.current.set(messagesKey, mapped);
+              currentChatKeyRef.current = messagesKey;
+              messagesInitialLoadRef.current.set(messagesKey, true);
+              return mapped;
+            });
             return;
           }
         } catch (dbError) {
@@ -138,6 +153,9 @@ export function useMessages() {
           body: body || text,
           fromMe: fromMe,
           timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+          // Düzenlenmiş mesaj bilgilerini koru (eğer varsa)
+          edited: msg.edited,
+          editedAt: msg.editedAt,
         };
       });
 
@@ -173,10 +191,36 @@ export function useMessages() {
           return aTime - bTime;
         });
 
-        setMessages(mapped);
-        // Cache'e kaydet
-        messagesCacheRef.current.set(messagesKey, mapped);
-        currentChatKeyRef.current = messagesKey;
+        // Mevcut mesajların edited bilgilerini koru - DB'den yükleme işlemini kaldırdık
+        setMessages(prev => {
+          // Eğer önceki mesajlar varsa, onları koru (özellikle düzenlenmiş mesajları)
+          if (prev.length > 0) {
+            // Mevcut mesajları koru, DB'den gelen mesajları kullanma
+            // Sadece yeni mesajları ekle
+            const existingIds = new Set(prev.map(m => String(m.id || m.key?.id)));
+            const newMessages = mapped.filter(msg => {
+              const msgId = msg.id || msg.key?.id;
+              return msgId && !existingIds.has(String(msgId));
+            });
+            
+            // Mevcut mesajları koru, sadece yeni mesajları ekle
+            const merged = [...prev, ...newMessages].sort((a, b) => {
+              const aTime = a.timestamp || a.messageTimestamp || 0;
+              const bTime = b.timestamp || b.messageTimestamp || 0;
+              return aTime - bTime;
+            });
+            
+            // Cache'e kaydet
+            messagesCacheRef.current.set(messagesKey, merged);
+            currentChatKeyRef.current = messagesKey;
+            return merged;
+          }
+          
+          // İlk yükleme - DB'den yükle
+          messagesCacheRef.current.set(messagesKey, mapped);
+          currentChatKeyRef.current = messagesKey;
+          return mapped;
+        });
       }
     } catch (error: any) {
       console.error('Mesajlar yüklenemedi:', error);

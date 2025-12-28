@@ -90,13 +90,53 @@ export const forwardMessage = async (sessionId: string, fromJid: string, toJid: 
 };
 
 export const editMessage = async (sessionId: string, jid: string, messageId: string, message: string): Promise<any> => {
-  const response = await fetch(`${API_BASE}/${sessionId}/messages/${encodeURIComponent(jid)}/${messageId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-  });
-  if (!response.ok) throw new Error('Mesaj düzenlenemedi');
-  return response.json();
+  try {
+    const response = await fetch(`${API_BASE}/${sessionId}/messages/${encodeURIComponent(jid)}/${messageId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    
+    // Response'u text olarak oku (JSON parse hatası olabilir)
+    const responseText = await response.text();
+    
+    if (!response.ok) {
+      let errorMessage = 'Mesaj düzenlenemedi';
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorMessage = errorJson.error || errorJson.message || errorMessage;
+      } catch {
+        errorMessage = responseText || response.statusText || errorMessage;
+      }
+      console.error('[editMessage] API hatası:', {
+        status: response.status,
+        statusText: response.statusText,
+        responseText,
+        errorMessage
+      });
+      throw new Error(errorMessage);
+    }
+    
+    // Başarılı response'u parse et
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      // JSON parse hatası varsa, response text'i direkt döndür
+      console.warn('[editMessage] JSON parse hatası, text döndürülüyor:', responseText);
+      result = { status: 'edited', message: responseText };
+    }
+    
+    console.log('[editMessage] ✅ Başarılı:', result);
+    return result;
+  } catch (error: any) {
+    // Network hatası veya diğer hatalar
+    console.error('[editMessage] ❌ Hata:', error);
+    if (error.message) {
+      throw error; // Zaten Error objesi, direkt fırlat
+    }
+    throw new Error('Mesaj düzenlenemedi: ' + (error?.toString() || 'Bilinmeyen hata'));
+  }
 };
 
 export const deleteMessage = async (sessionId: string, jid: string, messageId: string, deleteForEveryone: boolean = false): Promise<any> => {

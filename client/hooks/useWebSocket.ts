@@ -213,7 +213,7 @@ export function useWebSocket({
       }
       if (wsRef.current) {
         try {
-          wsRef.current.close();
+        wsRef.current.close();
         } catch (error) {
           // Ignore close errors
         }

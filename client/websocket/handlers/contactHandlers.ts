@@ -25,7 +25,17 @@ export const handleContactsSet = (data: WebSocketEvent, context: WebSocketContex
   const contactsMap = new Map<string, any>();
   if (rawContacts && Array.isArray(rawContacts)) {
     rawContacts.forEach((contact: any) => {
-      contactsMap.set(contact.id, contact);
+      // Backend'den gelen contact objesi: { id, name, notify, verifiedName, displayName, imgUrl, status }
+      // Tüm alanları kaydet (name, notify, verifiedName önemli!)
+      contactsMap.set(contact.id, {
+        id: contact.id,
+        name: contact.name || null, // Ham name alanı (cihaz rehberindeki isim)
+        notify: contact.notify || null, // WhatsApp'ta kayıtlı isim
+        verifiedName: contact.verifiedName || null, // Doğrulanmış isim
+        displayName: contact.displayName || contact.name || contact.notify || contact.verifiedName || null, // Formatlanmış isim (fallback ile)
+        imgUrl: contact.imgUrl || null,
+        status: contact.status || null,
+      });
       
       if (contact.imgUrl) {
         setChatProfilePictures(prev => new Map(prev).set(contact.id, contact.imgUrl));
@@ -40,7 +50,18 @@ export const handleContactsSet = (data: WebSocketEvent, context: WebSocketContex
       data: contactsMap,
       timestamp: Date.now()
     });
-    console.log('[WebSocket] Contact cache güncellendi:', contactsMap.size);
+    console.log('[WebSocket] Contact cache güncellendi:', contactsMap.size, 'contact');
+    
+    // Debug: İlk birkaç contact'ın isimlerini kontrol et
+    if (rawContacts.length > 0) {
+      const sampleContacts = rawContacts.slice(0, 3);
+      console.log('[WebSocket] Contact örnekleri:', sampleContacts.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        notify: c.notify,
+        verifiedName: c.verifiedName
+      })));
+    }
   }
 };
 
