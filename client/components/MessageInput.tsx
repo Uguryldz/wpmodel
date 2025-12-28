@@ -61,6 +61,7 @@ export default function MessageInput({
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isCancelledRef = useRef<boolean>(false); // İptal flag'i
 
   // Mikrofon izni kontrolü
   useEffect(() => {
@@ -132,6 +133,20 @@ export default function MessageInput({
       };
 
       mediaRecorder.onstop = () => {
+        // İptal edildiyse mesaj gönderme
+        if (isCancelledRef.current) {
+          isCancelledRef.current = false; // Flag'i sıfırla
+          // Stream'i durdur
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          // State'i sıfırla
+          audioChunksRef.current = [];
+          setRecordingTime(0);
+          return;
+        }
+
         // Kayıt durdurulduğunda blob oluştur
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         
@@ -141,7 +156,7 @@ export default function MessageInput({
           streamRef.current = null;
         }
 
-        // Ses mesajını gönder
+        // Ses mesajını gönder (sadece iptal edilmediyse)
         if (onSendVoiceMessage && audioBlob.size > 0) {
           onSendVoiceMessage(audioBlob);
         }
@@ -154,6 +169,7 @@ export default function MessageInput({
       mediaRecorder.start();
       setIsRecording(true);
       setRecordingTime(0);
+      isCancelledRef.current = false; // Kayıt başlarken flag'i sıfırla
     } catch (error) {
       // Ses kaydı başlatılamadı
       alert('Mikrofon erişimi alınamadı. Lütfen tarayıcı ayarlarını kontrol edin.');
@@ -171,6 +187,8 @@ export default function MessageInput({
   // Kayıt iptal et
   const cancelRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
+      // İptal flag'ini set et (onstop event'inde kontrol edilecek)
+      isCancelledRef.current = true;
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       

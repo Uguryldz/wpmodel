@@ -551,7 +551,9 @@ export default function WhatsAppMultiAccount() {
       );
       setShowMediaPreview(false);
       setSelectedMediaFile(null);
-      // Optimistic mesajı güncelle
+      
+      // WebSocket'ten gerçek mesaj geldiğinde optimistic mesaj replace edilecek
+      // Şimdilik optimistic mesajı 'sent' durumuna güncelle
       messagesHook.setMessages(prev => 
         prev.map(m => {
           if (m.id === tempMessageId) {
@@ -560,6 +562,12 @@ export default function WhatsAppMultiAccount() {
           return m;
         })
       );
+      
+      // Mesajları yeniden yükle (gerçek mesajı almak için)
+      // WebSocket'ten gelen mesaj optimistic mesajı replace edecek
+      setTimeout(() => {
+        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id, 50, false);
+      }, 1000);
     } catch (error: any) {
       console.error('Medya mesajı gönderilemedi:', error);
       

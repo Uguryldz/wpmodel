@@ -39,22 +39,31 @@ export function useChats({
     const oldJidToNewJidMap = new Map<string, string>(); // Eski JID -> Yeni normalize edilmiş JID mapping
     
     for (const chat of chats) {
+      // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
+      let chatId = chat.id;
+      if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
+        // Gerçek JID'yi lidJid'den al
+        chatId = chat.lidJid;
+        console.log('[removeDuplicateChats] @lid formatı düzeltildi: ${chat.id} -> ${chatId}');
+      }
+      
       // Grup chat'leri için duplicate kontrolü yapma (grup chat'lerde telefon numarası yok)
-      if (chat.id.includes('@g.us')) {
+      if (chatId.includes('@g.us')) {
         // Grup chat'leri için JID'yi direkt kullan
-        if (!phoneToChatMap.has(chat.id)) {
-          phoneToChatMap.set(chat.id, chat);
+        if (!phoneToChatMap.has(chatId)) {
+          phoneToChatMap.set(chatId, { ...chat, id: chatId });
         }
         continue;
       }
       
       // Bireysel chat'ler için: SADECE TELEFON NUMARASINI ÇIKAR
-      const phoneNumber = extractPhoneFromJid(chat.id); // Örnek: 905538781507
+      const phoneNumber = extractPhoneFromJid(chatId); // Örnek: 905538781507
       
       if (!phoneNumber) {
-        // Telefon numarası çıkarılamadıysa, JID'yi direkt kullan
-        if (!phoneToChatMap.has(chat.id)) {
-          phoneToChatMap.set(chat.id, chat);
+        // Telefon numarası çıkarılamadıysa, normalize edilmiş JID'yi direkt kullan
+        const normalizedJid = normalizeJid(chatId);
+        if (!phoneToChatMap.has(normalizedJid)) {
+          phoneToChatMap.set(normalizedJid, { ...chat, id: normalizedJid });
         }
         continue;
       }
@@ -63,7 +72,7 @@ export function useChats({
       const phoneNumberNormalized = normalizePhoneNumber(phoneNumber); // 05538781507 -> 905538781507
       
       // Normalize edilmiş JID'yi oluştur
-      const normalizedJid = normalizeJid(chat.id); // 905538781507@s.whatsapp.net formatına getir
+      const normalizedJid = normalizeJid(chatId); // 905538781507@s.whatsapp.net formatına getir
       
       // Eğer bu telefon numarası için zaten bir chat varsa (DUPLICATE)
       if (phoneToChatMap.has(phoneNumberNormalized)) {
@@ -71,7 +80,12 @@ export function useChats({
         
         // MESAJ KAYBI OLMAMASI İÇİN: Eski chat'in mesajlarını yeni chat'e aktar
         if (messagesCacheRef && sessionId) {
-          const oldJid = existingChat.id;
+          // Eski chat'in JID'sini normalize et (eğer @lid formatındaysa)
+          let oldJid = existingChat.id;
+          if (oldJid && oldJid.includes('@lid') && existingChat.lidJid) {
+            oldJid = existingChat.lidJid;
+          }
+          oldJid = normalizeJid(oldJid);
           const newJid = normalizedJid;
           
           // Eski chat'in mesajlarını al

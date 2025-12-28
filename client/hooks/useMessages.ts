@@ -57,6 +57,21 @@ export function useMessages() {
       const data = await api.getMessages(sessionId, chatId, limit);
       console.log('Mesajlar alındı (ham data):', data?.length || 0);
       
+      // Bugünün mesajlarını kontrol et
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStartTimestamp = Math.floor(today.getTime() / 1000);
+      const todayMessages = data?.filter((msg: any) => {
+        const msgTime = msg.timestamp || msg.messageTimestamp || 0;
+        // Timestamp saniye cinsindeyse direkt karşılaştır, milisaniye cinsindeyse 1000'e böl
+        const normalizedTime = msgTime > 1000000000000 ? Math.floor(msgTime / 1000) : msgTime;
+        return normalizedTime >= todayStartTimestamp;
+      }) || [];
+      
+      if (todayMessages.length === 0 && data && data.length > 0) {
+        console.log('⚠️ Bugünün mesajları yok, tüm mesajlar yükleniyor...');
+      }
+      
       // Eğer data boşsa ve DB'den yüklenmemişse, DB'den tekrar dene
       if ((!data || data.length === 0) && !append) {
         console.log('Mesajlar boş, DB\'den tekrar deneniyor...');

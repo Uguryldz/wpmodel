@@ -20,7 +20,8 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
   }
 
   // Önce memory store (oturum açıksa)
-  if (instance) {
+  // ÖNEMLİ: Instance'ın doğru sessionId'ye ait olduğundan emin ol
+  if (instance && instance.id === sessionId) {
     const memoryContacts = Array.from(instance.contactsStore.values()).filter(
       (c) => c.id && !c.id.endsWith("@g.us") && !isJidBroadcast(c.id)
     );
@@ -43,6 +44,7 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
       // Eğer cursor yoksa (ilk sayfa), database'den de veri çekip birleştir
       if (!cursor) {
         try {
+          // Sadece bu sessionId'ye ait contact'ları çek
           const dbContacts = await prisma.contact.findMany({
             where: { sessionId },
             orderBy: { pkId: "desc" },
@@ -50,6 +52,15 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
 
           const dbFormatted = dbContacts.map((c) => {
             const serialized = serializePrisma(c);
+            // Database'den gelen contact'ın sessionId'sini kontrol et
+            if (serialized.sessionId && serialized.sessionId !== sessionId) {
+              logger.warn({ 
+                contactId: serialized.id, 
+                contactSessionId: serialized.sessionId, 
+                expectedSessionId: sessionId 
+              }, "Contact farklı sessionId'ye ait, atlanıyor");
+              return null;
+            }
             return {
               id: serialized.id,
               name: serialized.name || null,
@@ -58,9 +69,10 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
               imgUrl: serialized.imgUrl || null,
               status: serialized.status || null,
             };
-          });
+          }).filter(Boolean); // null değerleri filtrele
 
           // Memory store ve database'den gelen contact'ları birleştir
+          // ÖNEMLİ: Sadece bu sessionId'ye ait contact'ları birleştir
           const contactMap = new Map();
           
           formatted.forEach((c) => {
@@ -68,7 +80,7 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
           });
           
           dbFormatted.forEach((c) => {
-            if (!contactMap.has(c.id)) {
+            if (c && !contactMap.has(c.id)) {
               contactMap.set(c.id, c);
             }
           });

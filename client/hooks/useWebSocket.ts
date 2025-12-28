@@ -487,24 +487,39 @@ export function useWebSocket({
                       }
                     });
                     
-                    // Birleştir ve sırala
+                    // Birleştir ve sırala (timestamp'e göre ascending - en eski önce)
                     const merged = [...filteredPrev, ...newMessages];
                     merged.sort((a, b) => {
                       const normalizeTimestamp = (ts: number | undefined) => {
                         if (!ts) return 0;
+                        // Timestamp milisaniye cinsinden değilse (saniye cinsindense) 1000 ile çarp
                         return ts > 1000000000000 ? ts : ts * 1000;
                       };
                       const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
                       const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-                      return aTime - bTime;
+                      return aTime - bTime; // Ascending - en eski önce
+                    });
+                    
+                    // Duplicate kontrolü - aynı ID'ye sahip mesajları kaldır
+                    const uniqueMessages = merged.filter((msg, index, self) => {
+                      const msgId = msg.id || msg.key?.id;
+                      if (!msgId) return true; // ID yoksa tut
+                      const firstIndex = self.findIndex(m => (m.id || m.key?.id) === msgId);
+                      return firstIndex === index; // İlk bulunan mesajı tut
                     });
                     
                     // Cache'i güncelle (normalize edilmiş chatId kullan)
                     if (updateMessagesCache && currentSelectedChat) {
-                      updateMessagesCache(currentActiveAccount?.id || '', normalizedChatId, merged);
+                      updateMessagesCache(currentActiveAccount?.id || '', normalizedChatId, uniqueMessages);
                     }
                     
-                    return merged;
+                    console.log('[WebSocket] ✅ Mesajlar eklendi:', { 
+                      yeni: newMessages.length, 
+                      toplam: uniqueMessages.length,
+                      chatId: normalizedChatId 
+                    });
+                    
+                    return uniqueMessages;
                   });
                 }
                 

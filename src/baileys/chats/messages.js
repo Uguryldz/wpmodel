@@ -15,7 +15,16 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
   try {
     // Önce memory store'dan kontrol et
     const instance = getOrCreateInstance(accountId);
-    const memoryMessages = instance.messagesStore.get(normalized) || [];
+    let memoryMessages = instance.messagesStore.get(normalized) || [];
+
+    // Memory store'daki mesajları timestamp'e göre sırala (en yeni önce)
+    if (memoryMessages.length > 0) {
+      memoryMessages = [...memoryMessages].sort((a, b) => {
+        const aTime = a.timestamp || a.messageTimestamp || 0;
+        const bTime = b.timestamp || b.messageTimestamp || 0;
+        return bTime - aTime; // En yeni önce (descending)
+      });
+    }
 
     if (memoryMessages.length > 0) {
       // Cursor ile sayfalama
@@ -31,8 +40,7 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
       }
 
       const paginatedMessages = memoryMessages
-        .slice(startIndex, startIndex + Number(limit))
-        .reverse(); // En yeni mesajlar önce
+        .slice(startIndex, startIndex + Number(limit));
 
       const nextCursor = 
         memoryMessages.length > startIndex + Number(limit)
@@ -46,11 +54,30 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     }
 
     // Memory store'da yoksa veritabanından çek
+    // Bugünün başlangıç timestamp'ini hesapla (UTC gece yarısı)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStartTimestamp = Math.floor(today.getTime() / 1000);
+    
+    // Limit yüksekse (tüm mesajlar isteniyorsa) bugünün mesajlarını da dahil et
+    // Limit düşükse (sayfalama varsa) sadece en yeni mesajları çek
+    const whereClause = {
+      sessionId,
+      remoteJid: normalizedJid,
+      // Eğer cursor yoksa (ilk sayfa), bugünün mesajlarını da dahil et
+      ...(cursor ? {} : {
+        OR: [
+          { messageTimestamp: { gte: BigInt(todayStartTimestamp) } }, // Bugünün mesajları
+          { messageTimestamp: { lt: BigInt(todayStartTimestamp) } },   // Eski mesajlar
+        ],
+      }),
+    };
+    
     const messages = await prisma.message.findMany({
       cursor: cursor ? { sessionId_remoteJid_id: { sessionId, remoteJid: normalizedJid, id: cursor } } : undefined,
       take: Number(limit),
       skip: cursor ? 1 : 0,
-      where: { sessionId, remoteJid: normalizedJid },
+      where: whereClause,
       orderBy: { messageTimestamp: "desc" },
     });
 
@@ -71,6 +98,13 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
         return null;
       }
     }).filter(Boolean);
+
+    // Formatlanmış mesajları timestamp'e göre sırala (en yeni önce)
+    formatted.sort((a, b) => {
+      const aTime = a.timestamp || a.messageTimestamp || 0;
+      const bTime = b.timestamp || b.messageTimestamp || 0;
+      return bTime - aTime; // En yeni önce (descending)
+    });
 
     const nextCursor =
       serialized.length !== 0 && serialized.length === Number(limit)
@@ -93,6 +127,9 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
 export const listMessagesWithCursor = async (accountId, jid, cursor, limit = 20) => {
   return listMessages(accountId, jid, cursor, limit);
 };
+
+
+
 
 
 

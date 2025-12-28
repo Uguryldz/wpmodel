@@ -79,6 +79,20 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
     key.fromMe = false;
   }
 
+  // Baileys API için quoted key formatını düzelt
+  // Key'de sadece gerekli alanlar olmalı: remoteJid, id, fromMe
+  // Participant sadece grup mesajları için gerekli
+  const quotedKey = {
+    remoteJid: key.remoteJid || normalizedJid,
+    id: key.id || messageId,
+    fromMe: key.fromMe !== undefined ? Boolean(key.fromMe) : false,
+  };
+  
+  // Participant sadece grup mesajları için ve varsa ekle
+  if (key.participant && key.participant.trim() !== '') {
+    quotedKey.participant = key.participant;
+  }
+
   let messageContent;
   if (typeof replyMessage === "string") {
     messageContent = { text: replyMessage };
@@ -87,11 +101,25 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
   }
 
   try {
+    logger.info({ 
+      quotedKey, 
+      originalKey: key, 
+      jid: normalizedJid, 
+      messageId,
+      messageContent 
+    }, "Mesaj yanıtlanıyor...");
+    
     await sock.sendMessage(normalizedJid, messageContent, {
-      quoted: key,
+      quoted: quotedKey,
     });
+    
+    logger.info({ 
+      quotedKey, 
+      jid: normalizedJid, 
+      messageId 
+    }, "✅ Mesaj başarıyla yanıtlandı");
   } catch (error) {
-    logger.error({ error, jid: normalizedJid, messageId, key }, "Mesaj yanıtlanamadı");
+    logger.error({ error, jid: normalizedJid, messageId, quotedKey, originalKey: key }, "Mesaj yanıtlanamadı");
     throw new Error(`Mesaj yanıtlanamadı: ${error.message}`);
   }
 
@@ -105,35 +133,106 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
   const sock = ensureSocket(accountId);
   const normalizedFromJid = normalizeJid(fromJid);
   const normalizedToJid = normalizeJid(toJid);
+  const sessionId = getAccountId(accountId);
 
-  const message = await prisma.message.findFirst({
-    where: {
-      sessionId: getAccountId(accountId),
-      remoteJid: normalizedFromJid,
-      id: messageId,
-    },
-  });
-
-  if (!message) {
-    throw new Error("İletilecek mesaj bulunamadı");
+  // Önce memory store'dan kontrol et
+  const instance = getOrCreateInstance(accountId);
+  let msgData = null;
+  
+  const memoryMessages = instance.messagesStore.get(normalizedFromJid) || [];
+  const memoryMsg = memoryMessages.find(m => (m.id || m.key?.id) === messageId);
+  
+  if (memoryMsg && memoryMsg.message) {
+    msgData = memoryMsg.message;
+    logger.info({ messageId, source: "memory_store" }, "İletilecek mesaj memory store'da bulundu");
   }
 
-  let msgData;
-  try {
-    msgData = typeof message.message === "string" ? JSON.parse(message.message) : message.message;
-  } catch {
-    throw new Error("Mesaj verisi geçersiz");
+  // Memory store'da yoksa DB'den kontrol et
+  if (!msgData) {
+    let message = await prisma.message.findFirst({
+      where: {
+        sessionId,
+        remoteJid: normalizedFromJid,
+        id: messageId,
+      },
+    });
+
+    // Tam eşleşme yoksa, esnek arama yap
+    if (!message) {
+      const allMessages = await prisma.message.findMany({
+        where: {
+          sessionId,
+          remoteJid: normalizedFromJid,
+        },
+        take: 100,
+        orderBy: { messageTimestamp: 'desc' },
+      });
+
+      for (const msg of allMessages) {
+        try {
+          const msgKey = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+          if (msgKey && (String(msgKey.id) === String(messageId) || String(msg.id) === String(messageId))) {
+            message = msg;
+            break;
+          }
+        } catch (e) {
+          // Parse hatası, devam et
+        }
+      }
+    }
+
+    if (!message) {
+      logger.error({ messageId, fromJid: normalizedFromJid, sessionId }, "İletilecek mesaj bulunamadı");
+      throw new Error("İletilecek mesaj bulunamadı");
+    }
+
+    try {
+      msgData = typeof message.message === "string" ? JSON.parse(message.message) : message.message;
+      logger.info({ messageId, source: "database" }, "İletilecek mesaj database'de bulundu");
+    } catch (error) {
+      logger.error({ error, messageId }, "Mesaj verisi parse edilemedi");
+      throw new Error("Mesaj verisi geçersiz");
+    }
   }
 
   if (!msgData) {
     throw new Error("Mesaj içeriği bulunamadı");
   }
 
-  // Baileys kaynak koduna göre: generateForwardMessageContent kullanılır
-  const forwardContent = generateForwardMessageContent(msgData, false);
-  await sock.sendMessage(normalizedToJid, forwardContent);
-
-  return { status: "forwarded", messageId, from: normalizedFromJid, to: normalizedToJid };
+  try {
+    // Baileys kaynak koduna göre: generateForwardMessageContent kullanılır
+    const forwardContent = generateForwardMessageContent(msgData, false);
+    
+    if (!forwardContent) {
+      throw new Error("Forward içeriği oluşturulamadı");
+    }
+    
+    logger.info({ 
+      fromJid: normalizedFromJid, 
+      toJid: normalizedToJid, 
+      messageId,
+      forwardContentKeys: Object.keys(forwardContent || {})
+    }, "Mesaj iletilmeye çalışılıyor...");
+    
+    await sock.sendMessage(normalizedToJid, forwardContent);
+    
+    logger.info({ 
+      fromJid: normalizedFromJid, 
+      toJid: normalizedToJid, 
+      messageId 
+    }, "✅ Mesaj başarıyla iletildi");
+    
+    return { status: "forwarded", messageId, from: normalizedFromJid, to: normalizedToJid };
+  } catch (error) {
+    logger.error({ 
+      error: error.message, 
+      stack: error.stack,
+      fromJid: normalizedFromJid, 
+      toJid: normalizedToJid, 
+      messageId 
+    }, "Mesaj iletilemedi");
+    throw new Error(`Mesaj iletilemedi: ${error.message}`);
+  }
 };
 
 /**
