@@ -334,40 +334,57 @@ export default function MessageInput({
             <FileText size={24} />
           </button>
         )}
-        <textarea
-          ref={textareaRef}
-          value={message}
-          onChange={(e) => {
-            setMessage(e.target.value);
-            // Otomatik yükseklik ayarla
-            if (textareaRef.current) {
-              textareaRef.current.style.height = 'auto';
-              textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-            }
-          }}
-          onKeyDown={(e) => {
-            // Shift+Enter ile yeni satır, Enter ile gönder
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (!isSending && message.trim()) {
-                if (replyingTo) {
-                  onReplyMessage(replyingTo);
-                } else {
-                  onSendMessage();
+        <div className="flex-1 relative">
+          <textarea
+            ref={textareaRef}
+            value={message}
+            onChange={(e) => {
+              setMessage(e.target.value);
+              // Otomatik yükseklik ayarla
+              if (textareaRef.current) {
+                textareaRef.current.style.height = 'auto';
+                textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+              }
+            }}
+            onKeyDown={(e) => {
+              // Shift+Enter ile yeni satır, Enter ile gönder
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!isSending && message.trim()) {
+                  if (replyingTo) {
+                    onReplyMessage(replyingTo);
+                  } else {
+                    onSendMessage();
+                  }
                 }
               }
-            }
-          }}
-          onFocus={() => {
-            onSetShowEmojiPicker(false);
-            onSetShowAttachMenu(false);
-          }}
-              placeholder="Bir mesaj yazın (Shift+Enter ile yeni satır)"
-              className="flex-1 bg-white rounded-lg px-4 py-2 outline-none resize-none overflow-y-auto max-h-[120px]"
-              rows={1}
-              disabled={isSending}
-              maxLength={4096}
-            />
+            }}
+            onFocus={() => {
+              onSetShowEmojiPicker(false);
+              onSetShowAttachMenu(false);
+            }}
+            placeholder="Bir mesaj yazın..."
+            className="w-full bg-white rounded-lg px-4 py-2 pb-8 pr-16 outline-none resize-none overflow-y-auto max-h-[120px]"
+            rows={1}
+            disabled={isSending}
+            maxLength={4096}
+          />
+          
+          {/* Karakter sayacı - sağ alt köşede */}
+          {message.length > 0 && (
+            <div className="absolute bottom-4 right-2 text-xs pointer-events-none z-10">
+              <span className={`px-2 py-1 rounded backdrop-blur-sm ${
+                message.length > 4000 
+                  ? 'bg-red-100/90 text-red-600' 
+                  : message.length > 3500 
+                    ? 'bg-orange-100/90 text-orange-600' 
+                    : 'bg-gray-100/90 text-gray-500'
+              }`}>
+                {message.length}/4096
+              </span>
+            </div>
+          )}
+        </div>
         {/* Gizli file input */}
         <input
           ref={fileInputRef}
@@ -424,11 +441,11 @@ export default function MessageInput({
             >
               <Send size={24} />
             </button>
-            {message.length > 0 && (
+            {/* {message.length > 0 && (
               <span className={`text-xs ${message.length > 4000 ? 'text-red-500' : message.length > 3500 ? 'text-orange-500' : 'text-gray-400'}`}>
                 {message.length}/4096
               </span>
-            )}
+            )} */}
           </div>
         ) : (
           <button 
