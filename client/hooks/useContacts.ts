@@ -25,6 +25,12 @@ export function useContacts({
 
   const loadContacts = async (sessionId: string, forceReload: boolean = false): Promise<Map<string, any>> => {
     try {
+      // Temp session'lar için API çağrısı yapma (geçersiz session'lar)
+      if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
+        console.log('[useContacts] ⚠️ Temp session için loadContacts çağrıldı, atlanıyor:', sessionId);
+        return new Map<string, any>();
+      }
+      
       const cached = contactsCacheRef.current.get(sessionId);
       if (!forceReload && cached) {
         console.log('Contact\'lar cache\'den kullanılıyor:', cached.data.size);

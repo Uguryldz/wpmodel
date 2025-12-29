@@ -47,23 +47,21 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
       // localStorage'dan hesap adlarını yükle
       const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
       
-      // Temp- ile başlayan session'lar için otomatik isim ata
-      let tempCounter = 1;
-      for (const session of sessions) {
-        if (session.id.startsWith('temp-') && !accountNames[session.id]) {
-          // Mevcut temp isimlerini kontrol et
-          while (Object.values(accountNames).includes(`Hesap ${tempCounter}`)) {
-            tempCounter++;
-          }
-          accountNames[session.id] = `Hesap ${tempCounter}`;
-          tempCounter++;
-        }
-      }
+      // Temp- ile başlayan session'ları filtrele (bunlar geçici session'lardır ve backend'de temizlenir)
+      const validSessions = sessions.filter(session => !session.id.startsWith('temp-'));
+      
+      // Account- ile başlayan session'ları da kontrol et (bağlantı kurulmamış olanları filtrele)
+      // Not: Backend'de restore sırasında temizlenir, burada sadece görünümü filtreliyoruz
+      const finalSessions = validSessions.filter(session => {
+        // Account- ile başlayan session'ları göster (backend'de bağlantı kontrolü yapılıyor)
+        return true;
+      });
+      
       // Güncellenmiş account names'i kaydet
       localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
 
       const accountsWithStatus = await Promise.all(
-        sessions.map(async (session, index) => {
+        finalSessions.map(async (session, index) => {
           try {
             const status = await api.getSessionStatus(session.id);
             const accountName = accountNames[session.id] || session.id;

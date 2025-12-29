@@ -167,17 +167,26 @@ export default function WhatsAppMultiAccount() {
     console.log('=== activeAccount değişti ===', activeAccount);
     if (activeAccount) {
       const sessionId = activeAccount.id;
+      
+      // Temp session'lar için chat yükleme işlemini atla
+      if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
+        console.log('[whatsapp_multi_account] ⚠️ Temp session için chat yükleme atlanıyor:', sessionId);
+        return;
+      }
+      
       const hasInitialLoad = chatsHook.chatsInitialLoadRef.current.get(sessionId);
       
-      // Contact'ları her zaman yükle (DB senkronizasyonu için)
-      const cachedContacts = contactsHook.contactsCacheRef.current.get(sessionId);
-      if (!cachedContacts || cachedContacts.data.size === 0) {
-        console.log('Contact\'lar yüklenmemiş, yükleniyor...', sessionId);
-        contactsHook.loadContacts(sessionId, false).then(() => {
-          console.log('Contact\'lar yüklendi');
-        }).catch((error) => {
-          console.warn('Contact\'lar yüklenemedi:', error);
-        });
+      // Contact'ları her zaman yükle (DB senkronizasyonu için) - temp session'lar hariç
+      if (!sessionId.startsWith('temp-') && !sessionId.startsWith('account-')) {
+        const cachedContacts = contactsHook.contactsCacheRef.current.get(sessionId);
+        if (!cachedContacts || cachedContacts.data.size === 0) {
+          console.log('Contact\'lar yüklenmemiş, yükleniyor...', sessionId);
+          contactsHook.loadContacts(sessionId, false).then(() => {
+            console.log('Contact\'lar yüklendi');
+          }).catch((error) => {
+            console.warn('Contact\'lar yüklenemedi:', error);
+          });
+        }
       }
       
       // Sadece ilk bağlantıda veya bağlantı durumu değiştiğinde yükle
@@ -186,13 +195,15 @@ export default function WhatsAppMultiAccount() {
         chatsHook.chatsInitialLoadRef.current.set(sessionId, true);
         chatsHook.chatsLoadedRef.current.set(sessionId, false);
         
-        // İlk bağlantıda contact'ları da yükle (eğer yüklenmemişse)
-        contactsHook.loadContacts(sessionId, false).then(() => {
-          // Sadece sohbet listesi boşsa yükle
-          if (chatsHook.chats.length === 0) {
-            chatsHook.loadChats(sessionId, 50, true);
-          }
-        });
+        // İlk bağlantıda contact'ları da yükle (eğer yüklenmemişse) - temp session'lar hariç
+        if (!sessionId.startsWith('temp-') && !sessionId.startsWith('account-')) {
+          contactsHook.loadContacts(sessionId, false).then(() => {
+            // Sadece sohbet listesi boşsa yükle
+            if (chatsHook.chats.length === 0) {
+              chatsHook.loadChats(sessionId, 50, true);
+            }
+          });
+        }
       } else if (activeAccount.status !== 'open' && chatsHook.chats.length === 0 && !hasInitialLoad) {
         // Bağlı değilse de DB'den yükle (uygulama yeniden başladığında sohbetler görünsün)
         console.log('Hesap bağlı değil ama sohbetler yok - DB\'den yükleniyor');

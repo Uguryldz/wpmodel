@@ -218,6 +218,12 @@ export function useChats({
 
   const loadChats = useCallback(async (sessionId: string, limit: number = 50, force: boolean = false) => {
     try {
+      // Temp session'lar için API çağrısı yapma (geçersiz session'lar)
+      if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
+        console.log('[useChats] ⚠️ Temp session için loadChats çağrıldı, atlanıyor:', sessionId);
+        return;
+      }
+      
       // WebSocket'ten chat'ler geliyor, API çağrısı sadece fallback olarak kullanılacak
       const isLoaded = chatsLoadedRef.current.get(sessionId);
       const hasInitialLoad = chatsInitialLoadRef.current.get(sessionId);

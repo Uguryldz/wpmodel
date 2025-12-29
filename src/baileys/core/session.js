@@ -141,10 +141,73 @@ export const restoreSessions = async () => {
 
     console.log(`[restoreSessions] ${sessionIds.length} session klasörü bulundu:`, sessionIds);
 
+    // Temp- ile başlayan session'ları temizle (bunlar kesinlikle geçici session'lardır)
+    const tempSessionsToCleanup = sessionIds.filter(sessionId => 
+      sessionId.startsWith('temp-')
+    );
+
+    // Temp session'ları temizle
+    for (const tempSessionId of tempSessionsToCleanup) {
+      try {
+        console.log(`[restoreSessions] 🗑️ Temp session temizleniyor: ${tempSessionId}`);
+        await deleteSession(tempSessionId);
+        console.log(`[restoreSessions] ✅ Temp session temizlendi: ${tempSessionId}`);
+      } catch (error) {
+        console.error(`[restoreSessions] ❌ Temp session temizlenemedi (${tempSessionId}):`, error);
+        logger.error({ error, sessionId: tempSessionId }, "Temp session temizlenemedi");
+      }
+    }
+
+    // Account- ile başlayan session'ları kontrol et ve bağlantı kurulmamış olanları temizle
+    const accountSessions = sessionIds.filter(sessionId => 
+      sessionId.startsWith('account-')
+    );
+
+    const accountSessionsToCleanup = [];
+    for (const accountSessionId of accountSessions) {
+      try {
+        const instance = getOrCreateInstance(accountSessionId);
+        await initBaileys(accountSessionId);
+        
+        // Kısa bir süre bekle ve bağlantı durumunu kontrol et
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Eğer WhatsApp JID yoksa (bağlantı kurulmamışsa), temizle
+        if (!instance.whatsappJid && instance.connectionState?.status !== 'open') {
+          accountSessionsToCleanup.push(accountSessionId);
+          console.log(`[restoreSessions] 🗑️ Account session bağlantı kurulmamış, temizlenecek: ${accountSessionId}`);
+        } else {
+          console.log(`[restoreSessions] ✅ Account session bağlantı kurulmuş, restore edilecek: ${accountSessionId}`);
+        }
+      } catch (error) {
+        // Hata varsa da temizle (muhtemelen geçersiz session)
+        accountSessionsToCleanup.push(accountSessionId);
+        console.log(`[restoreSessions] 🗑️ Account session hata nedeniyle temizlenecek: ${accountSessionId}`);
+      }
+    }
+
+    // Account session'ları temizle
+    for (const accountSessionId of accountSessionsToCleanup) {
+      try {
+        await deleteSession(accountSessionId);
+        console.log(`[restoreSessions] ✅ Account session temizlendi: ${accountSessionId}`);
+      } catch (error) {
+        console.error(`[restoreSessions] ❌ Account session temizlenemedi (${accountSessionId}):`, error);
+        logger.error({ error, sessionId: accountSessionId }, "Account session temizlenemedi");
+      }
+    }
+
+    // Tüm geçerli session'ları restore et (temp ve bağlantı kurulmamış account session'lar hariç)
+    const validSessionIds = sessionIds.filter(sessionId => 
+      !tempSessionsToCleanup.includes(sessionId) && !accountSessionsToCleanup.includes(sessionId)
+    );
+
+    console.log(`[restoreSessions] ${validSessionIds.length} geçerli session restore edilecek (${tempSessionsToCleanup.length} temp + ${accountSessionsToCleanup.length} account session temizlendi)`);
+
     // Session'ları restore et ve WhatsApp JID'lerini topla
     const sessionsByJid = new Map(); // whatsappJid -> [sessionIds]
     
-    for (const sessionId of sessionIds) {
+    for (const sessionId of validSessionIds) {
       try {
         console.log(`[restoreSessions] Session restore ediliyor: ${sessionId}`);
         await initBaileys(sessionId);
