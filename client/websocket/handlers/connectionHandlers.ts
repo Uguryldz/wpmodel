@@ -13,12 +13,11 @@ export const handleConnectionUpdate = (data: WebSocketEvent, context: WebSocketC
 
   const {
     activeAccountRef,
+    setAccounts,
   } = context;
 
-  const currentActiveAccount = activeAccountRef.current;
-  if (sessionId !== currentActiveAccount?.id) return;
-
   console.log('[WebSocket] 🔌 Bağlantı güncellemesi alındı:', {
+    sessionId,
     connection,
     hasQr: !!qr,
     statusCode,
@@ -26,24 +25,47 @@ export const handleConnectionUpdate = (data: WebSocketEvent, context: WebSocketC
     error,
   });
 
-  // Bağlantı durumu güncellemeleri şu an için sadece log'lanıyor
-  // İleride UI'da bağlantı durumu göstergesi için kullanılabilir
-  // Örneğin: "Bağlanıyor...", "Bağlandı ✅", "Bağlantı kesildi ⚠️"
+  // UI'da account status'unu güncelle
+  if (setAccounts) {
+    setAccounts((prevAccounts: any[]) => {
+      const accountIndex = prevAccounts.findIndex((acc: any) => acc.id === sessionId);
+      if (accountIndex >= 0) {
+        const updatedAccounts = [...prevAccounts];
+        let newStatus = connection || prevAccounts[accountIndex].status;
+        
+        // Connection durumunu status'a çevir
+        if (connection === 'open') {
+          newStatus = 'open';
+        } else if (connection === 'close') {
+          newStatus = 'close';
+        } else if (connection === 'connecting') {
+          newStatus = 'connecting';
+        }
+        
+        updatedAccounts[accountIndex] = {
+          ...updatedAccounts[accountIndex],
+          status: newStatus,
+        };
+        return updatedAccounts;
+      }
+      return prevAccounts;
+    });
+  }
   
   if (qr) {
     console.log('[WebSocket] 📱 QR kod alındı, uzunluk:', qr.length);
   }
   
   if (connection === 'open') {
-    console.log('[WebSocket] ✅ Bağlantı açıldı');
+    console.log('[WebSocket] ✅ Bağlantı açıldı:', sessionId);
   } else if (connection === 'close') {
-    console.warn('[WebSocket] ⚠️ Bağlantı kapandı:', {
+    console.warn('[WebSocket] ⚠️ Bağlantı kapandı:', sessionId, {
       statusCode,
       shouldReconnect,
       error,
     });
   } else if (connection === 'connecting') {
-    console.log('[WebSocket] 🔄 Bağlanılıyor...');
+    console.log('[WebSocket] 🔄 Bağlanılıyor...', sessionId);
   }
 };
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import * as api from '../api';
+// API import kaldırıldı - WebSocket kullanılıyor
 import { Chat, Message } from '../types';
 import { normalizeJid, extractPhoneFromJid, normalizePhoneNumber } from '../utils/contactUtils';
 
@@ -224,147 +224,35 @@ export function useChats({
         return;
       }
       
-      // WebSocket'ten chat'ler geliyor, API çağrısı sadece fallback olarak kullanılacak
+      // WebSocket'ten chat'ler geliyor, API çağrısı yapılmıyor
       const isLoaded = chatsLoadedRef.current.get(sessionId);
       const hasInitialLoad = chatsInitialLoadRef.current.get(sessionId);
       
-      // Eğer zaten yüklendiyse ve force değilse, WebSocket'ten gelen güncellemeleri bekle
+      // Eğer zaten yüklendiyse, WebSocket'ten gelen güncellemeleri kullan
       if (!force && isLoaded && hasInitialLoad) {
-        console.log('[useChats] Sohbetler WebSocket\'ten yüklendi, API çağrısı yapılmıyor');
+        console.log('[useChats] ✅ Sohbetler WebSocket\'ten yüklendi, API çağrısı yapılmıyor');
         return;
       }
       
-      // WebSocket'ten chats.set gelmediyse, API'den yükle (fallback)
-      // WebSocket bağlantısı kurulduğunda chats.set event'i gelecek
-      // Eğer 5 saniye içinde gelmezse, API'den yükle
+      // WebSocket'ten chats.set event'i gelecek
+      // İlk yükleme için WebSocket event'ini bekliyoruz
       if (!hasInitialLoad) {
-        console.log('[useChats] WebSocket\'ten chats.set bekleniyor, 5 saniye sonra API fallback devreye girecek...');
-        
-        const fallbackTimeout = setTimeout(async () => {
-          const stillNotLoaded = !chatsInitialLoadRef.current.get(sessionId);
-          if (stillNotLoaded) {
-            console.warn('[useChats] WebSocket\'ten chats.set gelmedi, API\'den yükleniyor (fallback)...');
-            
-            try {
-              const chatsData = await api.getChats(sessionId, limit);
-              
-              if (chatsData && chatsData.length > 0) {
-                // API'den gelen chat'leri formatla ve set et
-                const normalizedChats = chatsData.map((chat: any) => {
-                  let chatId = chat.id;
-                  if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
-                    chatId = chat.lidJid;
-                  }
-                  return {
-                    ...chat,
-                    id: normalizeJid(chatId),
-                  };
-                });
-                
-                const formattedChats = normalizedChats.map((chat: any) => {
-                  const contact = contactsMapRef.current.get(chat.id);
-                  let displayName = chat.name || chat.displayName || chat.id;
-                  let verifiedName = chat.verifiedName;
-                  
-                  if (!chat.id.includes('@g.us') && contact) {
-                    verifiedName = contact.verifiedName || chat.verifiedName;
-                    displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
-                  } else if (!chat.id.includes('@g.us')) {
-                    const phoneMatch = chat.id.match(/^(\d+)@/);
-                    if (phoneMatch) {
-                      displayName = phoneMatch[1];
-                    }
-                  }
-                  
-                  return {
-                    ...chat,
-                    name: displayName,
-                    verifiedName: verifiedName,
-                    profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id),
-                    archived: chat.archived || false,
-                    lastMessage: '',
-                    time: chat.conversationTimestamp 
-                      ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                      : '',
-                  };
-                });
-                
-                const deduplicatedChats = removeDuplicateChats(formattedChats, sessionId);
-                setChats(deduplicatedChats);
-                chatsLoadedRef.current.set(sessionId, true);
-                chatsInitialLoadRef.current.set(sessionId, true);
-                console.log('[useChats] ✅ API fallback ile sohbetler yüklendi:', deduplicatedChats.length);
-              }
-            } catch (error) {
-              console.error('[useChats] ❌ API fallback hatası:', error);
-            }
-          }
-        }, 5000); // 5 saniye bekle
-        
-        // Cleanup function - eğer WebSocket'ten chats.set gelirse timeout'u iptal et
-        return () => {
-          clearTimeout(fallbackTimeout);
-        };
+        console.log('[useChats] ⏳ WebSocket\'ten chats.set event\'i bekleniyor...');
+        // WebSocket handler (chatHandlers.ts) chats.set event'ini işleyecek
+        return;
       }
       
-      // Force reload durumunda API'den yükle
+      // Force reload durumunda da API kullanmıyoruz, WebSocket'ten gelen güncellemeleri bekliyoruz
+      // Eğer force reload gerekiyorsa, backend'e WebSocket üzerinden request gönderilebilir
       if (force) {
-        console.log('[useChats] Force reload: API\'den yükleniyor...');
-        
-        const chatsData = await api.getChats(sessionId, limit);
-        
-        if (chatsData && chatsData.length > 0) {
-          const normalizedChats = chatsData.map((chat: any) => {
-            let chatId = chat.id;
-            if (chat.id && chat.id.includes('@lid') && chat.lidJid) {
-              chatId = chat.lidJid;
-            }
-            return {
-              ...chat,
-              id: normalizeJid(chatId),
-            };
-          });
-          
-          const formattedChats = normalizedChats.map((chat: any) => {
-            const contact = contactsMapRef.current.get(chat.id);
-            let displayName = chat.name || chat.displayName || chat.id;
-            let verifiedName = chat.verifiedName;
-            
-            if (!chat.id.includes('@g.us') && contact) {
-              verifiedName = contact.verifiedName || chat.verifiedName;
-              displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
-            } else if (!chat.id.includes('@g.us')) {
-              const phoneMatch = chat.id.match(/^(\d+)@/);
-              if (phoneMatch) {
-                displayName = phoneMatch[1];
-              }
-            }
-            
-            return {
-              ...chat,
-              name: displayName,
-              verifiedName: verifiedName,
-              profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id),
-              archived: chat.archived || false,
-              lastMessage: '',
-              time: chat.conversationTimestamp 
-                ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                : '',
-            };
-          });
-          
-          const deduplicatedChats = removeDuplicateChats(formattedChats, sessionId);
-          setChats(deduplicatedChats);
-          chatsLoadedRef.current.set(sessionId, true);
-          chatsInitialLoadRef.current.set(sessionId, true);
-          console.log('[useChats] ✅ Force reload ile sohbetler yüklendi:', deduplicatedChats.length);
-        }
+        console.log('[useChats] ⚠️ Force reload istenmiş, ancak WebSocket event\'leri kullanılıyor');
+        // WebSocket handler'dan chats.set event'i bekleniyor
         return;
       }
     } catch (error: any) {
       console.error('[useChats] ❌ loadChats hatası:', error);
     }
-  }, [chatProfilePictures, setChatProfilePictures, queueProfilePicture, removeDuplicateChats]); // removeDuplicateChats dependency olarak eklendi
+  }, [chatProfilePictures, setChatProfilePictures, queueProfilePicture, removeDuplicateChats]);
 
   return {
     chats,

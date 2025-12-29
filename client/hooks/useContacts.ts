@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+// getContacts import'u kaldırıldı - WebSocket kullanılıyor
+// getDeviceContacts API olarak kalıyor (özel endpoint)
 import * as api from '../api';
 import { CONTACTS_CACHE_TTL } from '../constants/appConstants';
 import { normalizePhoneNumber, extractPhoneFromJid } from '../utils/contactUtils';
@@ -31,70 +33,58 @@ export function useContacts({
         return new Map<string, any>();
       }
       
+      // WebSocket'ten contacts.set event'i gelecek
+      // Cache'den kontrol et
       const cached = contactsCacheRef.current.get(sessionId);
       if (!forceReload && cached) {
-        console.log('Contact\'lar cache\'den kullanılıyor:', cached.data.size);
+        console.log('[useContacts] ✅ Contact\'lar cache\'den kullanılıyor:', cached.data.size);
         return cached.data;
       }
 
-      console.log('=== Contact\'lar API\'den yükleniyor ===', { sessionId, forceReload });
+      // WebSocket'ten contacts.set event'i bekleniyor
+      console.log('[useContacts] ⏳ WebSocket\'ten contacts.set event\'i bekleniyor...', { sessionId, forceReload });
       
-      // Önce DB'den contact'ları yükle (cihaz rehberi)
-      //let contactsData = await api.getContacts(sessionId).catch(() => []);
-      let contactsData: api.Contact[] = await api.getContacts(sessionId).catch(() => []);
-      // Eğer boşsa veya azsa, cihaz rehberinden de yükle
-      if (!contactsData || contactsData.length === 0 || forceReload) {
+      // Eğer cache'de yoksa, WebSocket event'ini bekliyoruz
+      // contacts.set event'i geldiğinde cache dolacak ve bu fonksiyon tekrar çağrılabilir
+      // Cihaz rehberinden contact çekme işlemi API olarak kalıyor (özel endpoint)
+      if (forceReload) {
         try {
           const deviceContacts = await api.getDeviceContacts(sessionId);
           if (deviceContacts && deviceContacts.length > 0) {
-            console.log('Cihaz rehberinden contact\'lar yüklendi:', deviceContacts.length);
-            // Cihaz rehberindeki contact'ları mevcut listeye ekle (telefon numarası mapping'i için)
-            const existingIds = new Set(contactsData.map((c: any) => c.id));
+            console.log('[useContacts] ✅ Cihaz rehberinden contact\'lar yüklendi:', deviceContacts.length);
+            // Cihaz rehberindeki contact'ları cache'e ekle
+            const contactsMap = cached ? new Map(cached.data) : new Map<string, any>();
             deviceContacts.forEach((deviceContact: any) => {
-              if (!existingIds.has(deviceContact.id)) {
-                contactsData.push(deviceContact);
-              } else {
+              const existing = contactsMap.get(deviceContact.id);
+              if (existing) {
                 // Mevcut contact'ı güncelle (cihaz rehberindeki isim öncelikli)
-                const index = contactsData.findIndex((c: any) => c.id === deviceContact.id);
-                if (index >= 0) {
-                  contactsData[index] = {
-                    ...contactsData[index],
-                    name: deviceContact.name || contactsData[index].name, // Cihaz rehberindeki isim öncelikli
-                    notify: contactsData[index].notify || deviceContact.notify,
-                    verifiedName: contactsData[index].verifiedName || deviceContact.verifiedName,
-                    imgUrl: contactsData[index].imgUrl || deviceContact.imgUrl,
-                    status: contactsData[index].status || deviceContact.status,
-                  };
-                }
+                contactsMap.set(deviceContact.id, {
+                  ...existing,
+                  name: deviceContact.name || existing.name,
+                  notify: existing.notify || deviceContact.notify,
+                  verifiedName: existing.verifiedName || deviceContact.verifiedName,
+                  imgUrl: existing.imgUrl || deviceContact.imgUrl,
+                  status: existing.status || deviceContact.status,
+                });
+              } else {
+                contactsMap.set(deviceContact.id, deviceContact);
               }
             });
+            contactsCacheRef.current.set(sessionId, {
+              data: contactsMap,
+              timestamp: Date.now()
+            });
+            return contactsMap;
           }
         } catch (deviceError) {
-          console.warn('Cihaz rehberinden contact\'lar yüklenemedi:', deviceError);
+          console.warn('[useContacts] ⚠️ Cihaz rehberinden contact\'lar yüklenemedi:', deviceError);
         }
       }
       
-      const contactsMap = new Map<string, any>();
-      if (contactsData && Array.isArray(contactsData)) {
-        contactsData.forEach((contact: any) => {
-          // Telefon numarası mapping'i - JID'den telefon numarasını çıkar
-          const phoneFromJid = extractPhoneFromJid(contact.id);
-          if (phoneFromJid && !contact.name && !contact.notify) {
-            // Eğer isim yoksa, telefon numarasını göster
-            contact.displayPhone = phoneFromJid;
-          }
-          contactsMap.set(contact.id, contact);
-        });
-        contactsCacheRef.current.set(sessionId, {
-          data: contactsMap,
-          timestamp: Date.now()
-        });
-        console.log('Contact\'lar yüklendi ve cache\'lendi:', contactsData.length);
-      }
-      
-      return contactsMap;
+      // Cache'de yoksa boş Map döndür, WebSocket event'i gelince dolacak
+      return cached ? cached.data : new Map<string, any>();
     } catch (error) {
-      console.error('Contact\'lar yüklenemedi:', error);
+      console.error('[useContacts] ❌ Contact\'lar yüklenemedi:', error);
       const cached = contactsCacheRef.current.get(sessionId);
       return cached ? cached.data : new Map<string, any>();
     }
@@ -157,9 +147,11 @@ export function useContacts({
 
     try {
       setIsLoadingContacts(true);
+      // Cihaz rehberinden contact'ları yükle (forceReload=true ile)
       const contactsMap = await loadContacts(activeAccountId, true);
       const contactsArray = Array.from(contactsMap.values());
       setContacts(contactsArray);
+      setFilteredContacts(contactsArray);
       
       // Refresh'te profil fotoğraflarını tekrar yükleme (sadece yeni contact'lar için)
       // Zaten yüklenmiş olanları atla
@@ -171,11 +163,11 @@ export function useContacts({
         }
       });
     } catch (error) {
-      console.error('Kişi listesi yenilenemedi:', error);
+      console.error('[useContacts] ❌ Kişi listesi yenilenemedi:', error);
     } finally {
       setIsLoadingContacts(false);
     }
-  }, [activeAccountId, chatProfilePictures, queueProfilePicture, profilePictureFailedRef]);
+  }, [activeAccountId, chatProfilePictures, queueProfilePicture, profilePictureFailedRef, loadContacts]);
 
   const handleOpenContactSelector = useCallback(async () => {
     if (!activeAccountId) return;

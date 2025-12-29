@@ -5,4 +5,5 @@ export { handleContactsSet, handleContactsUpsert } from './contactHandlers';
 export { handlePresenceUpdate } from './presenceHandlers';
 export { handleGroupsUpdate, handleGroupParticipantsUpdate } from './groupHandlers';
 export { handleConnectionUpdate } from './connectionHandlers';
+export { handleSessionsUpdate } from './sessionHandlers';
 

@@ -12,6 +12,8 @@ export function useProfilePictures() {
   const profilePicturesLoadedRef = useRef<Map<string, boolean>>(new Map()); // Hangi session için profil fotoğrafları yüklendi
 
   // Profil resimlerini batch olarak yükle (debounce ile)
+  // Öncelik: contacts.upsert event'inden gelen imgUrl (WebSocket)
+  // Fallback: API'den yükleme (sadece gerektiğinde)
   const loadProfilePicturesBatch = async (sessionId: string) => {
     if (profilePictureLoadingRef.current) return;
     
@@ -24,18 +26,30 @@ export function useProfilePictures() {
     const jidsToLoad = Array.from(queue);
     profilePictureQueueRef.current.delete(sessionId);
 
-    // Batch olarak yükle
+    // Batch olarak yükle (sadece fallback olarak API'den)
+    // contacts.upsert event'inden gelen imgUrl'ler zaten cache'e yazılıyor
     const batchSize = PROFILE_PICTURE_BATCH_SIZE;
-    for (let i = 0; i < jidsToLoad.length; i += batchSize) {
-      const batch = jidsToLoad.slice(i, i + batchSize);
+    const jidsNeedingApi = jidsToLoad.filter(jid => !chatProfilePictures.has(jid));
+    
+    // Sadece cache'de olmayan profil resimlerini API'den yükle
+    for (let i = 0; i < jidsNeedingApi.length; i += batchSize) {
+      const batch = jidsNeedingApi.slice(i, i + batchSize);
       
-      // Paralel olarak yükle
+      // Paralel olarak yükle (fallback için API)
       await Promise.allSettled(
-        batch.map(jid => 
-          api.getProfilePicture(sessionId, jid)
+        batch.map(jid => {
+          // Cache'de zaten varsa atla (contacts.upsert'ten gelmiş olabilir)
+          if (chatProfilePictures.has(jid)) {
+            const queueKey = `${sessionId}:${jid}`;
+            profilePicturesQueuedRef.current.delete(queueKey);
+            return Promise.resolve();
+          }
+          
+          // Fallback: API'den yükle
+          return api.getProfilePicture(sessionId, jid)
             .then(pictureUrl => {
               const queueKey = `${sessionId}:${jid}`;
-              profilePicturesQueuedRef.current.delete(queueKey); // Queue'dan çıkar
+              profilePicturesQueuedRef.current.delete(queueKey);
               
               if (pictureUrl) {
                 setChatProfilePictures(prev => new Map(prev).set(jid, pictureUrl));
@@ -47,19 +61,27 @@ export function useProfilePictures() {
             })
             .catch(() => {
               const queueKey = `${sessionId}:${jid}`;
-              profilePicturesQueuedRef.current.delete(queueKey); // Queue'dan çıkar
+              profilePicturesQueuedRef.current.delete(queueKey);
               
               setChatProfilePictures(prev => new Map(prev).set(jid, 'NO_PICTURE'));
               profilePictureFailedRef.current.add(jid);
-            })
-        )
+            });
+        })
       );
       
       // Her batch arasında kısa bir bekleme (rate limiting)
-      if (i + batchSize < jidsToLoad.length) {
+      if (i + batchSize < jidsNeedingApi.length) {
         await new Promise(resolve => setTimeout(resolve, PROFILE_PICTURE_BATCH_DELAY_MS));
       }
     }
+    
+    // Cache'de zaten olan jid'leri queue'dan temizle
+    jidsToLoad.forEach(jid => {
+      if (chatProfilePictures.has(jid)) {
+        const queueKey = `${sessionId}:${jid}`;
+        profilePicturesQueuedRef.current.delete(queueKey);
+      }
+    });
 
     profilePictureLoadingRef.current = false;
   };

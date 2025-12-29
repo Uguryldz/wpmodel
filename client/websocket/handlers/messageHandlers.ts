@@ -248,8 +248,27 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
             ? Boolean(msg.fromMe) 
             : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
           
-          // Boş mesajları atla (text ve body yoksa)
-          if (!text && !body) {
+          // Protocol mesajlarını filtrele (messageStubType olan mesajlar genellikle sistem mesajlarıdır)
+          // FUTUREPROOF (3) ve bazı protocol mesajları anlamsız "Mesaj" text'i döndürebilir
+          const messageStubType = msg.messageStubType || msg.message?.messageStubType;
+          if (messageStubType !== undefined && messageStubType !== null) {
+            // Sadece belirli protocol mesaj tiplerini göster (silinen mesaj, şifreli mesaj vb)
+            // Diğerlerini (özellikle FUTUREPROOF - 3) filtrele çünkü anlamsız "Mesaj" text'i döndürüyorlar
+            const allowedProtocolTypes = [1]; // Sadece REVOKE (silinen mesaj) göster
+            if (!allowedProtocolTypes.includes(messageStubType)) {
+              console.log('[WebSocket] ⚠️ Protocol mesajı atlandı:', {
+                id: msgId,
+                messageStubType,
+                text: text?.substring(0, 30)
+              });
+              continue;
+            }
+          }
+          
+          // Boş mesajları atla (text ve body yoksa veya sadece boş string ise)
+          const textTrimmed = text?.trim();
+          const bodyTrimmed = body?.trim();
+          if ((!textTrimmed && !bodyTrimmed) || (textTrimmed === '' && bodyTrimmed === '')) {
             console.warn('[WebSocket] ⚠️ Boş mesaj atlandı:', {
               id: msgId,
               type: msg.type,
@@ -258,9 +277,21 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
             continue;
           }
           
+          // "Mesaj" gibi generic/anlamsız text'leri filtrele
+          const textToCheck = (textTrimmed || bodyTrimmed || '').toLowerCase();
+          if (textToCheck === 'mesaj' || textToCheck === 'message' || textToCheck === 'sistem mesajı') {
+            console.warn('[WebSocket] ⚠️ Generic/anlamsız mesaj text\'i atlandı:', {
+              id: msgId,
+              type: msg.type,
+              text: textTrimmed || bodyTrimmed,
+              messageStubType
+            });
+            continue;
+          }
+          
           // Eğer mesaj tipi sadece "type" string'i ise (örneğin "conversation", "imageMessage" vs) ve text yoksa, atla
           // Bu genellikle formatMessage fonksiyonunun yanlış çıkardığı mesaj tipleridir
-          if (msg.type && !text && !body && typeof msg.type === 'string' && !msg.type.startsWith('protocol_')) {
+          if (msg.type && !textTrimmed && !bodyTrimmed && typeof msg.type === 'string' && !msg.type.startsWith('protocol_')) {
             console.warn('[WebSocket] ⚠️ Sadece tip bilgisi olan mesaj atlandı:', {
               id: msgId,
               type: msg.type,
@@ -639,23 +670,51 @@ export const handleMessagesSet = (data: WebSocketEvent, context: WebSocketContex
   });
   
   if (chatMessages.length > 0) {
-    const formattedMessages: Message[] = chatMessages.map((msg: any) => {
-      const text = msg.text || extractMessageText(msg);
-      const body = msg.body || text;
-      const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
-      const fromMe = msg.fromMe !== undefined 
-        ? Boolean(msg.fromMe) 
-        : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
-      
-      return {
-        ...msg,
-        id: msgId,
-        text: text || body,
-        body: body || text,
-        fromMe: fromMe,
-        timestamp: msg.timestamp || msg.messageTimestamp || undefined,
-      };
-    });
+    const formattedMessages: Message[] = chatMessages
+      .filter((msg: any) => {
+        // Protocol mesajlarını filtrele (FUTUREPROOF vb anlamsız mesajlar)
+        const messageStubType = msg.messageStubType || msg.message?.messageStubType;
+        if (messageStubType !== undefined && messageStubType !== null) {
+          const allowedProtocolTypes = [1]; // Sadece REVOKE (silinen mesaj) göster
+          if (!allowedProtocolTypes.includes(messageStubType)) {
+            return false;
+          }
+        }
+        
+        // Boş mesajları filtrele
+        const text = msg.text || extractMessageText(msg);
+        const body = msg.body || text;
+        const textTrimmed = text?.trim();
+        const bodyTrimmed = body?.trim();
+        if ((!textTrimmed && !bodyTrimmed) || (textTrimmed === '' && bodyTrimmed === '')) {
+          return false;
+        }
+        
+        // Generic/anlamsız text'leri filtrele
+        const textToCheck = (textTrimmed || bodyTrimmed || '').toLowerCase();
+        if (textToCheck === 'mesaj' || textToCheck === 'message' || textToCheck === 'sistem mesajı') {
+          return false;
+        }
+        
+        return true;
+      })
+      .map((msg: any) => {
+        const text = msg.text || extractMessageText(msg);
+        const body = msg.body || text;
+        const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+        const fromMe = msg.fromMe !== undefined 
+          ? Boolean(msg.fromMe) 
+          : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+        
+        return {
+          ...msg,
+          id: msgId,
+          text: text || body,
+          body: body || text,
+          fromMe: fromMe,
+          timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+        };
+      });
     
     formattedMessages.sort((a, b) => {
       const normalizeTimestamp = (ts: number | undefined) => {

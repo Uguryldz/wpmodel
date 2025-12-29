@@ -20,6 +20,7 @@ export interface WebSocketContext {
   loadChats?: (sessionId: string, limit: number, force: boolean) => void;
   updateMessagesCache?: (sessionId: string, chatId: string, messages: Message[]) => void;
   messagesCacheRef?: React.MutableRefObject<Map<string, Message[]>>;
+  setAccounts?: React.Dispatch<React.SetStateAction<any[]>>;
 }
 
 export interface WebSocketEvent {

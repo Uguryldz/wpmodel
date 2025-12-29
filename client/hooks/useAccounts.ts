@@ -8,9 +8,24 @@ interface UseAccountsProps {
   onAccountCreated?: (accountId: string) => void;
   onLoadContacts?: (sessionId: string) => Promise<any>;
   onLoadChats?: (sessionId: string, limit: number) => void;
+  sendRequest?: (requestType: string, payload: any) => Promise<any>;
 }
 
-export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: UseAccountsProps = {}) {
+export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sendRequest }: UseAccountsProps = {}) {
+  // sendRequest ref'i - dışarıdan geçirilebilir
+  const sendRequestRef = useRef<((requestType: string, payload: any) => Promise<any>) | null>(null);
+  
+  // sendRequest setter - dışarıdan çağrılabilir
+  const setSendRequest = (sr: (requestType: string, payload: any) => Promise<any>) => {
+    sendRequestRef.current = sr;
+  };
+  
+  // sendRequest prop'undan ref'i güncelle
+  useEffect(() => {
+    if (sendRequest) {
+      sendRequestRef.current = sendRequest;
+    }
+  }, [sendRequest]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [editingAccountName, setEditingAccountName] = useState('');
@@ -34,97 +49,177 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
 
   const loadAccounts = async () => {
     try {
-      console.log('Hesaplar yükleniyor...');
-      const sessions = await api.getSessions();
-      console.log('Sessions alındı:', sessions);
+      console.log('[useAccounts] ⏳ Hesaplar yükleniyor...');
       
-      if (!sessions || sessions.length === 0) {
-        console.log('Session bulunamadı');
-        setAccounts([]);
-        return;
-      }
-
-      // localStorage'dan hesap adlarını yükle
-      const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
-      
-      // Temp- ile başlayan session'ları filtrele (bunlar geçici session'lardır ve backend'de temizlenir)
-      const validSessions = sessions.filter(session => !session.id.startsWith('temp-'));
-      
-      // Account- ile başlayan session'ları da kontrol et (bağlantı kurulmamış olanları filtrele)
-      // Not: Backend'de restore sırasında temizlenir, burada sadece görünümü filtreliyoruz
-      const finalSessions = validSessions.filter(session => {
-        // Account- ile başlayan session'ları göster (backend'de bağlantı kontrolü yapılıyor)
-        return true;
-      });
-      
-      // Güncellenmiş account names'i kaydet
-      localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
-
-      const accountsWithStatus = await Promise.all(
-        finalSessions.map(async (session, index) => {
-          try {
-            const status = await api.getSessionStatus(session.id);
-            const accountName = accountNames[session.id] || session.id;
-            return {
-              id: session.id,
-              name: accountName,
-              status: status.status || session.status || 'unknown',
-              color: COLORS[index % COLORS.length],
-              active: index === 0,
-              whatsappJid: (session as any).whatsappJid || null,
-            };
-          } catch (error) {
-            console.warn(`Session ${session.id} status alınamadı:`, error);
-            const accountName = accountNames[session.id] || session.id;
-            return {
-              id: session.id,
-              name: accountName,
-              status: session.status || 'unknown',
-              color: COLORS[index % COLORS.length],
-              active: index === 0,
-              whatsappJid: (session as any).whatsappJid || null,
-            };
-          }
-        })
-      );
-      
-      console.log('Hesaplar oluşturuldu (duplicate kontrolü öncesi):', accountsWithStatus);
-      
-      // Duplicate kontrolü
-      const uniqueAccounts = new Map<string, Account>();
-      
-      for (const account of accountsWithStatus) {
-        const key = (account as any).whatsappJid || account.id;
-        
-        const existing = uniqueAccounts.get(key);
-        if (!existing) {
-          uniqueAccounts.set(key, account);
-        } else {
-          const statusPriority = { 'open': 4, 'connecting': 3, 'initializing': 2, 'close': 1, 'unknown': 0 };
-          const existingPriority = statusPriority[existing.status as keyof typeof statusPriority] || 0;
-          const currentPriority = statusPriority[account.status as keyof typeof statusPriority] || 0;
+      // Önce WebSocket request dene (eğer sendRequestRef varsa)
+      if (sendRequestRef.current) {
+        try {
+          console.log('[useAccounts] WebSocket üzerinden sessions çekiliyor...');
+          const sessions = await sendRequestRef.current('getSessions', {});
+          console.log('[useAccounts] ✅ Sessions WebSocket\'ten alındı:', sessions?.length || 0);
           
-          if (currentPriority > existingPriority) {
-            uniqueAccounts.set(key, account);
-          } else if (currentPriority === existingPriority && account.status === 'open') {
-            if (account.id > existing.id) {
-              uniqueAccounts.set(key, account);
+          if (sessions && Array.isArray(sessions) && sessions.length > 0) {
+            // localStorage'dan hesap adlarını yükle
+            const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
+            
+            // Temp- ile başlayan session'ları filtrele
+            const validSessions = sessions.filter((session: any) => !session.id?.startsWith('temp-'));
+            
+            const accountsWithStatus = await Promise.all(
+              validSessions.map(async (session: any, index: number) => {
+                try {
+                  const accountName = accountNames[session.id] || session.id;
+                  return {
+                    id: session.id,
+                    name: accountName,
+                    status: session.status || 'unknown',
+                    color: COLORS[index % COLORS.length],
+                    active: index === 0,
+                    whatsappJid: session.whatsappJid || null,
+                  };
+                } catch (error) {
+                  console.warn(`[useAccounts] Session ${session.id} işlenemedi:`, error);
+                  const accountName = accountNames[session.id] || session.id;
+                  return {
+                    id: session.id,
+                    name: accountName,
+                    status: session.status || 'unknown',
+                    color: COLORS[index % COLORS.length],
+                    active: index === 0,
+                    whatsappJid: session.whatsappJid || null,
+                  };
+                }
+              })
+            );
+            
+            // Duplicate kontrolü
+            const uniqueAccounts = new Map<string, Account>();
+            const statusPriority = { 'open': 4, 'connecting': 3, 'initializing': 2, 'close': 1, 'unknown': 0 };
+            
+            for (const account of accountsWithStatus) {
+              const key = account.whatsappJid || account.id;
+              const existing = uniqueAccounts.get(key);
+              
+              if (!existing) {
+                uniqueAccounts.set(key, account);
+              } else {
+                const existingPriority = statusPriority[existing.status as keyof typeof statusPriority] || 0;
+                const currentPriority = statusPriority[account.status as keyof typeof statusPriority] || 0;
+                
+                if (currentPriority > existingPriority) {
+                  uniqueAccounts.set(key, account);
+                } else if (currentPriority === existingPriority && account.status === 'open') {
+                  if (account.id && existing.id && account.id > existing.id) {
+                    uniqueAccounts.set(key, account);
+                  }
+                }
+              }
             }
+            
+            const finalAccounts = Array.from(uniqueAccounts.values());
+            const hasActive = finalAccounts.some(acc => acc.active);
+            if (!hasActive && finalAccounts.length > 0) {
+              finalAccounts[0].active = true;
+            }
+            
+            setAccounts(finalAccounts);
+            console.log('[useAccounts] ✅ Hesaplar WebSocket\'ten yüklendi:', finalAccounts.length);
+            return;
           }
+        } catch (wsError) {
+          console.warn('[useAccounts] ⚠️ WebSocket request başarısız, API fallback kullanılıyor:', wsError);
         }
       }
       
-      const finalAccounts = Array.from(uniqueAccounts.values());
-      console.log('Hesaplar oluşturuldu (duplicate kontrolü sonrası):', finalAccounts);
-      
-      const hasActive = finalAccounts.some(acc => acc.active);
-      if (!hasActive && finalAccounts.length > 0) {
-        finalAccounts[0].active = true;
+      // Fallback: API kullan (WebSocket request yoksa veya başarısızsa)
+      // WebSocket'ten sessions.update event'i gelecek
+      // İlk yükleme için WebSocket bağlantısını bekliyoruz
+      // Eğer WebSocket bağlı değilse veya event gelmezse, fallback olarak API kullan
+      try {
+        const sessions = await api.getSessions();
+        console.log('[useAccounts] ✅ Sessions API\'den alındı (fallback):', sessions.length);
+        
+        if (!sessions || sessions.length === 0) {
+          console.log('[useAccounts] Session bulunamadı');
+          setAccounts([]);
+          return;
+        }
+
+        // localStorage'dan hesap adlarını yükle
+        const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
+        
+        // Temp- ile başlayan session'ları filtrele
+        const validSessions = sessions.filter(session => !session.id.startsWith('temp-'));
+        
+        // Güncellenmiş account names'i kaydet
+        localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+
+        const accountsWithStatus = await Promise.all(
+          validSessions.map(async (session, index) => {
+            try {
+              const status = await api.getSessionStatus(session.id);
+              const accountName = accountNames[session.id] || session.id;
+              return {
+                id: session.id,
+                name: accountName,
+                status: status.status || session.status || 'unknown',
+                color: COLORS[index % COLORS.length],
+                active: index === 0,
+                whatsappJid: (session as any).whatsappJid || null,
+              };
+            } catch (error) {
+              console.warn(`[useAccounts] Session ${session.id} status alınamadı:`, error);
+              const accountName = accountNames[session.id] || session.id;
+              return {
+                id: session.id,
+                name: accountName,
+                status: session.status || 'unknown',
+                color: COLORS[index % COLORS.length],
+                active: index === 0,
+                whatsappJid: (session as any).whatsappJid || null,
+              };
+            }
+          })
+        );
+        
+        // Duplicate kontrolü
+        const uniqueAccounts = new Map<string, Account>();
+        
+        for (const account of accountsWithStatus) {
+          const key = (account as any).whatsappJid || account.id;
+          
+          const existing = uniqueAccounts.get(key);
+          if (!existing) {
+            uniqueAccounts.set(key, account);
+          } else {
+            const statusPriority = { 'open': 4, 'connecting': 3, 'initializing': 2, 'close': 1, 'unknown': 0 };
+            const existingPriority = statusPriority[existing.status as keyof typeof statusPriority] || 0;
+            const currentPriority = statusPriority[account.status as keyof typeof statusPriority] || 0;
+            
+            if (currentPriority > existingPriority) {
+              uniqueAccounts.set(key, account);
+            } else if (currentPriority === existingPriority && account.status === 'open') {
+              if (account.id > existing.id) {
+                uniqueAccounts.set(key, account);
+              }
+            }
+          }
+        }
+        
+        const finalAccounts = Array.from(uniqueAccounts.values());
+        
+        const hasActive = finalAccounts.some(acc => acc.active);
+        if (!hasActive && finalAccounts.length > 0) {
+          finalAccounts[0].active = true;
+        }
+        
+        setAccounts(finalAccounts);
+      } catch (error) {
+        console.error('[useAccounts] ❌ Hesaplar yüklenemedi:', error);
+        setAccounts([]);
       }
-      
-      setAccounts(finalAccounts);
     } catch (error) {
-      console.error('Hesaplar yüklenemedi:', error);
+      console.error('[useAccounts] ❌ loadAccounts hatası:', error);
       setAccounts([]);
     }
   };
@@ -648,6 +743,7 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats }: U
   return {
     accounts,
     setAccounts,
+    setSendRequest,
     editingAccountId,
     editingAccountName,
     setEditingAccountName,

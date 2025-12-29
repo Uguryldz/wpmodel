@@ -32,10 +32,10 @@ export default function WhatsAppMultiAccount() {
   // Profile Pictures Hook
   const { chatProfilePictures, setChatProfilePictures, queueProfilePicture, profilePictureFailedRef } = useProfilePictures();
   
-  // Accounts Hook
+  // Accounts Hook - sendRequest'i geç (useWebSocket'ten gelecek)
   const accountsHook = useAccounts();
   
-  // Messages Hook
+  // Messages Hook - sendRequest önce undefined, sonra useWebSocket'ten gelecek
   const messagesHook = useMessages();
   
   // Contacts Hook
@@ -1163,7 +1163,7 @@ export default function WhatsAppMultiAccount() {
   // EMOJIS ve ATTACHMENT_OPTIONS artık constants'tan import ediliyor
 
   // WebSocket bağlantısı artık useWebSocket hook'unda yönetiliyor
-  useWebSocket({
+  const { sendRequest } = useWebSocket({
     activeAccountRef,
     selectedChatRef: chatsHook.selectedChatRef,
     contactsCacheRef: contactsHook.contactsCacheRef,
@@ -1181,7 +1181,23 @@ export default function WhatsAppMultiAccount() {
     loadChats: chatsHook.loadChats,
     updateMessagesCache: messagesHook.updateMessagesCache,
     messagesCacheRef: messagesHook.messagesCacheRef, // Mesaj cache'i için ref'i geç
+    setAccounts: accountsHook.setAccounts,
   });
+
+  // sendRequest'i useMessages hook'una geç (useEffect ile güncelle)
+  useEffect(() => {
+    if (sendRequest && messagesHook.setSendRequest) {
+      messagesHook.setSendRequest(sendRequest);
+    }
+  }, [sendRequest]);
+  
+  // sendRequest'i useAccounts hook'una geç (useEffect ile güncelle) - opsiyonel ama eklendi
+  // useAccounts zaten WebSocket sessions.update event'ini dinliyor, sendRequest ile de desteklenebilir
+  useEffect(() => {
+    if (sendRequest && accountsHook.setSendRequest) {
+      accountsHook.setSendRequest(sendRequest);
+    }
+  }, [sendRequest]);
 
   // Cleanup - useAccounts ve useWebSocket hook'ları kendi cleanup'larını yapıyor
   useEffect(() => {

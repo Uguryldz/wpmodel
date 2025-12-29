@@ -53,61 +53,11 @@ export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) 
   const cached = contactsCacheRef.current.get(sessionId);
   let contactsMap = cached ? cached.data : new Map<string, any>();
 
-  // Eğer contact'lar yüklenmemişse, yükle
+  // Contact'lar WebSocket'ten contacts.set event'i ile gelecek
+  // Eğer contact'lar yüklenmemişse, contacts.set event'ini bekliyoruz
   if (contactsMap.size === 0) {
-    try {
-      import('../../api').then(async (apiModule) => {
-        const contactsData = await apiModule.getContacts(sessionId);
-        if (contactsData && contactsData.length > 0) {
-          contactsData.forEach((contact: any) => {
-            contactsMap.set(contact.id, contact);
-          });
-          contactsCacheRef.current.set(sessionId, {
-            data: contactsMap,
-            timestamp: Date.now()
-          });
-          
-          const updatedChats = normalizedChats.map((chat: any) => {
-            const contact = contactsMap.get(chat.id);
-            const existingChat = chats.find(c => c.id === chat.id);
-            
-            let displayName = chat.name || chat.displayName || chat.id;
-            let verifiedName = chat.verifiedName;
-            
-            if (!chat.id.includes('@g.us') && contact) {
-              verifiedName = contact.verifiedName || chat.verifiedName;
-              displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
-            } else if (!chat.id.includes('@g.us')) {
-              const phoneMatch = chat.id.match(/^(\d+)@/);
-              if (phoneMatch) {
-                displayName = phoneMatch[1];
-              }
-            }
-            
-            return {
-              id: chat.id,
-              name: displayName,
-              verifiedName: verifiedName,
-              profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
-              unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
-              conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
-              archived: chat.archived ?? existingChat?.archived ?? false,
-              pinned: chat.pinned ? new Date(chat.pinned) : existingChat?.pinned || null,
-              lastMessage: existingChat?.lastMessage || '',
-              time: chat.conversationTimestamp 
-                ? new Date(Number(chat.conversationTimestamp) * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-                : existingChat?.time || '',
-            };
-          });
-          
-          setChats(updatedChats);
-        }
-      }).catch((error) => {
-        console.warn('[WebSocket] Contact yükleme hatası:', error);
-      });
-    } catch (error) {
-      console.warn('[WebSocket] Contact yükleme hatası:', error);
-    }
+    console.log('[WebSocket] ⏳ Contact\'lar henüz yüklenmemiş, contacts.set event\'i bekleniyor...');
+    // contacts.set event'i geldiğinde contact cache dolacak
   }
 
   try {

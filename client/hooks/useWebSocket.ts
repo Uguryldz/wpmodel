@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { Chat, Message } from '../types';
 import { WebSocketContext } from '../websocket/types';
+import { WebSocketRequestHandler } from '../websocket/requestHandler';
 import {
   handleChatsSet,
   handleChatsUpsert,
@@ -16,6 +17,7 @@ import {
   handleGroupsUpdate,
   handleGroupParticipantsUpdate,
   handleConnectionUpdate,
+  handleSessionsUpdate,
 } from '../websocket/handlers';
 
 interface UseWebSocketProps {
@@ -37,6 +39,7 @@ interface UseWebSocketProps {
   loadChats?: (sessionId: string, limit: number, force: boolean) => void;
   updateMessagesCache?: (sessionId: string, chatId: string, messages: Message[]) => void;
   messagesCacheRef?: React.MutableRefObject<Map<string, Message[]>>;
+  setAccounts?: React.Dispatch<React.SetStateAction<any[]>>;
 }
 
 export function useWebSocket({
@@ -57,8 +60,10 @@ export function useWebSocket({
   loadChats,
   updateMessagesCache,
   messagesCacheRef,
+  setAccounts,
 }: UseWebSocketProps) {
   const wsRef = useRef<WebSocket | null>(null);
+  const requestHandlerRef = useRef<WebSocketRequestHandler | null>(null);
   const isMountedRef = useRef<boolean>(true);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function useWebSocket({
       loadChats,
       updateMessagesCache,
       messagesCacheRef,
+      setAccounts,
     };
 
     const connectWebSocket = () => {
@@ -96,6 +102,10 @@ export function useWebSocket({
       try {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
+        
+        // Request handler'ı oluştur
+        const requestHandler = new WebSocketRequestHandler(ws);
+        requestHandlerRef.current = requestHandler;
 
         ws.onopen = () => {
           console.log('[WebSocket] ✅ Bağlantı kuruldu');
@@ -139,6 +149,12 @@ export function useWebSocket({
             context.selectedChat = selectedChat;
             context.chatProfilePictures = chatProfilePictures;
 
+            // Response mesajları request handler'da işleniyor, buraya gelmez
+            if (data.type === 'response') {
+              // Request handler tarafından işlenecek
+              return;
+            }
+
             // Event handler'ları çağır
             switch (data.type) {
               case 'chats.set':
@@ -177,6 +193,12 @@ export function useWebSocket({
               case 'connection.update':
                 handleConnectionUpdate(data, context);
                 break;
+              case 'sessions.update':
+                handleSessionsUpdate(data, context);
+                break;
+              case 'connected':
+                console.log('[WebSocket] ✅ Bağlantı onayı alındı:', data.message);
+                break;
               default:
                 console.warn('[WebSocket] ⚠️ Bilinmeyen event tipi:', data.type);
             }
@@ -211,6 +233,10 @@ export function useWebSocket({
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;
       }
+      if (requestHandlerRef.current) {
+        requestHandlerRef.current.cleanup();
+        requestHandlerRef.current = null;
+      }
       if (wsRef.current) {
         try {
         wsRef.current.close();
@@ -222,5 +248,13 @@ export function useWebSocket({
     };
   }, []); // Sadece mount'ta çalış - ref'ler zaten güncel değerleri içeriyor
 
-  return { wsRef };
+  return { 
+    wsRef, 
+    sendRequest: (requestType: string, payload: any) => {
+      if (requestHandlerRef.current) {
+        return requestHandlerRef.current.sendRequest(requestType, payload);
+      }
+      return Promise.reject(new Error('WebSocket is not connected'));
+    }
+  };
 }

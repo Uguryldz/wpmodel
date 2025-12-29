@@ -250,15 +250,146 @@ wss.on("connection", (ws, req) => {
     }
   });
 
-  // İlk bağlantıda mevcut session'ları gönder
-  try {
-    ws.send(safeStringify({
-      type: "connected",
-      message: "WebSocket bağlantısı kuruldu"
-    }));
-  } catch (error) {
-    console.error("[WebSocket] İlk mesaj gönderme hatası:", error);
-  }
+  // WebSocket mesaj handler - request/response mekanizması için
+  ws.on("message", async (rawData) => {
+    try {
+      const data = JSON.parse(rawData.toString());
+      
+      // Request mesajı mı kontrol et
+      if (data.type === 'request' && data.requestId && data.requestType) {
+        console.log("[WebSocket] 📨 Request alındı:", data.requestType, data.requestId);
+        
+        try {
+          let responseData = null;
+          
+          switch (data.requestType) {
+            case 'getSessions':
+              // Session listesi gönder
+              responseData = listSessions();
+              break;
+              
+            case 'getMessages':
+              // Mesaj listesi gönder
+              const { sessionId: reqSessionId, chatId, limit: msgLimit = 50, cursor } = data.payload || {};
+              if (reqSessionId && chatId) {
+                const { listMessages } = await import("./baileys/chats/messages.js");
+                const messagesResult = await listMessages(reqSessionId, chatId, cursor, msgLimit);
+                responseData = messagesResult.data || [];
+              } else {
+                throw new Error('sessionId ve chatId gerekli');
+              }
+              break;
+              
+            case 'getChats':
+              // Chat listesi gönder
+              const { sessionId: chatSessionId, limit: chatLimit = 50 } = data.payload || {};
+              if (chatSessionId) {
+                const chatsResult = await listChats(chatSessionId, null, chatLimit);
+                responseData = chatsResult.data || [];
+              } else {
+                throw new Error('sessionId gerekli');
+              }
+              break;
+              
+            case 'getContacts':
+              // Contact listesi gönder
+              const { sessionId: contactSessionId } = data.payload || {};
+              if (contactSessionId) {
+                const { listContacts } = await import("./baileys/contacts/list.js");
+                const contactsResult = await listContacts(contactSessionId);
+                responseData = contactsResult.data || [];
+              } else {
+                throw new Error('sessionId gerekli');
+              }
+              break;
+              
+            default:
+              throw new Error(`Bilinmeyen request type: ${data.requestType}`);
+          }
+          
+          // Response gönder
+          ws.send(safeStringify({
+            type: 'response',
+            requestId: data.requestId,
+            success: true,
+            data: responseData,
+          }));
+        } catch (error) {
+          console.error("[WebSocket] ❌ Request hatası:", error);
+          // Hata response gönder
+          ws.send(safeStringify({
+            type: 'response',
+            requestId: data.requestId,
+            success: false,
+            error: error.message || 'Request failed',
+          }));
+        }
+        return;
+      }
+    } catch (error) {
+      console.error("[WebSocket] ❌ Mesaj parse hatası:", error);
+    }
+  });
+
+  // İlk bağlantıda mevcut session'ları ve initial data'yı gönder
+  const sendInitialData = async () => {
+    try {
+      // Bağlantı onayı
+      ws.send(safeStringify({
+        type: "connected",
+        message: "WebSocket bağlantısı kuruldu"
+      }));
+
+      // Session listesi gönder (temp session'ları filtrele)
+      const allSessions = listSessions();
+      const validSessions = allSessions.filter(session => !session.id?.startsWith('temp-'));
+      ws.send(safeStringify({
+        type: "sessions.update",
+        sessions: validSessions,
+      }));
+      
+      console.log("[WebSocket] ✅ Initial data gönderildi:", { 
+        sessionsCount: validSessions.length, 
+        totalSessions: allSessions.length,
+        tempSessionsFiltered: allSessions.length - validSessions.length
+      });
+      
+      // Her açık session için chats ve contacts gönder
+      for (const session of validSessions) {
+        if (session.status === 'open') {
+          try {
+            // Chats gönder
+            const chatsResult = await listChats(session.id, null, 50);
+            if (chatsResult.data && chatsResult.data.length > 0) {
+              ws.send(safeStringify({
+                type: "chats.set",
+                sessionId: session.id,
+                chats: chatsResult.data,
+              }));
+            }
+            
+            // Contacts gönder
+            const { listContacts } = await import("./baileys/contacts/list.js");
+            const contactsResult = await listContacts(session.id);
+            if (contactsResult.data && contactsResult.data.length > 0) {
+              ws.send(safeStringify({
+                type: "contacts.set",
+                sessionId: session.id,
+                contacts: contactsResult.data,
+              }));
+            }
+          } catch (error) {
+            console.error(`[WebSocket] ❌ Initial data gönderme hatası (${session.id}):`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("[WebSocket] ❌ Initial data gönderme hatası:", error);
+    }
+  };
+
+  // Bağlantı açıldığında initial data'yı gönder
+  sendInitialData();
 });
 
 // WebSocket'e mesaj gönderme fonksiyonu
@@ -639,6 +770,15 @@ app.delete(
     }
 
     await deleteSession(sessionId);
+    
+    // WebSocket'e session listesi güncellemesi gönder (temp session'ları filtrele)
+    const allSessions = listSessions();
+    const validSessions = allSessions.filter(session => !session.id?.startsWith('temp-'));
+    broadcastToWebSocket({
+      type: "sessions.update",
+      sessions: validSessions,
+    });
+    
     res.json({ status: "deleted" });
   })
 );
