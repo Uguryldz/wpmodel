@@ -2,7 +2,11 @@
 import { readdir } from "fs/promises";
 import { existsSync } from "fs";
 import { rm } from "fs/promises";
-import { useMultiFileAuthState, fetchLatestBaileysVersion } from "baileys";
+import { 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore // Baileys README: make auth store more fast
+} from "baileys";
 import { prisma, logger } from "../../shared.js";
 import {
   AUTH_FOLDER,
@@ -15,78 +19,159 @@ import { instances } from "../shared.js";
 
 /**
  * Baileys'i başlat (socket'i başlatmadan, sadece hazırlık yap)
+ * Baileys.wiki best practice: Auth state ve version yükleme ayrı fonksiyon
  */
 export const initBaileys = async (accountId) => {
+  const instance = getOrCreateInstance(accountId);
+  
   try {
-    const instance = getOrCreateInstance(accountId);
     if (instance.sock) {
+      logger.debug({ accountId }, "Socket zaten mevcut, initBaileys atlanıyor");
       return instance.sock;
     }
 
     // Eğer auth state ve version zaten yüklenmişse, socket'i başlatma
     if (instance.authState && instance.waVersion) {
+      logger.debug({ accountId }, "Auth state ve version zaten yüklü");
       return null; // Socket başlatılmadı, manuel başlatılmalı
     }
 
     const authDir = `${AUTH_FOLDER}/${instance.id}`;
     logger.info({ accountId, authDir }, "Auth state yükleniyor...");
     
-    const auth = await useMultiFileAuthState(authDir);
-    instance.authState = auth.state;
-    instance.saveCredsFn = auth.saveCreds;
+    try {
+      const auth = await useMultiFileAuthState(authDir);
+      
+      // Baileys README: makeCacheableSignalKeyStore makes auth store faster
+      // This caches signal keys in memory for better performance
+      instance.authState = {
+        creds: auth.state.creds,
+        keys: makeCacheableSignalKeyStore(auth.state.keys, logger)
+      };
+      instance.saveCredsFn = auth.saveCreds;
+      
+      logger.info({ accountId }, "Auth state başarıyla yüklendi (cacheable signal key store ile)");
+    } catch (authError) {
+      logger.error({ error: authError, accountId, authDir }, "Auth state yüklenemedi");
+      throw new Error(`Auth state yüklenemedi: ${authError.message}`);
+    }
 
     logger.info({ accountId }, "Baileys version bilgisi alınıyor...");
-    const versionInfo = await fetchLatestBaileysVersion();
-    instance.waVersion = versionInfo.version;
+    
+    try {
+      const versionInfo = await fetchLatestBaileysVersion();
+      instance.waVersion = versionInfo.version;
+      instance.connectionState.version = instance.waVersion.join(".");
+      instance.connectionState.isLatest = versionInfo.isLatest;
+      logger.info({ 
+        accountId, 
+        version: instance.connectionState.version, 
+        isLatest: versionInfo.isLatest 
+      }, "WhatsApp version bilgisi alındı");
+    } catch (versionError) {
+      // Version fetch hatası kritik değil, varsayılan version kullan
+      logger.warn({ error: versionError, accountId }, 
+        "Version bilgisi alınamadı, varsayılan version kullanılacak");
+      
+      // Fallback version (Baileys'in varsayılan versiyonu)
+      instance.waVersion = [2, 3000, 1015901307];
+      instance.connectionState.version = instance.waVersion.join(".");
+      instance.connectionState.isLatest = false;
+    }
 
-    instance.connectionState.version = instance.waVersion.join(".");
-    instance.connectionState.isLatest = versionInfo.isLatest;
     instance.connectionState.startedAt = new Date().toISOString();
-
     logger.info({ accountId, version: instance.connectionState.version }, "initBaileys tamamlandı");
-
-    // Socket'i otomatik başlatma - kullanıcı manuel olarak başlatmalı
-    // startSocket(instance);
 
     return null; // Socket başlatılmadı
   } catch (error) {
-    logger.error({ error, accountId }, "initBaileys hatası");
+    // Critical error: Instance'ı temizle
+    instance.authState = null;
+    instance.waVersion = null;
+    instance.connectionState.status = "error";
+    instance.connectionState.lastError = error.message;
+    
+    logger.error({ 
+      error, 
+      accountId, 
+      errorType: error.name,
+      errorStack: error.stack 
+    }, "initBaileys kritik hatası");
+    
     throw error;
   }
 };
 
 /**
  * Bağlantıyı başlat (QR üretimi için socket'i başlat)
+ * Baileys.wiki best practice: Socket başlatmadan önce state kontrolü
  */
 export const startConnection = async (accountId) => {
+  const instance = getOrCreateInstance(accountId);
+  
   try {
-    const instance = getOrCreateInstance(accountId);
-    
     // Eğer socket zaten varsa, mevcut socket'i döndür
     if (instance.sock) {
+      logger.debug({ accountId, status: instance.connectionState?.status }, 
+        "Socket zaten mevcut");
       return instance.sock;
     }
 
     // Auth state ve version yüklenmemişse, önce initBaileys çağır
     if (!instance.authState || !instance.waVersion) {
-      await initBaileys(accountId);
+      logger.info({ accountId }, "Auth state/version yüklenmemiş, initBaileys çağrılıyor");
+      
+      try {
+        await initBaileys(accountId);
+      } catch (initError) {
+        logger.error({ error: initError, accountId }, "initBaileys başarısız");
+        throw new Error(`Session başlatılamadı: ${initError.message}`);
+      }
     }
 
     // Auth state ve version kontrolü
-    if (!instance.authState || !instance.waVersion) {
-      throw new Error(`Auth state veya version yüklenemedi: ${accountId}`);
+    if (!instance.authState) {
+      throw new Error(`Auth state yüklenemedi: ${accountId}`);
     }
+    
+    if (!instance.waVersion) {
+      throw new Error(`WhatsApp version bilgisi alınamadı: ${accountId}`);
+    }
+
+    logger.info({ 
+      accountId, 
+      version: instance.waVersion.join("."),
+      hasAuthState: !!instance.authState 
+    }, "Socket başlatılıyor");
 
     // Socket'i başlat (QR üretimi burada tetiklenecek)
-    startSocket(instance);
-
-    if (!instance.sock) {
-      throw new Error(`Socket oluşturulamadı: ${accountId}`);
+    try {
+      startSocket(instance);
+    } catch (socketError) {
+      logger.error({ error: socketError, accountId }, "Socket başlatma hatası");
+      throw new Error(`Socket başlatılamadı: ${socketError.message}`);
     }
 
+    if (!instance.sock) {
+      throw new Error(`Socket oluşturulamadı (null): ${accountId}`);
+    }
+
+    logger.info({ accountId }, "Socket başarıyla oluşturuldu");
     return instance.sock;
+    
   } catch (error) {
-    logger.error({ error, accountId }, "startConnection hatası");
+    // Critical error: Connection state'i güncelle
+    instance.connectionState.status = "error";
+    instance.connectionState.lastError = error.message;
+    
+    logger.error({ 
+      error, 
+      accountId,
+      errorType: error.name,
+      hasAuthState: !!instance.authState,
+      hasVersion: !!instance.waVersion,
+      hasSock: !!instance.sock
+    }, "startConnection kritik hatası");
+    
     throw error;
   }
 };

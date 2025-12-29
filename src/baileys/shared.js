@@ -2,6 +2,7 @@
 import { jidNormalizedUser, isJidBroadcast } from "baileys";
 import { prisma, logger } from "../shared.js";
 import { serializePrisma } from "../utils.js";
+import { MessageQueue, RateLimiter } from "./utils/queue.js";
 
 export const AUTH_FOLDER = "./auth_info";
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -55,13 +56,14 @@ export const normalizeJid = (value) => {
 export const getOrCreateInstance = (accountId) => {
   const id = getAccountId(accountId);
   if (!instances.has(id)) {
-    instances.set(id, {
+    const instance = {
       id,
       sock: null,
       authState: null,
       saveCredsFn: null,
       waVersion: null,
       reconnectTimer: null,
+      reconnectAttempts: 0, // Baileys.wiki best practice: reconnect counter
       chatsStore: new Map(),
       contactsStore: new Map(),
       messagesStore: new Map(),
@@ -71,6 +73,16 @@ export const getOrCreateInstance = (accountId) => {
       syncChatsTimeout: null,
       connectionTimers: [],
       eventListeners: new Map(),
+      // Baileys.wiki best practice: Message queue ve rate limiter
+      messageQueue: new MessageQueue(id, {
+        messageDelay: 1000, // 1 saniye delay (rate limiting)
+        maxRetries: 3,
+        retryDelay: 5000,
+      }),
+      rateLimiter: new RateLimiter({
+        maxRequests: 50, // Max 50 request
+        windowMs: 60000, // 60 saniye window
+      }),
       connectionState: {
         status: "initializing",
         version: null,
@@ -79,8 +91,11 @@ export const getOrCreateInstance = (accountId) => {
         lastQr: null,
         qrGeneratedAt: null,
         startedAt: null,
+        disconnectReason: null, // Baileys.wiki: disconnect reason tracking
       },
-    });
+    };
+    
+    instances.set(id, instance);
   }
 
   return instances.get(id);
@@ -485,46 +500,78 @@ export const formatChat = (chat, sessionId = null) => {
   };
 };
 
-// Message saving functions
+// Message saving functions with batch processing (Baileys.wiki best practice)
 export const saveMessagesToPrisma = async (sessionId, messages = []) => {
   if (!messages.length) return;
 
-  for (const msg of messages) {
-    if (!msg.key?.remoteJid || !msg.key?.id) continue;
-    if (isJidBroadcast(msg.key.remoteJid)) continue;
+  // Batch processing için mesajları grupla (her batch'te max 100 mesaj)
+  const BATCH_SIZE = 100;
+  const batches = [];
+  
+  for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+    batches.push(messages.slice(i, i + BATCH_SIZE));
+  }
 
+  let savedCount = 0;
+  let errorCount = 0;
+
+  for (const batch of batches) {
     try {
-      await prisma.message.upsert({
-        where: {
-          sessionId_remoteJid_id: {
-            sessionId,
-            remoteJid: msg.key.remoteJid,
-            id: msg.key.id,
-          },
-        },
-        create: {
-          sessionId,
-          remoteJid: msg.key.remoteJid,
-          id: msg.key.id,
-          key: JSON.stringify(msg.key),
-          message: msg.message ? JSON.stringify(msg.message) : null,
-          messageTimestamp: msg.messageTimestamp ? BigInt(msg.messageTimestamp) : null,
-          participant: msg.key.participant || null,
-          messageStubType: msg.messageStubType || null,
-          messageStubParameters: msg.messageStubParameters
-            ? JSON.stringify(msg.messageStubParameters)
-            : null,
-        },
-        update: {
-          message: msg.message ? JSON.stringify(msg.message) : undefined,
-          messageTimestamp: msg.messageTimestamp ? BigInt(msg.messageTimestamp) : undefined,
-        },
+      // Transaction kullanarak batch'i kaydet (daha performanslı)
+      await prisma.$transaction(async (tx) => {
+        for (const msg of batch) {
+          if (!msg.key?.remoteJid || !msg.key?.id) continue;
+          if (isJidBroadcast(msg.key.remoteJid)) continue;
+
+          try {
+            await tx.message.upsert({
+              where: {
+                sessionId_remoteJid_id: {
+                  sessionId,
+                  remoteJid: msg.key.remoteJid,
+                  id: msg.key.id,
+                },
+              },
+              create: {
+                sessionId,
+                remoteJid: msg.key.remoteJid,
+                id: msg.key.id,
+                key: JSON.stringify(msg.key),
+                message: msg.message ? JSON.stringify(msg.message) : null,
+                messageTimestamp: msg.messageTimestamp ? BigInt(msg.messageTimestamp) : null,
+                participant: msg.key.participant || null,
+                messageStubType: msg.messageStubType || null,
+                messageStubParameters: msg.messageStubParameters
+                  ? JSON.stringify(msg.messageStubParameters)
+                  : null,
+              },
+              update: {
+                message: msg.message ? JSON.stringify(msg.message) : undefined,
+                messageTimestamp: msg.messageTimestamp ? BigInt(msg.messageTimestamp) : undefined,
+              },
+            });
+            savedCount++;
+          } catch (error) {
+            logger.error({ error, sessionId, msgId: msg.key.id }, "Mesaj kaydedilemedi (batch içinde)");
+            errorCount++;
+          }
+        }
       });
     } catch (error) {
-      logger.error({ error, sessionId, msgId: msg.key.id }, "Mesaj kaydedilemedi");
+      logger.error({ error, sessionId, batchSize: batch.length }, "Mesaj batch'i kaydedilemedi");
+      errorCount += batch.length;
     }
   }
+
+  if (savedCount > 0) {
+    logger.info({ sessionId, savedCount, errorCount, totalMessages: messages.length }, 
+      "Mesajlar batch processing ile kaydedildi");
+  }
 };
+
+// Memory management constants (Baileys.wiki best practice)
+const MESSAGE_STORE_LIMIT = 200; // Her chat için max 200 mesaj tut (memory optimization)
+const MESSAGE_STORE_MAX_CHATS = 100; // Max 100 chat'in mesajlarını memory'de tut
 
 export const saveMessages = (instance, jid, messages = []) => {
   if (!jid) return;
@@ -541,34 +588,82 @@ export const saveMessages = (instance, jid, messages = []) => {
     return !existingIds.has(msgId);
   });
   
-  const updated = [...existing, ...newMessages].slice(-200);
+  // Son N mesajı tut (memory optimization)
+  const updated = [...existing, ...newMessages]
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+    .slice(0, MESSAGE_STORE_LIMIT);
+  
   instance.messagesStore.set(normalized, updated);
+  
+  // Memory management: Eğer çok fazla chat var ise, eski chat'lerin mesajlarını temizle
+  if (instance.messagesStore.size > MESSAGE_STORE_MAX_CHATS) {
+    // En eski chat'leri bul ve temizle
+    const allChats = Array.from(instance.messagesStore.keys());
+    const chatTimestamps = allChats.map(chatJid => {
+      const messages = instance.messagesStore.get(chatJid) || [];
+      const lastMessage = messages[0]; // Sorted by timestamp desc
+      return {
+        jid: chatJid,
+        timestamp: lastMessage?.timestamp || 0,
+      };
+    });
+    
+    // En eski chat'leri sil
+    chatTimestamps
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(0, chatTimestamps.length - MESSAGE_STORE_MAX_CHATS)
+      .forEach(({ jid }) => {
+        instance.messagesStore.delete(jid);
+      });
+    
+    logger.debug({ 
+      sessionId: instance.id, 
+      totalChats: allChats.length, 
+      removedChats: chatTimestamps.length - MESSAGE_STORE_MAX_CHATS 
+    }, "Message store memory optimization yapıldı");
+  }
 };
 
 /**
  * Mesaj store'dan mesaj al (getMessage config için)
- * Baileys README'ye göre poll votes decrypt için gereklidir
+ * Baileys README'ye göre poll votes decrypt ve message retry için gereklidir
+ * 
+ * README Citation:
+ * "If you want to improve sending message, retrying when error occurs 
+ * and decrypt poll votes, you need to have a store and set getMessage config"
+ * 
+ * @param {WAMessageKey} key - Message key to retrieve
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<WAMessage|null>} - Message object or null if not found
  */
 export const getMessageFromStore = async (key, sessionId) => {
   if (!key || !key.remoteJid || !key.id) {
+    logger.debug({ key, sessionId }, "Invalid message key for getMessage");
     return null;
   }
 
   const instance = instances.get(sessionId);
   if (!instance) {
+    logger.debug({ sessionId }, "Session not found for getMessage");
     return null;
   }
 
   const normalized = jidNormalizedUser(key.remoteJid);
   const messages = instance.messagesStore.get(normalized) || [];
   
-  // Memory store'dan ara
+  // Memory store'dan ara (FAST PATH - O(n) worst case)
   const found = messages.find(m => {
     const msgId = m.key?.id || m.id;
     return msgId === key.id;
   });
 
   if (found && found.message) {
+    logger.debug({ 
+      sessionId, 
+      messageId: key.id, 
+      source: "memory" 
+    }, "Message found in memory store");
+    
     return {
       key: found.key || key,
       message: found.message,
@@ -576,8 +671,14 @@ export const getMessageFromStore = async (key, sessionId) => {
     };
   }
 
-  // Memory store'da yoksa Prisma'dan ara
+  // Memory store'da yoksa Prisma'dan ara (SLOW PATH - Database query)
   try {
+    logger.debug({ 
+      sessionId, 
+      messageId: key.id,
+      remoteJid: normalized
+    }, "Message not in memory, querying database");
+    
     const dbMessage = await prisma.message.findFirst({
       where: {
         sessionId,
@@ -588,6 +689,13 @@ export const getMessageFromStore = async (key, sessionId) => {
 
     if (dbMessage) {
       const serialized = serializePrisma(dbMessage);
+      
+      logger.debug({ 
+        sessionId, 
+        messageId: key.id, 
+        source: "database" 
+      }, "Message found in database");
+      
       return {
         key: serialized.key ? (typeof serialized.key === "string" ? JSON.parse(serialized.key) : serialized.key) : key,
         message: serialized.message ? (typeof serialized.message === "string" ? JSON.parse(serialized.message) : serialized.message) : null,
@@ -595,8 +703,18 @@ export const getMessageFromStore = async (key, sessionId) => {
       };
     }
   } catch (error) {
-    logger.error({ error, sessionId, key }, "Mesaj store'dan alınamadı");
+    logger.error({ 
+      error, 
+      sessionId, 
+      key,
+      errorMessage: error.message 
+    }, "Failed to retrieve message from database");
   }
 
+  logger.debug({ 
+    sessionId, 
+    messageId: key.id 
+  }, "Message not found in store or database");
+  
   return null;
 };

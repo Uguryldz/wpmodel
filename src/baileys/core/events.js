@@ -444,12 +444,21 @@ export const bindSocketEvents = (instance) => {
   };
   
   // messaging-history.set event'ini dinle (syncFullHistory: true ile tetiklenir)
+  // README'de hem "messaging.history-set" hem "messaging-history.set" olarak geçiyor
+  // Her iki event'i de dinleyelim (version uyumluluğu için)
   try {
+    // Baileys v6+ event naming (tire ile)
     sock.ev.on("messaging-history.set", messagingHistorySetListener);
     instance.eventListeners.set("messaging-history.set", messagingHistorySetListener);
+    
+    // Alternatif event naming (nokta ile) - backwards compatibility
+    sock.ev.on("messaging.history-set", messagingHistorySetListener);
+    instance.eventListeners.set("messaging.history-set", messagingHistorySetListener);
+    
+    logger.debug({ sessionId }, "messaging-history.set event listener'ları kuruldu");
   } catch (error) {
     // Eğer event mevcut değilse, ignore et (eski Baileys versiyonlarında olmayabilir)
-    console.log(`[${sessionId}] messaging-history.set event'i mevcut değil, chats.set kullanılacak`);
+    logger.warn({ error, sessionId }, "messaging-history.set event'i mevcut değil, chats.set kullanılacak");
   }
 
   const chatsUpsertListener = async (chats) => {
@@ -1287,6 +1296,9 @@ export const bindSocketEvents = (instance) => {
       connectionState.status = "open";
       connectionState.lastQr = null;
       connectionState.lastError = null;
+      connectionState.disconnectReason = null;
+      // Bağlantı başarılı olduğunda reconnect counter'ı sıfırla (Baileys.wiki best practice)
+      instance.reconnectAttempts = 0;
       // Bağlantı açıldığında chats.set event'ini beklemek için flag'i reset et
       instance.chatsSetReceived = false;
       instance.chatsUpsertTimer = null;
@@ -1768,13 +1780,78 @@ export const bindSocketEvents = (instance) => {
       const error = lastDisconnect?.error;
       const boomError = Boom.isBoom(error) ? error : null;
       const statusCode = boomError?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      
+      // Baileys.wiki'ye göre disconnection sebeplerini handle et
+      let shouldReconnect = false;
+      let disconnectReason = "unknown";
+      
+      switch (statusCode) {
+        case DisconnectReason.badSession:
+          disconnectReason = "bad_session";
+          shouldReconnect = false; // Session bozuk, auth dosyalarını temizle
+          logger.error({ sessionId }, "Kötü session, auth dosyaları temizlenmeli");
+          break;
+          
+        case DisconnectReason.connectionClosed:
+          disconnectReason = "connection_closed";
+          shouldReconnect = true; // Bağlantı kapandı, yeniden bağlan
+          break;
+          
+        case DisconnectReason.connectionLost:
+          disconnectReason = "connection_lost";
+          shouldReconnect = true; // Bağlantı kayboldu, yeniden bağlan
+          break;
+          
+        case DisconnectReason.connectionReplaced:
+          disconnectReason = "connection_replaced";
+          shouldReconnect = false; // Başka cihazdan giriş yapıldı, yeniden bağlanma
+          logger.warn({ sessionId }, "Bağlantı başka cihazdan değiştirildi");
+          break;
+          
+        case DisconnectReason.forbidden:
+          disconnectReason = "forbidden";
+          shouldReconnect = false; // Yasaklandı, yeniden bağlanma
+          logger.error({ sessionId }, "Bağlantı yasaklandı (403)");
+          break;
+          
+        case DisconnectReason.loggedOut:
+          disconnectReason = "logged_out";
+          shouldReconnect = false; // Logout yapıldı, yeniden bağlanma
+          logger.info({ sessionId }, "Kullanıcı logout yaptı");
+          break;
+          
+        case DisconnectReason.restartRequired:
+          disconnectReason = "restart_required";
+          shouldReconnect = true; // Restart gerekli, yeniden başlat
+          logger.info({ sessionId }, "WhatsApp restart gerektiriyor");
+          break;
+          
+        case DisconnectReason.timedOut:
+          disconnectReason = "timed_out";
+          shouldReconnect = true; // Timeout oldu, yeniden bağlan
+          break;
+          
+        case DisconnectReason.unavailableService:
+          disconnectReason = "unavailable_service";
+          shouldReconnect = true; // Servis kullanılamaz, yeniden bağlan
+          break;
+          
+        default:
+          disconnectReason = "unknown";
+          // Bilinmeyen durumlarda, statusCode 500+ ise yeniden bağlan
+          shouldReconnect = !statusCode || statusCode >= 500;
+          logger.warn({ sessionId, statusCode }, "Bilinmeyen disconnection sebep kodu");
+          break;
+      }
 
       connectionState.lastError = error?.message || boomError?.message || "Bilinmeyen hata";
+      connectionState.disconnectReason = disconnectReason;
 
       console.warn(`[${instance.id}] Bağlantı kapandı`, {
         statusCode,
+        disconnectReason,
         shouldReconnect,
+        error: connectionState.lastError,
       });
       
       // WebSocket'e bildir
@@ -1784,6 +1861,7 @@ export const bindSocketEvents = (instance) => {
           sessionId,
           connection: "close",
           statusCode: statusCode,
+          disconnectReason: disconnectReason,
           shouldReconnect: shouldReconnect,
           error: connectionState.lastError,
         });
@@ -1791,14 +1869,39 @@ export const bindSocketEvents = (instance) => {
 
       if (shouldReconnect) {
         clearTimeout(instance.reconnectTimer);
+        // Exponential backoff: 2 saniye base, her başarısız bağlantıda 2 katına çık (max 30 saniye)
+        const retryDelay = Math.min(2000 * Math.pow(2, instance.reconnectAttempts || 0), 30000);
+        instance.reconnectAttempts = (instance.reconnectAttempts || 0) + 1;
+        
+        logger.info({ sessionId, retryDelay, attempt: instance.reconnectAttempts }, 
+          "Yeniden bağlanma planlanıyor");
+        
         instance.reconnectTimer = setTimeout(() => {
-          console.log(`[${instance.id}] Yeniden bağlanma deneniyor...`);
+          console.log(`[${instance.id}] Yeniden bağlanma deneniyor (deneme: ${instance.reconnectAttempts})...`);
           startSocket(instance);
-        }, 2_000);
+        }, retryDelay);
       } else {
+        // Yeniden bağlanma yapılmayacaksa, reconnect sayacını sıfırla
+        instance.reconnectAttempts = 0;
+        
         console.log(
-          `[${instance.id}] Oturum kapandı. Tekrar bağlanmak için ilgili auth klasörünü temizleyin.`
+          `[${instance.id}] Oturum kapandı (sebep: ${disconnectReason}). ` +
+          `Tekrar bağlanmak için auth klasörünü temizleyin veya yeni QR kod alın.`
         );
+        
+        // BadSession veya loggedOut durumlarında session'ı sil
+        if (statusCode === DisconnectReason.badSession || statusCode === DisconnectReason.loggedOut) {
+          logger.info({ sessionId }, "Session otomatik olarak temizleniyor");
+          
+          // WebSocket'e session silindiğini bildir
+          if (wsBroadcastFn) {
+            wsBroadcastFn({
+              type: "session.deleted",
+              sessionId,
+              reason: disconnectReason,
+            });
+          }
+        }
       }
     }
   };

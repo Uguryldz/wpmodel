@@ -71,6 +71,7 @@ export * from "./utils/wamessage.js";
 export * from "./utils/group.js";
 export * from "./utils/transfer.js";
 export * from "./utils/pairing.js";
+export * from "./utils/queue.js"; // Baileys.wiki: Message queue and rate limiting
 
 // Note: Other modules will be added as they are created
 // - messages/
