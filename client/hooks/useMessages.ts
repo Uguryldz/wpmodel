@@ -61,25 +61,51 @@ export function useMessages() {
             console.log('[useMessages] ✅ Mesajlar WebSocket\'ten alındı:', data?.length || 0, 'cursor:', cursor ? 'var' : 'yok');
             
             if (data && Array.isArray(data) && data.length > 0) {
-              const mapped: Message[] = (data || []).map((msg: any) => {
-                const text = msg.text || extractMessageText(msg);
-                const body = msg.body || text;
-                const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
-                const fromMe = msg.fromMe !== undefined 
-                  ? Boolean(msg.fromMe) 
-                  : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+              const mapped: Message[] = (data || [])
+                .filter((msg: any) => {
+                  // Protocol mesajlarını filtrele (sadece REVOKE olanlar gösterilebilir)
+                  const messageStubType = msg.messageStubType || msg.message?.messageStubType;
+                  if (messageStubType !== undefined && messageStubType !== null && messageStubType !== 1) {
+                    return false; // REVOKE (1) hariç diğer protocol mesajlarını filtrele
+                  }
+                  
+                  // Boş mesajları filtrele
+                  const text = msg.text || extractMessageText(msg);
+                  const body = msg.body || text;
+                  const textTrimmed = text?.trim();
+                  const bodyTrimmed = body?.trim();
+                  if ((!textTrimmed && !bodyTrimmed) || (textTrimmed === '' && bodyTrimmed === '')) {
+                    return false;
+                  }
+                  
+                  // Generic/anlamsız text'leri filtrele
+                  const textToCheck = (textTrimmed || bodyTrimmed || '').toLowerCase().trim();
+                  const meaninglessTexts = ['mesaj', 'message', 'sistem mesajı'];
+                  if (meaninglessTexts.includes(textToCheck)) {
+                    return false;
+                  }
+                  
+                  return true;
+                })
+                .map((msg: any) => {
+                  const text = msg.text || extractMessageText(msg);
+                  const body = msg.body || text;
+                  const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                  const fromMe = msg.fromMe !== undefined 
+                    ? Boolean(msg.fromMe) 
+                    : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
 
-                return {
-                  ...msg,
-                  id: msgId,
-                  text: text || body,
-                  body: body || text,
-                  fromMe: fromMe,
-                  timestamp: msg.timestamp || msg.messageTimestamp || undefined,
-                  edited: msg.edited,
-                  editedAt: msg.editedAt,
-                };
-              });
+                  return {
+                    ...msg,
+                    id: msgId,
+                    text: text || body,
+                    body: body || text,
+                    fromMe: fromMe,
+                    timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                    edited: msg.edited,
+                    editedAt: msg.editedAt,
+                  };
+                });
 
               mapped.sort((a, b) => {
                 const aTime = a.timestamp || a.messageTimestamp || 0;
@@ -103,25 +129,51 @@ export function useMessages() {
         try {
           const data = await api.getMessages(sessionId, chatId, limit);
           if (data && data.length > 0) {
-            const mapped: Message[] = (data || []).map((msg: any) => {
-              const text = msg.text || extractMessageText(msg);
-              const body = msg.body || text;
-              const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
-              const fromMe = msg.fromMe !== undefined 
-                ? Boolean(msg.fromMe) 
-                : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
+            const mapped: Message[] = (data || [])
+              .filter((msg: any) => {
+                // Protocol mesajlarını filtrele (sadece REVOKE olanlar gösterilebilir)
+                const messageStubType = msg.messageStubType || msg.message?.messageStubType;
+                if (messageStubType !== undefined && messageStubType !== null && messageStubType !== 1) {
+                  return false; // REVOKE (1) hariç diğer protocol mesajlarını filtrele
+                }
+                
+                // Boş mesajları filtrele
+                const text = msg.text || extractMessageText(msg);
+                const body = msg.body || text;
+                const textTrimmed = text?.trim();
+                const bodyTrimmed = body?.trim();
+                if ((!textTrimmed && !bodyTrimmed) || (textTrimmed === '' && bodyTrimmed === '')) {
+                  return false;
+                }
+                
+                // Generic/anlamsız text'leri filtrele
+                const textToCheck = (textTrimmed || bodyTrimmed || '').toLowerCase().trim();
+                const meaninglessTexts = ['mesaj', 'message', 'sistem mesajı'];
+                if (meaninglessTexts.includes(textToCheck)) {
+                  return false;
+                }
+                
+                return true;
+              })
+              .map((msg: any) => {
+                const text = msg.text || extractMessageText(msg);
+                const body = msg.body || text;
+                const msgId = msg.id || msg.key?.id || `${msg.timestamp || msg.messageTimestamp || Date.now()}-${Math.random()}`;
+                const fromMe = msg.fromMe !== undefined 
+                  ? Boolean(msg.fromMe) 
+                  : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
 
-              return {
-                ...msg,
-                id: msgId,
-                text: text || body,
-                body: body || text,
-                fromMe: fromMe,
-                timestamp: msg.timestamp || msg.messageTimestamp || undefined,
-                edited: msg.edited,
-                editedAt: msg.editedAt,
-              };
-            });
+                return {
+                  ...msg,
+                  id: msgId,
+                  text: text || body,
+                  body: body || text,
+                  fromMe: fromMe,
+                  timestamp: msg.timestamp || msg.messageTimestamp || undefined,
+                  edited: msg.edited,
+                  editedAt: msg.editedAt,
+                };
+              });
 
             setMessages(prev => {
               const existingIds = new Set(prev.map(m => m.id || m.key?.id));
