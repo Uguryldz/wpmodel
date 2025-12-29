@@ -1804,6 +1804,86 @@ export const bindSocketEvents = (instance) => {
   };
   sock.ev.on("connection.update", connectionUpdateListener);
   instance.eventListeners.set("connection.update", connectionUpdateListener);
+
+  // call-update: Arama güncellemeleri (Baileys dokümantasyonuna göre)
+  const callUpdateListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    logger.info({ sessionId, count: updates.length }, "Arama güncellemeleri alındı");
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "call.update",
+        sessionId,
+        updates,
+      });
+    }
+  };
+  sock.ev.on("call.update", callUpdateListener);
+  instance.eventListeners.set("call.update", callUpdateListener);
+
+  // blocklist.update: Engellenenler listesi güncellemeleri (Baileys dokümantasyonuna göre)
+  const blocklistUpdateListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    logger.info({ sessionId, count: updates.length }, "Engellenenler listesi güncellemesi alındı");
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "blocklist.update",
+        sessionId,
+        updates,
+      });
+    }
+  };
+  sock.ev.on("blocklist.update", blocklistUpdateListener);
+  instance.eventListeners.set("blocklist.update", blocklistUpdateListener);
+
+  // labels.edit: Etiket düzenlemeleri (Baileys dokümantasyonuna göre)
+  const labelsEditListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    logger.info({ sessionId, count: updates.length }, "Etiket düzenlemeleri alındı");
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "labels.edit",
+        sessionId,
+        updates,
+      });
+    }
+  };
+  sock.ev.on("labels.edit", labelsEditListener);
+  instance.eventListeners.set("labels.edit", labelsEditListener);
+
+  // labels.association: Etiket ilişkilendirmeleri (Baileys dokümantasyonuna göre)
+  const labelsAssociationListener = async (updates) => {
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return;
+    }
+
+    logger.info({ sessionId, count: updates.length }, "Etiket ilişkilendirmeleri alındı");
+
+    // WebSocket'e bildir
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "labels.association",
+        sessionId,
+        updates,
+      });
+    }
+  };
+  sock.ev.on("labels.association", labelsAssociationListener);
+  instance.eventListeners.set("labels.association", labelsAssociationListener);
 };
 
 /**
@@ -1872,6 +1952,13 @@ export const startSocket = (instance) => {
     // DÜŞÜK ÖNCELİK - Eksik özellikler
     // 9. fireInitQueries - İlk bağlantıda query'leri çalıştır
     fireInitQueries: true,
+    // EK ÖZELLİKLER - Baileys dokümantasyonuna göre
+    // 10. txnWaitTimeout - Transaction wait timeout (30 saniye)
+    txnWaitTimeout: 30000,
+    // 11. mobile - Mobile connection (false = web connection)
+    mobile: false,
+    // 12. syncType - Sync type (FULL_SYNC = 1)
+    syncType: 1,
   });
 
   // Grup metadata cache'i güncelle (README'ye göre best practice)
