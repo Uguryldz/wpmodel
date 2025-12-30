@@ -1,12 +1,20 @@
 import { PrismaClient } from "@prisma/client";
 import pino from "pino";
-import { resolve } from "path";
 
-// Prisma'nın DATABASE_URL'i ayarlı değilse varsayılan sqlite dosyasına yönlendir
+// DATABASE_URL kontrolü - PostgreSQL için gerekli
 if (!process.env.DATABASE_URL) {
-  const dbPath = resolve("./prisma/dev.db");
-  process.env.DATABASE_URL = `file:${dbPath}`;
-  console.log(`[prisma] DATABASE_URL set to sqlite default: ${process.env.DATABASE_URL}`);
+  console.error("[prisma] ❌ HATA: DATABASE_URL environment variable tanımlı değil!");
+  console.error("[prisma] Lütfen .env dosyasına PostgreSQL bağlantı bilgilerini ekleyin:");
+  console.error("[prisma] DATABASE_URL=\"postgresql://user:password@host:port/database\"");
+  console.error("[prisma] Veya 'npm run setup:db' komutunu çalıştırarak database'i oluşturun.");
+  process.exit(1);
+}
+
+// PostgreSQL bağlantı kontrolü
+const dbUrl = process.env.DATABASE_URL;
+if (!dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('postgres://')) {
+  console.warn("[prisma] ⚠️  UYARI: DATABASE_URL PostgreSQL formatında görünmüyor.");
+  console.warn("[prisma] Beklenen format: postgresql://user:password@host:port/database");
 }
 
 export const prisma = new PrismaClient();

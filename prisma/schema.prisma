@@ -1,175 +1,272 @@
-// Prisma schema for SQLite database
+// Prisma schema for PostgreSQL database
+// Baileys Store yapısına göre optimize edilmiş
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Multi-account için schema kullanımı (opsiyonel)
+  // schemas  = ["public", "account_1767122031097", "account_1767122031098"]
 }
 
+// ============================================
+// CHAT MODEL - Baileys KeyedDB yapısına uygun
+// ============================================
 model Chat {
   pkId                      Int      @id @default(autoincrement())
   sessionId                 String
-  archived                  Boolean?
-  contactPrimaryIdentityKey Bytes?
-  conversationTimestamp     BigInt?
-  createdAt                 BigInt?
-  createdBy                 String?
-  description               String?
-  disappearingMode          String? // JSON stored as string
-  displayName               String?
-  endOfHistoryTransfer      Boolean?
-  endOfHistoryTransferType  Int?
-  ephemeralExpiration       Int?
-  ephemeralSettingTimestamp BigInt?
-  id                        String
-  isDefaultSubgroup         Boolean?
-  isParentGroup             Boolean?
-  lastMsgTimestamp          BigInt?
-  lidJid                    String?
-  markedAsUnread            Boolean?
-  mediaVisibility           Int?
-  messages                  String? // JSON stored as string
-  muteEndTime               BigInt?
+  
+  // Temel Bilgiler (Baileys store'dan)
+  id                        String   // JID: "905335989539@s.whatsapp.net" veya "120363123456789012@g.us"
+  conversationTimestamp     BigInt?  // Son mesaj zamanı (Unix timestamp - saniye)
+  unreadCount               Int      @default(0)
+  archived                  Boolean  @default(false)
+  pinned                    BigInt?  // Sabitlenmiş mi? (timestamp)
+  
+  // İsim ve Görünüm
   name                      String?
-  newJid                    String?
-  notSpam                   Boolean?
-  oldJid                    String?
-  pHash                     String?
-  parentGroupId             String?
-  participant               String? // JSON stored as string
-  pinned                    Int?
-  pnJid                     String?
-  pnhDuplicateLidThread     Boolean?
-  readOnly                  Boolean?
-  shareOwnPn                Boolean?
-  support                   Boolean?
-  suspended                 Boolean?
-  tcToken                   Bytes?
-  tcTokenSenderTimestamp    BigInt?
-  tcTokenTimestamp          BigInt?
-  terminated                Boolean?
-  unreadCount               Int?
-  unreadMentionCount        Int?
-  wallpaper                 String? // JSON stored as string
-  lastMessageRecvTimestamp  Int?
+  displayName               String?
+  subject                   String?  // Grup konusu (grup chat'leri için)
+  
+  // Grup Bilgileri (sadece grup chat'leri için)
+  // PostgreSQL JSONB - index'lenebilir!
+  participant               Json?    // Participant JID'leri (JSON array)
+  creation                  BigInt?  // Grup oluşturulma zamanı
+  desc                      String?  // Grup açıklaması
+  descOwner                 String?  // Açıklama sahibi
+  descId                    String?  // Açıklama ID
+  restrict                  Boolean? // Kısıtlı grup mu?
+  announce                  Boolean? // Duyuru grubu mu?
+  size                      Int?     // Grup üye sayısı
+  ephemeralDuration         Int?     // Geçici mesaj süresi (saniye)
+  inviteCode                String?  // Davet kodu
+  
+  // Mesaj Bilgileri
+  lastMsgTimestamp          BigInt?
+  messages                  Json?    // Chat içindeki mesajlar (genellikle boş, mesajlar ayrı tabloda)
+  
+  // Metadata
+  imgUrl                    String?  // Profil resmi URL'si
+  lidJid                    String?  // LID formatındaki JID (Linked ID)
+  newJid                    String?  // Yeni JID (migration için)
+  oldJid                    String?  // Eski JID (migration için)
+  
+  // Ayarlar
+  muteEndTime               BigInt?  // Sessize alma bitiş zamanı
+  disappearingMode          String?  // Geçici mesaj modu (JSON string)
+  readOnly                  Boolean? // Salt okunur mu? (grup için)
+  
+  // Durum
+  endOfHistoryTransfer      Boolean? // Geçmiş transferi tamamlandı mı?
+  endOfHistoryTransferType  Int?
+  markedAsUnread            Boolean? // Okunmadı olarak işaretlendi mi?
+  unreadMentionCount        Int?     // Okunmamış mention sayısı
+  
+  // Diğer
+  createdAt                 BigInt?
+  createdBy                 String?  // Oluşturan JID
+  contactPrimaryIdentityKey Bytes?   // Contact primary key
+  tcToken                   Bytes?   // TC token
+  tcTokenTimestamp          BigInt?   // TC token zamanı
+  tcTokenSenderTimestamp    BigInt?  // TC token gönderen zamanı
+  pHash                     String?  // pHash
+  pnJid                     String?  // PN JID
+  parentGroupId             String?  // Ana grup ID (subgroup için)
+  isParentGroup             Boolean? // Ana grup mu?
+  isDefaultSubgroup         Boolean? // Varsayılan alt grup mu?
+  shareOwnPn                Boolean? // Kendi PN'yi paylaş
+  pnhDuplicateLidThread     Boolean? // PNH duplicate LID thread
+  support                   Boolean? // Destek chat'i mi?
+  suspended                 Boolean? // Askıya alınmış mı?
+  terminated                Boolean? // Sonlandırılmış mı?
+  notSpam                   Boolean? // Spam değil mi?
+  mediaVisibility           Int?     // Medya görünürlüğü
+  wallpaper                 Json?    // Duvar kağıdı (JSON object)
+  lastMessageRecvTimestamp  BigInt?  // Son mesaj alma zamanı
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@index([conversationTimestamp])
+  @@index([archived])
+  @@index([pinned])
+  @@index([sessionId, conversationTimestamp]) // Composite index - chat listesi için
+  @@map("chats")
 }
 
+// ============================================
+// CONTACT MODEL - Baileys Record yapısına uygun
+// ============================================
 model Contact {
   pkId         Int     @id @default(autoincrement())
   sessionId    String
-  id           String
+  id           String  // JID: "905335989539@s.whatsapp.net"
+  
+  // İsim Bilgileri
   name         String?
-  notify       String?
-  verifiedName String?
-  imgUrl       String?
-  status       String?
+  notify       String? // Bildirim adı
+  verifiedName String? // Doğrulanmış isim (ticari hesaplar için)
+  
+  // Profil
+  imgUrl       String? // Profil resmi URL'si
+  status       String? // Durum mesajı
+  
+  // Metadata (PostgreSQL JSONB)
+  vcard        Json?   // vCard verisi (JSON object)
+  businessProfile Json? // İş profili (JSON object)
+  labels       Json?   // Etiketler (JSON array)
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@index([verifiedName])
+  @@map("contacts")
 }
 
-model GroupMetadata {
-  pkId              Int     @id @default(autoincrement())
-  sessionId         String
-  id                String
-  owner             String?
-  subject           String
-  subjectOwner      String?
-  subjectTime       Int?
-  creation          Int?
-  desc              String?
-  descOwner         String?
-  descId            String?
-  restrict          Boolean?
-  announce          Boolean?
-  size              Int?
-  participants      String // JSON stored as string
-  ephemeralDuration Int?
-  inviteCode        String?
-
-  @@unique([sessionId, id])
-  @@index([sessionId])
-}
-
+// ============================================
+// MESSAGE MODEL - Baileys Record<string, Message[]> yapısına uygun
+// ============================================
 model Message {
   pkId                            Int      @id @default(autoincrement())
   sessionId                       String
-  remoteJid                       String
-  id                              String
-  agentId                         String?
-  bizPrivacyStatus                Int?
-  broadcast                       Boolean?
-  clearMedia                      Boolean?
-  duration                        Int?
-  ephemeralDuration               Int?
+  remoteJid                       String   // Chat JID: "905335989539@s.whatsapp.net"
+  id                              String   // Mesaj ID
+  
+  // Key Bilgileri (PostgreSQL JSONB - index'lenebilir!)
+  key                             Json     // { remoteJid, fromMe, id, participant }
+  
+  // Mesaj İçeriği (PostgreSQL JSONB - index'lenebilir!)
+  message                         Json?    // Message content (conversation, imageMessage, vb.)
+  
+  // Metadata
+  messageTimestamp                BigInt?  // Mesaj zamanı (Unix timestamp - saniye)
+  messageC2STimestamp             BigInt?  // C2S timestamp
+  pushName                        String?  // Gönderen adı
+  participant                     String?  // Participant JID (grup mesajları için)
+  broadcast                       Boolean? @default(false)
+  multicast                       Boolean? @default(false)
+  status                          Int?     // Mesaj durumu (0: pending, 1: server_ack, 2: delivery, 3: read)
+  starred                         Boolean? @default(false)
+  
+  // Reaction'lar (PostgreSQL JSONB - index'lenebilir!)
+  reactions                       Json?    // Reaction array (JSON)
+  
+  // Protocol Mesajları
+  messageStubType                 Int?     // Protocol mesaj tipi (0: REVOKE, 1: CIPHERTEXT, vb.)
+  messageStubParameters           Json?    // Protocol mesaj parametreleri (JSON array)
+  
+  // Medya Bilgileri
+  mediaData                       Json?    // Medya verisi (JSON object)
+  mediaCiphertextSha256           Bytes?
+  duration                        Int?     // Ses/video süresi (saniye)
+  fileLength                      BigInt?  // Dosya boyutu
+  
+  // Ephemeral (Geçici Mesajlar)
+  ephemeralDuration               Int?     // Geçici mesaj süresi
   ephemeralOffToOn                Boolean?
   ephemeralOutOfSync              Boolean?
   ephemeralStartTimestamp         BigInt?
-  finalLiveLocation               String? // JSON stored as string
+  
+  // Diğer
+  agentId                         String?
+  bizPrivacyStatus                Int?
+  clearMedia                      Boolean?
   futureproofData                 Bytes?
   ignore                          Boolean?
-  keepInChat                      String? // JSON stored as string
-  key                             String // JSON stored as string
-  labels                          String? // JSON stored as string
-  mediaCiphertextSha256           Bytes?
-  mediaData                       String? // JSON stored as string
-  message                         String? // JSON stored as string
-  messageC2STimestamp             BigInt?
+  keepInChat                      Json?    // Keep in chat (JSON object)
+  labels                          Json?    // Labels (JSON array)
   messageSecret                   Bytes?
-  messageStubParameters           String? // JSON stored as string
-  messageStubType                 Int?
-  messageTimestamp                BigInt?
-  multicast                       Boolean?
   originalSelfAuthorUserJidString String?
-  participant                     String?
-  paymentInfo                     String? // JSON stored as string
-  photoChange                     String? // JSON stored as string
-  pollAdditionalMetadata          String? // JSON stored as string
-  pollUpdates                     String? // JSON stored as string
-  pushName                        String?
-  quotedPaymentInfo               String? // JSON stored as string
-  quotedStickerData               String? // JSON stored as string
-  reactions                       String? // JSON stored as string
-  revokeMessageTimestamp          BigInt?
-  starred                         Boolean?
-  status                          Int?
+  paymentInfo                     Json?    // Payment info (JSON object)
+  photoChange                     Json?    // Photo change (JSON object)
+  pollAdditionalMetadata          Json?    // Poll metadata (JSON object)
+  pollUpdates                     Json?    // Poll updates (JSON object)
+  quotedPaymentInfo               Json?    // Quoted payment (JSON object)
+  quotedStickerData               Json?    // Quoted sticker (JSON object)
+  revokeMessageTimestamp          BigInt?  // Revoke timestamp
   statusAlreadyViewed             Boolean?
-  statusPsa                       String? // JSON stored as string
+  statusPsa                       Json?    // Status PSA (JSON object)
   urlNumber                       Boolean?
   urlText                         Boolean?
-  userReceipt                     String? // JSON stored as string
+  userReceipt                     Json?    // User receipt (JSON object)
   verifiedBizName                 String?
+  finalLiveLocation               Json?    // Final live location (JSON object)
 
   @@unique([sessionId, remoteJid, id])
   @@index([sessionId])
+  @@index([remoteJid])
+  @@index([sessionId, remoteJid]) // Composite index - chat bazında mesaj sorguları için
+  @@index([messageTimestamp])
+  @@index([status])
+  @@index([starred])
+  @@index([participant]) // Grup mesajları için
+  // PostgreSQL JSONB index'leri (migration'da eklenecek)
+  // CREATE INDEX idx_message_type ON messages USING GIN ((message->>'type'));
+  // CREATE INDEX idx_message_reactions ON messages USING GIN (reactions);
+  @@map("messages")
 }
 
+// ============================================
+// GROUP METADATA MODEL
+// ============================================
+model GroupMetadata {
+  pkId              Int     @id @default(autoincrement())
+  sessionId         String
+  id                String  // Grup JID
+  
+  owner             String? // Grup sahibi JID
+  subject           String  // Grup konusu
+  subjectOwner      String? // Konu sahibi JID
+  subjectTime       BigInt? // Konu zamanı
+  creation          BigInt? // Oluşturulma zamanı
+  desc              String? // Açıklama
+  descOwner         String? // Açıklama sahibi
+  descId            String? // Açıklama ID
+  restrict          Boolean? // Kısıtlı grup mu?
+  announce          Boolean? // Duyuru grubu mu?
+  size              Int?     // Üye sayısı
+  
+  // Participants (PostgreSQL JSONB - index'lenebilir!)
+  participants      Json     // Participant array (JSON)
+  
+  ephemeralDuration Int?     // Geçici mesaj süresi
+  inviteCode        String?  // Davet kodu
+
+  @@unique([sessionId, id])
+  @@index([sessionId])
+  @@index([subject])
+  @@map("group_metadata")
+}
+
+// ============================================
+// SESSION MODEL (Auth için)
+// ============================================
 model Session {
   pkId      Int    @id @default(autoincrement())
   sessionId String
   id        String
-  data      String
+  data      String // Session data
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@map("sessions")
 }
 
+// ============================================
+// MESSAGE TEMPLATE MODEL
+// ============================================
 model MessageTemplate {
   pkId        Int      @id @default(autoincrement())
   sessionId   String   // Hangi session'a ait (opsiyonel, tüm hesaplar için kullanılabilir)
   id          String   @unique // Unique template ID
   name        String   // Şablon adı
   type        String   // 'button' | 'list' | 'template' | 'product'
-  data        String   // JSON string olarak şablon verisi
+  data        Json     // JSON string olarak şablon verisi (PostgreSQL JSONB)
   createdAt   BigInt   // Timestamp (milliseconds)
   updatedAt   BigInt?  // Timestamp (milliseconds)
 
   @@index([sessionId])
   @@index([type])
+  @@map("message_templates")
 }
 
