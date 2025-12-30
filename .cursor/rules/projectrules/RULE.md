@@ -38,12 +38,10 @@ Aşağıdaki dosyalar proje geliştirme sırasında **mutlaka referans alınmal�
 - **`src/swagger.js`** - Swagger/OpenAPI dokümantasyonu
 
 ### Frontend (client/)
-- **`client/api/`** - API client fonksiyonları
-  - `chats.ts` - Chat API fonksiyonları
-  - `contacts.ts` - Contact API fonksiyonları
-  - `messages.ts` - Message API fonksiyonları
-  - `sessions.ts` - Session API fonksiyonları
-  - `index.ts` - API client ana export dosyası
+- **`client/websocket/`** - WebSocket request/response handler'ları
+  - `requestHandler.ts` - WebSocket request/response handler sınıfı
+  - `types.ts` - WebSocket tip tanımlamaları
+  - `handlers/` - WebSocket event handler'ları
 
 - **`client/components/`** - React bileşenleri
   - `AccountSidebar.tsx` - Hesap yan menüsü
@@ -117,9 +115,11 @@ Aşağıdaki dosyalar proje geliştirme sırasında **mutlaka referans alınmal�
 - ✅ `client/types.ts` dosyasındaki tip tanımlamaları kullanılmalıdır
 - ✅ Yeni tipler `types.ts` dosyasına eklenmelidir
 
-#### API Client Kullanımı
-- ✅ Tüm API çağrıları `client/api/` altındaki fonksiyonlar üzerinden yapılmalıdır
-- ✅ API fonksiyonları async/await kullanmalıdır
+#### WebSocket Request/Response Kullanımı
+- ✅ **TÜM İŞLEMLER WebSocket üzerinden yapılmalıdır, REST API kullanılmamalıdır**
+- ✅ `useWebSocket` hook'undan dönen `sendRequest` fonksiyonu kullanılmalıdır
+- ✅ Request formatı: `sendRequest(requestType, payload)` şeklinde olmalıdır
+- ✅ Request type'ları backend'deki WebSocket request handler'da tanımlı olmalıdır
 - ✅ Hata yönetimi uygun şekilde yapılmalıdır
 
 #### State Yönetimi
@@ -131,6 +131,9 @@ Aşağıdaki dosyalar proje geliştirme sırasında **mutlaka referans alınmal�
 - ✅ WebSocket bağlantısı `useWebSocket` hook'u üzerinden yönetilmelidir
 - ✅ Event listener'lar uygun şekilde temizlenmelidir (cleanup)
 - ✅ Reconnection logic'i hook içinde handle edilmelidir
+- ✅ **Backend ile iletişim SADECE WebSocket üzerinden yapılmalıdır**
+- ✅ Event'ler `client/websocket/handlers/` altındaki handler'larda işlenmelidir
+- ✅ Request/Response pattern'i `WebSocketRequestHandler` sınıfı üzerinden yapılmalıdır
 
 ### 3. Genel Kurallar
 
@@ -163,12 +166,39 @@ Aşağıdaki dosyalar proje geliştirme sırasında **mutlaka referans alınmal�
 - ❌ Modüler yapıyı bozacak şekilde kod yazmamalıdır
 
 ### Frontend
+- ❌ **KESINLIKLE REST API kullanılmamalıdır - HER ŞEY WebSocket üzerinden yapılmalıdır**
 - ❌ API çağrılarını component içinde doğrudan fetch ile yapmamalıdır
+- ❌ `client/api/` altındaki fonksiyonlar kullanılmamalıdır (sadece WebSocket kullanılmalıdır)
 - ❌ WebSocket bağlantısını component içinde doğrudan açmamalıdır
 - ❌ Gereksiz re-render'lara neden olacak şekilde state yönetimi yapmamalıdır
 - ❌ TypeScript tip güvenliğini bypass etmemelidir
+- ❌ Backend ile iletişim için REST endpoint'leri kullanılmamalıdır
+
+## ⚠️ ÖNEMLİ NOTLAR
+
+### WebSocket-Only Architecture
+- ✅ **Frontend'de REST API kullanımı kesinlikle yasaktır**
+- ✅ Tüm backend iletişimi WebSocket üzerinden yapılmalıdır
+- ✅ Event'ler WebSocket üzerinden real-time olarak gelir
+- ✅ Request/Response pattern'i WebSocket üzerinden çalışır
+- ✅ Backend'deki WebSocket request handler'a yeni request type'lar eklenmelidir
 
 ## 📝 Örnek Kullanımlar
+
+### Backend - Yeni WebSocket Request Type Ekleme
+
+```javascript
+// src/index.js içinde WebSocket request handler'a ekleme
+case 'newRequestType':
+  const { sessionId, param1, param2 } = data.payload || {};
+  if (sessionId) {
+    const { newFunction } = await import("./baileys/module/file.js");
+    responseData = await newFunction(sessionId, param1, param2);
+  } else {
+    throw new Error('sessionId gerekli');
+  }
+  break;
+```
 
 ### Backend - Yeni Metod Ekleme
 
@@ -188,38 +218,64 @@ export const sendTextMessage = async (sock, jid, text) => {
 };
 ```
 
-### Frontend - API Kullanımı
+### Frontend - WebSocket Request/Response Kullanımı
 
 ```typescript
-// client/api/messages.ts içinde
-import { api } from './index';
+// Component içinde sendRequest kullanımı
+import { useWebSocket } from './hooks/useWebSocket';
 
-export const sendMessage = async (sessionId: string, jid: string, text: string) => {
-  const response = await api.post(`/${sessionId}/messages/send`, {
-    jid,
-    text
-  });
-  return response.data;
+const MyComponent = () => {
+  const { sendRequest } = useWebSocket({ /* props */ });
+  
+  const handleSendMessage = async () => {
+    try {
+      // WebSocket üzerinden request gönder
+      const result = await sendRequest('sendMessage', {
+        sessionId: 'account-id',
+        jid: '1234567890@s.whatsapp.net',
+        text: 'Merhaba'
+      });
+      console.log('Mesaj gönderildi:', result);
+    } catch (error) {
+      console.error('Mesaj gönderme hatası:', error);
+    }
+  };
+  
+  return <button onClick={handleSendMessage}>Gönder</button>;
 };
 ```
 
-### Frontend - Hook Kullanımı
+### Frontend - Hook Kullanımı (WebSocket ile)
 
 ```typescript
 // client/hooks/useMessages.ts içinde
 export const useMessages = () => {
   const [messages, setMessages] = useState<Message[]>([]);
+  const sendRequestRef = useRef<((type: string, payload: any) => Promise<any>) | null>(null);
+  
+  const setSendRequest = (sendRequest: (type: string, payload: any) => Promise<any>) => {
+    sendRequestRef.current = sendRequest;
+  };
   
   const sendMessage = useCallback(async (sessionId: string, jid: string, text: string) => {
+    if (!sendRequestRef.current) {
+      throw new Error('WebSocket is not connected');
+    }
+    
     try {
-      const result = await api.sendMessage(sessionId, jid, text);
+      // WebSocket üzerinden request gönder
+      const result = await sendRequestRef.current('sendMessage', {
+        sessionId,
+        jid,
+        text
+      });
       // State güncelleme
     } catch (error) {
       console.error('Mesaj gönderme hatası:', error);
     }
   }, []);
   
-  return { messages, sendMessage };
+  return { messages, sendMessage, setSendRequest };
 };
 ```
 
@@ -237,11 +293,14 @@ Yeni kod yazarken aşağıdaki kontrol listesini kullanın:
 
 ### Frontend
 - [ ] TypeScript tipleri doğru mu?
-- [ ] API çağrısı `client/api/` altında mı?
+- [ ] **WebSocket üzerinden request gönderiliyor mu? (REST API kullanılmamalı)**
+- [ ] `sendRequest` fonksiyonu `useWebSocket` hook'undan alınıyor mu?
+- [ ] Request type'ları backend'de tanımlı mı?
 - [ ] Hook kullanımı doğru mu?
 - [ ] State yönetimi optimize edildi mi?
 - [ ] WebSocket event'leri temizleniyor mu?
 - [ ] Component tek sorumluluğa sahip mi?
+- [ ] Event handler'lar `client/websocket/handlers/` altında mı?
 
 ## 📖 Ek Kaynaklar
 

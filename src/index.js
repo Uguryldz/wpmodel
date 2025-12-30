@@ -55,6 +55,7 @@ import {
   markChatRead,
   deleteMessageForMe,
   deleteChat,
+  setDisappearingMessages,
   queryChatHistory,
   subscribeToPresence,
   searchMessages,
@@ -184,7 +185,6 @@ const wss = new WebSocketServer({
 const wsClients = new Set();
 
 wss.on("connection", (ws, req) => {
-  console.log("[WebSocket] ✅ Yeni bağlantı:", req.socket.remoteAddress);
   wsClients.add(ws);
 
   // WebSocket bağlantısını sürekli açık tutmak için ping-pong mekanizması
@@ -222,7 +222,6 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    console.log("[WebSocket] ⚠️ Bağlantı kapandı");
     wsClients.delete(ws);
     
     // Interval'leri temizle
@@ -257,8 +256,6 @@ wss.on("connection", (ws, req) => {
       
       // Request mesajı mı kontrol et
       if (data.type === 'request' && data.requestId && data.requestType) {
-        console.log("[WebSocket] 📨 Request alındı:", data.requestType, data.requestId);
-        
         try {
           let responseData = null;
           
@@ -300,6 +297,50 @@ wss.on("connection", (ws, req) => {
                 responseData = contactsResult.data || [];
               } else {
                 throw new Error('sessionId gerekli');
+              }
+              break;
+
+            case 'sendReaction':
+              // Mesaja reaksiyon gönder
+              const { sessionId: reactionSessionId, jid: reactionJid, messageId: reactionMessageId, emoji: reactionEmoji } = data.payload || {};
+              if (reactionSessionId && reactionJid && reactionMessageId) {
+                const { sendReaction } = await import("./baileys/messages/reactions.js");
+                responseData = await sendReaction(reactionSessionId, reactionJid, reactionMessageId, reactionEmoji || "👍");
+              } else {
+                throw new Error('sessionId, jid ve messageId gerekli');
+              }
+              break;
+
+            case 'pinMessage':
+              // Mesajı sabitle/kaldır
+              const { sessionId: pinSessionId, jid: pinJid, messageKey: pinMessageKey, type: pinType, time: pinTime } = data.payload || {};
+              if (pinSessionId && pinJid && pinMessageKey) {
+                const { pinMessage } = await import("./baileys/messages/special.js");
+                responseData = await pinMessage(pinSessionId, pinJid, pinMessageKey, pinType || 1, pinTime || 86400);
+              } else {
+                throw new Error('sessionId, jid ve messageKey gerekli');
+              }
+              break;
+
+            case 'starMessage':
+              // Mesajı yıldızla/yıldızı kaldır
+              const { sessionId: starSessionId, jid: starJid, messageId: starMessageId, star: starValue, fromMe: starFromMe } = data.payload || {};
+              if (starSessionId && starJid && starMessageId) {
+                const { starMessage } = await import("./baileys/messages/manage.js");
+                responseData = await starMessage(starSessionId, starJid, starMessageId, starValue !== false, starFromMe);
+              } else {
+                throw new Error('sessionId, jid ve messageId gerekli');
+              }
+              break;
+
+            case 'replyToMessage':
+              // Mesaja yanıt gönder
+              const { sessionId: replySessionId, jid: replyJid, messageId: replyMessageId, text: replyText } = data.payload || {};
+              if (replySessionId && replyJid && replyMessageId && replyText) {
+                const { replyToMessage } = await import("./baileys/messages/edit.js");
+                responseData = await replyToMessage(replySessionId, replyJid, replyMessageId, replyText);
+              } else {
+                throw new Error('sessionId, jid, messageId ve text gerekli');
               }
               break;
               
@@ -347,12 +388,6 @@ wss.on("connection", (ws, req) => {
         type: "sessions.update",
         sessions: validSessions,
       }));
-      
-      console.log("[WebSocket] ✅ Initial data gönderildi:", { 
-        sessionsCount: validSessions.length, 
-        totalSessions: allSessions.length,
-        tempSessionsFiltered: allSessions.length - validSessions.length
-      });
       
       // Her açık session için chats ve contacts gönder
       for (const session of validSessions) {
@@ -489,7 +524,6 @@ app.get(
   "/sessions",
   asyncHandler((_req, res) => {
     const sessions = listSessions();
-    console.log('[GET /sessions] Sessions:', safeStringify(sessions, 2));
     res.json(sessions);
   })
 );
@@ -1445,22 +1479,6 @@ app.patch(
   })
 );
 
-// Mesaj yıldızla/yıldızı kaldır
-app.post(
-  "/:sessionId/messages/star",
-  asyncHandler(async (req, res) => {
-    const { sessionId } = req.params;
-    const { jid, messageId, star } = req.body;
-
-    if (!jid || !messageId) {
-      return res.status(400).json({ error: "jid ve messageId zorunludur" });
-    }
-
-    const result = await starMessage(sessionId, jid, messageId, star !== false);
-    res.json(result);
-  })
-);
-
 // ========== REAKSİYONLAR ==========
 
 // Mesaja reaksiyon gönder
@@ -1491,6 +1509,22 @@ app.delete(
     }
 
     const result = await removeReaction(sessionId, jid, messageId);
+    res.json(result);
+  })
+);
+
+// Mesaj yıldızla/yıldızı kaldır
+app.post(
+  "/:sessionId/messages/star",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { jid, messageId, star } = req.body;
+
+    if (!jid || !messageId) {
+      return res.status(400).json({ error: "jid ve messageId zorunludur" });
+    }
+
+    const result = await starMessage(sessionId, jid, messageId, star !== false);
     res.json(result);
   })
 );
@@ -1700,6 +1734,18 @@ app.delete(
     const { lastMessage } = req.body;
 
     const result = await deleteChat(sessionId, jid, lastMessage || null);
+    res.json(result);
+  })
+);
+
+// Disappearing Messages ayarla (Geçici Mesajlar) - README'ye göre
+app.post(
+  "/:sessionId/chats/:jid/disappearing-messages",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+    const { duration } = req.body; // seconds cinsinden (0 = kapalı, 86400 = 24h, 604800 = 7d, 7776000 = 90d)
+
+    const result = await setDisappearingMessages(sessionId, jid, duration !== undefined ? duration : 0);
     res.json(result);
   })
 );

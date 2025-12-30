@@ -1,7 +1,7 @@
 // Message editing functions (reply, forward, edit)
-import { ensureSocket, normalizeJid, getAccountId, getOrCreateInstance } from "../shared.js";
+import { ensureSocket, normalizeJid, getAccountId } from "../shared.js";
 import { generateForwardMessageContent } from "baileys";
-import { prisma, logger } from "../../shared.js";
+import { logger } from "../../shared.js";
 
 /**
  * Mesaj yanıtla (reply)
@@ -11,50 +11,31 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
   const normalizedJid = normalizeJid(jid);
   const sessionId = getAccountId(accountId);
 
-  // Önce memory store'dan kontrol et
-  const instance = getOrCreateInstance(accountId);
-  let key = null;
-
-  // Memory store'dan mesajı bul
-  const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
-  const memoryMsg = memoryMessages.find(m => (m.id || m.key?.id) === messageId);
+  // Memory store'dan full message'ı bul (Baileys quoted parametresi için gerekli)
+  const { getMessageFromStore } = await import("../shared.js");
+  const msgFromStore = await getMessageFromStore({ remoteJid: normalizedJid, id: messageId }, sessionId);
   
-  if (memoryMsg) {
-    if (memoryMsg.key) {
-      key = memoryMsg.key;
-    } else if (memoryMsg.id) {
-      key = {
-        remoteJid: normalizedJid,
-        id: memoryMsg.id,
-        fromMe: memoryMsg.fromMe || false,
-      };
+  let key = null;
+  let quotedMessage = null;
+
+  if (msgFromStore) {
+    // Memory store'dan gelen mesajı kullan
+    if (msgFromStore.key) {
+      key = msgFromStore.key;
+    }
+    if (msgFromStore.message) {
+      quotedMessage = msgFromStore;
     }
   }
 
-  // Memory store'da yoksa DB'den kontrol et
+  // Memory store'da mesaj yoksa, messageId'den key oluştur
   if (!key) {
-    const dbMessage = await prisma.message.findFirst({
-      where: {
-        sessionId,
-        remoteJid: normalizedJid,
-        id: messageId,
-      },
-    });
-
-    if (!dbMessage) {
-      throw new Error("Yanıtlanacak mesaj bulunamadı");
-    }
-
-    try {
-      key = typeof dbMessage.key === "string" ? JSON.parse(dbMessage.key) : dbMessage.key;
-    } catch (error) {
-      logger.error({ error, messageId }, "Mesaj anahtarı parse edilemedi");
-      key = {
-        remoteJid: normalizedJid,
-        id: messageId,
-        fromMe: false,
-      };
-    }
+    key = {
+      remoteJid: normalizedJid,
+      id: messageId,
+      fromMe: false,
+    };
+    logger.warn({ sessionId, messageId, normalizedJid }, "Yanıtlanacak mesaj memory store'da bulunamadı, key oluşturuldu");
   }
 
   // Key'i garanti et - undefined kontrolü
@@ -79,18 +60,37 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
     key.fromMe = false;
   }
 
-  // Baileys API için quoted key formatını düzelt
-  // Key'de sadece gerekli alanlar olmalı: remoteJid, id, fromMe
-  // Participant sadece grup mesajları için gerekli
-  const quotedKey = {
-    remoteJid: key.remoteJid || normalizedJid,
-    id: key.id || messageId,
-    fromMe: key.fromMe !== undefined ? Boolean(key.fromMe) : false,
-  };
+  // Baileys API için quoted parametresi - README'ye göre full message objesi olmalı
+  // Ama eğer full message yoksa, key kullanılabilir
+  let quotedParam = null;
   
-  // Participant sadece grup mesajları için ve varsa ekle
-  if (key.participant && key.participant.trim() !== '') {
-    quotedKey.participant = key.participant;
+  if (quotedMessage && quotedMessage.message) {
+    // Full message objesi varsa onu kullan (tercih edilen)
+    quotedParam = quotedMessage.message;
+  } else if (key) {
+    // Full message yoksa key kullan
+    // Key'i Baileys formatına uygun şekilde hazırla
+    quotedParam = {
+      key: {
+        remoteJid: key.remoteJid || normalizedJid,
+        id: key.id || messageId,
+        fromMe: key.fromMe !== undefined ? Boolean(key.fromMe) : false,
+      }
+    };
+    
+    // Participant sadece grup mesajları için ve varsa ekle
+    if (key.participant && typeof key.participant === 'string' && key.participant.trim() !== '') {
+      quotedParam.key.participant = key.participant;
+    }
+  } else {
+    // Key de yoksa temel key oluştur
+    quotedParam = {
+      key: {
+        remoteJid: normalizedJid,
+        id: messageId,
+        fromMe: false,
+      }
+    };
   }
 
   let messageContent;
@@ -102,25 +102,37 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
 
   try {
     logger.info({ 
-      quotedKey, 
+      quotedParam: quotedParam?.key || quotedParam, 
       originalKey: key, 
       jid: normalizedJid, 
       messageId,
-      messageContent 
+      messageContent,
+      hasFullMessage: !!(quotedMessage && quotedMessage.message)
     }, "Mesaj yanıtlanıyor...");
     
+    // Baileys API'ye quoted parametresini gönder
     await sock.sendMessage(normalizedJid, messageContent, {
-      quoted: quotedKey,
+      quoted: quotedParam,
     });
     
     logger.info({ 
-      quotedKey, 
       jid: normalizedJid, 
       messageId 
     }, "✅ Mesaj başarıyla yanıtlandı");
   } catch (error) {
-    logger.error({ error, jid: normalizedJid, messageId, quotedKey, originalKey: key }, "Mesaj yanıtlanamadı");
-    throw new Error(`Mesaj yanıtlanamadı: ${error.message}`);
+    // Hata detaylarını logla
+    const errorDetails = {
+      error: error.message || error.toString(),
+      stack: error.stack,
+      jid: normalizedJid,
+      messageId,
+      quotedParam: quotedParam?.key || quotedParam,
+      originalKey: key,
+      messageContentType: typeof messageContent,
+      hasFullMessage: !!(quotedMessage && quotedMessage.message),
+    };
+    logger.error(errorDetails, "Mesaj yanıtlanamadı");
+    throw new Error(`Mesaj yanıtlanamadı: ${error.message || error.toString()}`);
   }
 
   return { status: "replied", messageId, jid: normalizedJid };

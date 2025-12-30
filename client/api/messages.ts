@@ -184,6 +184,26 @@ export const pinMessage = async (
   return response.json();
 };
 
+// Reaction Message (README'ye göre)
+export const sendReaction = async (sessionId: string, jid: string, messageId: string, emoji: string = "👍"): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/reaction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jid, messageId, emoji }),
+  });
+  if (!response.ok) throw new Error('Reaksiyon gönderilemedi');
+  return response.json();
+};
+
+// Remove Reaction
+export const removeReaction = async (sessionId: string, jid: string, messageId: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/messages/reaction?jid=${encodeURIComponent(jid)}&messageId=${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Reaksiyon kaldırılamadı');
+  return response.json();
+};
+
 // Mention ile mesaj gönder (README'ye göre)
 export const sendMessageWithMention = async (
   sessionId: string, 

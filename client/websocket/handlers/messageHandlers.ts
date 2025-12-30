@@ -111,7 +111,17 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
     const normalizedChatId = chatId.includes('@g.us') ? chatId : normalizeJid(chatId);
     
     // Silinen mesajları filtrele (messageStubType === 0 veya messageStubParameters varsa)
+    // Ama reaction mesajlarını filtreleme (bunlar ayrı mesaj olarak gösterilmemeli ama silinmiş olarak da işaretlenmemeli)
     const validMessages = chatMessages.filter((msg: any) => {
+      // Reaction mesajlarını filtrele (ayrı mesaj olarak gösterilmemeli)
+      if (msg.message?.reactionMessage || msg.type === 'reactionMessage') {
+        console.log('[WebSocket] ⚠️ Reaction mesajı messages.upsert\'te atlandı (ayrı mesaj olarak gösterilmeyecek):', {
+          id: msg.id || msg.key?.id,
+          reactionText: msg.message?.reactionMessage?.text || msg.text
+        });
+        return false;
+      }
+      
       // Eğer mesaj silinmişse (messageStubType === 0), messages.upsert'te gelmemeli
       // Bu mesajlar messages.update event'inde işlenecek
       if (msg.messageStubType === 0 || msg.messageStubParameters) {
@@ -757,6 +767,19 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
   if (sessionId !== currentActiveAccount?.id) return;
 
   console.log('[WebSocket] 📝 Mesaj güncellemeleri alındı:', rawUpdates?.length || 0);
+  rawUpdates?.forEach((u: any, idx: number) => {
+    console.log(`[WebSocket] 📝 Update ${idx + 1}:`, {
+      updateType: u.updateType,
+      updateId: u.key?.id,
+      jid: u.jid,
+      remoteJid: u.key?.remoteJid,
+      normalizedJid: u.jid?.replace(/:\d+@/, '@'),
+      updateDataKeys: u.updateData ? Object.keys(u.updateData) : [],
+      hasReactions: !!u.updateData?.reactions,
+      reactions: u.updateData?.reactions,
+      fullUpdate: u
+    });
+  });
   
   if (!rawUpdates || !Array.isArray(rawUpdates) || rawUpdates.length === 0) return;
 
@@ -764,9 +787,54 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
   // Ancak mesajları sadece seçili chat için güncelle
   const isSelectedChat = currentSelectedChat && rawUpdates.some((update: any) => {
     const updateJid = update.jid || update.key?.remoteJid;
-    return updateJid === currentSelectedChat.id || 
+    if (!updateJid) {
+      console.warn('[WebSocket] ⚠️ Update JID yok:', update);
+      return false;
+    }
+    
+    // JID normalizasyonu: device ID'yi kaldır (905538490699:66@s.whatsapp.net -> 905538490699@s.whatsapp.net)
+    // @lid formatını da normalize et (264655918346368@lid -> telefon numarasına çevir)
+    let normalizedUpdateJid = updateJid.replace(/:\d+@/, '@');
+    let normalizedSelectedChatId = currentSelectedChat.id?.replace(/:\d+@/, '@');
+    
+    // @lid formatını telefon numarasına çevir (LID mapping kullanarak)
+    if (normalizedUpdateJid.includes('@lid')) {
+      // @lid formatındaki JID'i telefon numarasına çevirmek için backend'den gelen mapping'i kullan
+      // Şimdilik telefon numarasını extractPhoneFromJid ile çıkar
+      const lidPhone = extractPhoneFromJid(normalizedUpdateJid);
+      if (lidPhone) {
+        // Telefon numarasından @s.whatsapp.net formatına çevir
+        normalizedUpdateJid = `${lidPhone}@s.whatsapp.net`;
+      }
+    }
+    
+    // Telefon numarasına göre eşleştirme (@lid formatı için)
+    const updatePhone = extractPhoneFromJid(updateJid) || extractPhoneFromJid(normalizedUpdateJid);
+    const selectedPhone = extractPhoneFromJid(currentSelectedChat.id) || extractPhoneFromJid(normalizedSelectedChatId);
+    
+    const matches = normalizedUpdateJid === normalizedSelectedChatId || 
+      updateJid === currentSelectedChat.id ||
+      normalizedUpdateJid === currentSelectedChat.id ||
       (!currentSelectedChat.id.includes('@g.us') && 
-       extractPhoneFromJid(updateJid) === extractPhoneFromJid(currentSelectedChat.id));
+       (extractPhoneFromJid(updateJid) === extractPhoneFromJid(currentSelectedChat.id) ||
+        updatePhone === selectedPhone ||
+        (updatePhone && selectedPhone && updatePhone === selectedPhone)));
+    
+    if (!matches && update.updateType === 'reaction') {
+      console.log('[WebSocket] 🔍 Reaction update JID eşleşmedi:', {
+        updateJid,
+        normalizedUpdateJid,
+        updatePhone,
+        selectedChatId: currentSelectedChat.id,
+        normalizedSelectedChatId,
+        selectedPhone,
+        updateType: update.updateType,
+        updateId: update.key?.id,
+        phonesMatch: updatePhone === selectedPhone
+      });
+    }
+    
+    return matches;
   });
   
   // Seçili chat varsa ve güncellemeler bu chat'e aitse, mesajları güncelle
@@ -1040,11 +1108,22 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
           
           // Reaksiyonlar
           if (update.updateType === 'reaction' && update.updateData?.reactions) {
+            console.log('[WebSocket] 🎭 Reaction update alındı:', {
+              updateId,
+              index,
+              messageId: updated[index]?.id || updated[index]?.key?.id,
+              reactions: update.updateData.reactions,
+              updateData: update.updateData
+            });
             updated[index] = {
               ...updated[index],
               reactions: update.updateData.reactions,
             };
             hasChanges = true;
+            console.log('[WebSocket] ✅ Reaction eklendi, güncellenmiş mesaj:', {
+              messageId: updated[index]?.id || updated[index]?.key?.id,
+              reactions: updated[index].reactions
+            });
           }
           
           // Poll votes
@@ -1089,7 +1168,17 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
       hasSelectedChat: !!currentSelectedChat,
       selectedChatId: currentSelectedChat?.id,
       updateJids: rawUpdates.map((u: any) => u.jid || u.key?.remoteJid).filter(Boolean),
-      updateTypes: rawUpdates.map((u: any) => u.updateType)
+      updateTypes: rawUpdates.map((u: any) => u.updateType),
+      updates: rawUpdates.map((u: any) => ({
+        updateType: u.updateType,
+        updateId: u.key?.id,
+        jid: u.jid,
+        remoteJid: u.key?.remoteJid,
+        normalizedJid: u.jid?.replace(/:\d+@/, '@'),
+        updateDataKeys: u.updateData ? Object.keys(u.updateData) : [],
+        hasReactions: !!u.updateData?.reactions,
+        reactions: u.updateData?.reactions
+      }))
     });
   }
 };

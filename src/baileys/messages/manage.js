@@ -125,45 +125,115 @@ export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone
  * Mesaj yıldızla/yıldızı kaldır (Star/Unstar a Message)
  * README'ye göre: chatModify star kullanılır
  */
-export const starMessage = async (accountId, jid, messageId, star = true) => {
+export const starMessage = async (accountId, jid, messageId, star = true, fromMeParam = null) => {
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
   const sessionId = getAccountId(accountId);
 
-  const message = await prisma.message.findFirst({
-    where: {
-      sessionId,
-      remoteJid: normalizedJid,
-      id: messageId,
-    },
-  });
+  // Frontend'den gelen fromMe parametresini kullan (öncelikli)
+  let fromMe = fromMeParam !== null && fromMeParam !== undefined ? Boolean(fromMeParam) : null;
 
-  if (!message) {
-    throw new Error("Mesaj bulunamadı");
+  // Eğer frontend'den fromMe gelmediyse, memory store'dan ara
+  if (fromMe === null) {
+    const instance = getOrCreateInstance(accountId);
+    const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+    
+    logger.debug({ 
+      sessionId, 
+      messageId, 
+      normalizedJid, 
+      memoryStoreMessageCount: memoryMessages.length,
+      memoryStoreIds: memoryMessages.slice(0, 5).map(m => m.key?.id || m.id)
+    }, "Memory store'da mesaj aranıyor (fromMe parametresi yok)...");
+    
+    const foundMessage = memoryMessages.find(m => {
+      const msgId = m.key?.id || m.id;
+      return msgId === messageId;
+    });
+    
+    if (foundMessage) {
+      if (foundMessage.key) {
+        // Memory store'dan gelen mesaj key'ini kullan
+        fromMe = foundMessage.key.fromMe !== undefined ? Boolean(foundMessage.key.fromMe) : false;
+        logger.debug({ 
+          sessionId, 
+          messageId, 
+          fromMe, 
+          normalizedJid,
+          key: foundMessage.key
+        }, "✅ Mesaj memory store'da bulundu, fromMe değeri alındı");
+      } else if (foundMessage.fromMe !== undefined) {
+        // Eğer key yoksa ama formatMessage'dan gelen fromMe varsa kullan
+        fromMe = Boolean(foundMessage.fromMe);
+        logger.debug({ 
+          sessionId, 
+          messageId, 
+          fromMe, 
+          normalizedJid 
+        }, "✅ Mesaj memory store'da bulundu (key yok ama fromMe var)");
+      } else {
+        fromMe = false;
+        logger.warn({ 
+          sessionId, 
+          messageId, 
+          normalizedJid,
+          foundMessage 
+        }, "⚠️ Mesaj memory store'da bulundu ama key ve fromMe yok, fromMe: false kullanılıyor");
+      }
+    } else {
+      // Memory store'da yoksa, varsayılan olarak fromMe: false
+      fromMe = false;
+      logger.warn({ 
+        sessionId, 
+        messageId, 
+        normalizedJid,
+        totalMessagesInStore: memoryMessages.length,
+        sampleIds: memoryMessages.slice(0, 10).map(m => ({
+          id: m.key?.id || m.id,
+          fromMe: m.key?.fromMe ?? m.fromMe
+        }))
+      }, "❌ Mesaj memory store'da bulunamadı! fromMe: false kullanılıyor (bu işlem başarısız olabilir)");
+    }
+  } else {
+    logger.debug({ 
+      sessionId, 
+      messageId, 
+      fromMe, 
+      normalizedJid 
+    }, "✅ Frontend'den fromMe parametresi alındı");
   }
 
-  let key;
+  // Baileys API'ye göre: chatModify star kullanılır
+  // messages dizisi içinde id ve fromMe gerekli
+  logger.info({ 
+    sessionId, 
+    messageId, 
+    fromMe, 
+    star, 
+    normalizedJid 
+  }, "Mesaj yıldızlanıyor/yıldızı kaldırılıyor...");
+
   try {
-    key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
-  } catch {
-    throw new Error("Mesaj anahtarı geçersiz");
-  }
-
-  // README'ye göre: chatModify star kullanılır
-  await sock.chatModify(
-    {
-      star: {
-        messages: [
-          {
-            id: messageId,
-            fromMe: key.fromMe || false,
-    },
-        ],
-        star: star, // true: Star Message; false: Unstar Message
+    await sock.chatModify(
+      {
+        star: {
+          messages: [
+            {
+              id: messageId,
+              fromMe: fromMe,
+            },
+          ],
+          star: star, // true: Star Message; false: Unstar Message
+        },
       },
-    },
-    normalizedJid
-  );
+      normalizedJid
+    );
+
+    logger.info({ sessionId, messageId, star, normalizedJid }, "✅ Mesaj başarıyla yıldızlandı/yıldızı kaldırıldı");
+  } catch (error) {
+    logger.error({ error, sessionId, messageId, fromMe, star, normalizedJid }, "❌ Mesaj yıldızlanamadı/yıldızı kaldırılamadı");
+    throw error;
+  }
 
   return { status: star ? "starred" : "unstarred", messageId, jid: normalizedJid };
 };

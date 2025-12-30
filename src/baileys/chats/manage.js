@@ -284,5 +284,29 @@ export const deleteChat = async (accountId, jid, lastMessage = null) => {
   return { status: "deleted", jid: normalizedJid };
 };
 
+/**
+ * Disappearing Messages ayarla (Geçici Mesajlar)
+ * README'ye göre: sendMessage ile disappearingMessagesInChat kullanılır
+ * duration: seconds cinsinden (0 = kapalı, 86400 = 24h, 604800 = 7d, 7776000 = 90d)
+ */
+export const setDisappearingMessages = async (accountId, jid, duration = 0) => {
+  const sock = ensureSocket(accountId);
+  const normalizedJid = normalizeJid(jid);
+
+  // README'ye göre: duration 0 ise kapalı, değilse seconds cinsinden
+  // false = kapalı, number = seconds cinsinden süre
+  const disappearingValue = duration === 0 ? false : duration;
+
+  await sock.sendMessage(normalizedJid, {
+    disappearingMessagesInChat: disappearingValue,
+  });
+
+  return {
+    status: disappearingValue === false ? "disabled" : "enabled",
+    jid: normalizedJid,
+    duration: disappearingValue === false ? 0 : duration,
+  };
+};
+
 
 

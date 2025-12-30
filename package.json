@@ -18,7 +18,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@prisma/client": "^5.0.0",
-    "baileys": "^7.0.0-rc.9",
+    "baileys": "file:./baileysnew",
     "express": "^4.19.2",
     "lucide-react": "^0.263.1",
     "node-cache": "^5.1.2",

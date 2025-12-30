@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo } from 'react';
-import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Check, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { CheckCheck, Reply, Edit2, Star, StarOff, MoreVertical, Users, Video, Check, Phone, Search, Eye, Forward, Trash2, Pin, PinOff, X, Archive, ArchiveRestore, VolumeX, Volume2, Hourglass, Smile, Copy, Info, CheckCircle2 } from 'lucide-react';
 import { extractMessageText } from '../utils/messageUtils';
 import { shouldShowDateSeparator } from '../utils/dateUtils';
 import DateSeparator from './DateSeparator';
@@ -13,6 +13,11 @@ interface Chat {
   name: string;
   verifiedName?: string | null;
   profilePicture?: string;
+  archived?: boolean;
+  unreadCount?: number;
+  pinned?: Date | null;
+  isMuted?: boolean;
+  ephemeralDuration?: number | null;
 }
 
 interface Message {
@@ -39,6 +44,7 @@ interface Message {
     from?: string;
     text?: string;
   };
+  reactions?: any; // Mesaj reaksiyonları
 }
 
 interface MessageListProps {
@@ -65,8 +71,19 @@ interface MessageListProps {
   onPinMessage?: (msg: Message, type: number, time?: number) => void;
   onRejectCall?: (callId: string, callFrom: string) => void;
   onDeleteMessageForMe?: (msg: Message) => void;
+  onSendReaction?: (msg: Message, emoji: string) => void;
+  onCopyMessage?: (msg: Message) => void;
+  onShowMessageInfo?: (msg: Message) => void;
+  onSelectMessages?: () => void;
   searchTerm?: string;
   onSearchChange?: (term: string) => void;
+  // Chat modify handlers
+  onArchiveChat?: (chat: Chat, archive: boolean) => void;
+  onMuteChat?: (chat: Chat, durationMs: number | null) => void;
+  onMarkChatRead?: (chat: Chat, markRead: boolean) => void;
+  onPinChat?: (chat: Chat, pin: boolean) => void;
+  onDeleteChat?: (chat: Chat) => void;
+  onSetDisappearingMessages?: (chat: Chat, duration: number) => void;
 }
 
 export default function MessageList({
@@ -95,18 +112,49 @@ export default function MessageList({
   onDeleteMessageForMe,
   searchTerm = '',
   onSearchChange,
+  onArchiveChat,
+  onMuteChat,
+  onMarkChatRead,
+  onPinChat,
+  onDeleteChat,
+  onSetDisappearingMessages,
+  onSendReaction,
+  onCopyMessage,
+  onShowMessageInfo,
+  onSelectMessages,
 }: MessageListProps) {
-  const [showSearch, setShowSearch] = React.useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showChatMenu, setShowChatMenu] = useState(false);
+  const [emojiPopupMessageId, setEmojiPopupMessageId] = useState<string | null>(null);
   
-  // Mesajları filtrele
+  // Mesajları filtrele ve reaction mesajlarını tespit et
   const filteredMessages = useMemo(() => {
-    if (!searchTerm.trim()) return messages;
+    let msgs = messages;
     
-    const term = searchTerm.toLowerCase();
-    return messages.filter(msg => {
-      const text = extractMessageText(msg.message || msg) || msg.text || msg.body || '';
-      return text.toLowerCase().includes(term);
+    // Reaction mesajlarını tespit et ve filtrele
+    // Eğer mesaj reactionMessage içeriyorsa, bu bir reaction mesajıdır
+    msgs = msgs.filter(msg => {
+      // Reaction mesajı mı kontrol et
+      const isReactionMessage = msg.message?.reactionMessage || msg.type === 'reactionMessage' || msg.type === 'react';
+      
+      // Eğer reaction mesajı ise, filtrele (ayrı mesaj olarak gösterme)
+      if (isReactionMessage) {
+        return false;
+      }
+      
+      return true;
     });
+    
+    // Arama terimi varsa filtrele
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      msgs = msgs.filter(msg => {
+        const text = extractMessageText(msg.message || msg) || msg.text || msg.body || '';
+        return text.toLowerCase().includes(term);
+      });
+    }
+    
+    return msgs;
   }, [messages, searchTerm]);
   // Otomatik scroll hook'u
   const { messagesEndRef, messagesContainerRef, scrollToBottom } = useAutoScroll({
@@ -215,13 +263,176 @@ export default function MessageList({
               <Phone size={20} />
             </button> */}
 
-            {/* More Menu */}
-            {/* <button 
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-800"
-              title="Daha fazla"
-            >
-              <MoreVertical size={20} />
-            </button> */}
+            {/* More Menu - Chat Modify Özellikleri */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowChatMenu(!showChatMenu)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 hover:text-gray-800"
+                title="Sohbet ayarları"
+              >
+                <MoreVertical size={20} />
+              </button>
+
+              {/* Chat Menu Dropdown */}
+              {showChatMenu && selectedChat && (
+                <>
+                  {/* Backdrop */}
+                  <div 
+                    className="fixed inset-0 z-40" 
+                    onClick={() => setShowChatMenu(false)}
+                  />
+                  
+                  {/* Menu */}
+                  <div 
+                    className="absolute right-0 top-full mt-2 bg-white rounded-xl shadow-2xl py-2 w-56 z-50 border border-gray-200"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Header */}
+                    <div className="px-4 py-2 border-b border-gray-100">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sohbet İşlemleri</p>
+                    </div>
+
+                    {/* Menu Items */}
+                    <div className="py-1">
+                      {onArchiveChat && (
+                        <button
+                          onClick={() => {
+                            onArchiveChat(selectedChat, !selectedChat.archived);
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                            {selectedChat.archived ? (
+                              <ArchiveRestore size={16} className="text-gray-600" />
+                            ) : (
+                              <Archive size={16} className="text-gray-600" />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium">
+                            {selectedChat.archived ? 'Arşivden Çıkar' : 'Arşivle'}
+                          </span>
+                        </button>
+                      )}
+
+                      {onMarkChatRead && (
+                        <button
+                          onClick={() => {
+                            onMarkChatRead(selectedChat, (selectedChat.unreadCount || 0) === 0);
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                            {(selectedChat.unreadCount || 0) > 0 ? (
+                              <CheckCheck size={16} className="text-gray-600" />
+                            ) : (
+                              <X size={16} className="text-gray-600" />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium">
+                            {(selectedChat.unreadCount || 0) > 0 
+                              ? 'Okundu İşaretle' 
+                              : 'Okunmadı İşaretle'}
+                          </span>
+                        </button>
+                      )}
+
+                      {onPinChat && (
+                        <button
+                          onClick={() => {
+                            onPinChat(selectedChat, !selectedChat.pinned);
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                            {selectedChat.pinned ? (
+                              <PinOff size={16} className="text-gray-600" />
+                            ) : (
+                              <Pin size={16} className="text-gray-600" />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium">
+                            {selectedChat.pinned ? 'Sabitlemeyi Kaldır' : 'Sabitle'}
+                          </span>
+                        </button>
+                      )}
+
+                      {onMuteChat && (
+                        <button
+                          onClick={() => {
+                            if (selectedChat.isMuted) {
+                              onMuteChat(selectedChat, null);
+                            } else {
+                              onMuteChat(selectedChat, 8 * 60 * 60 * 1000);
+                            }
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                            {selectedChat.isMuted ? (
+                              <Volume2 size={16} className="text-gray-600" />
+                            ) : (
+                              <VolumeX size={16} className="text-gray-600" />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium">
+                            {selectedChat.isMuted ? 'Sessizliği Kaldır' : 'Sessize Al (8 saat)'}
+                          </span>
+                        </button>
+                      )}
+
+                      {onSetDisappearingMessages && (
+                        <button
+                          onClick={() => {
+                            // Şu anki süreyi kontrol et (varsa 7 gün, yoksa 0)
+                            const currentDuration = selectedChat.ephemeralDuration || 0;
+                            // Eğer açıksa kapat (0), kapalıysa 7 gün aç (604800 saniye)
+                            const newDuration = currentDuration > 0 ? 0 : 604800; // 7 gün = 604800 saniye
+                            onSetDisappearingMessages(selectedChat, newDuration);
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                            <Hourglass size={16} className="text-gray-600" />
+                          </div>
+                          <span className="text-sm font-medium">
+                            {(selectedChat.ephemeralDuration || 0) > 0 
+                              ? 'Geçici Mesajları Kapat' 
+                              : 'Geçici Mesajları Aç (7 gün)'}
+                          </span>
+                        </button>
+                      )}
+
+                      {/* Divider */}
+                      {(onDeleteChat) && (
+                        <div className="my-1 border-t border-gray-100"></div>
+                      )}
+
+                      {onDeleteChat && (
+                        <button
+                          onClick={() => {
+                            if (confirm('Bu sohbeti silmek istediğinizden emin misiniz?')) {
+                              onDeleteChat(selectedChat);
+                            }
+                            setShowChatMenu(false);
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
+                        >
+                          <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                            <Trash2 size={16} className="text-red-600" />
+                          </div>
+                          <span className="text-sm font-medium">Sohbeti Sil</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -488,6 +699,83 @@ export default function MessageList({
                         )}
                       </div>
                     )}
+                    
+                    {/* Reaction'ları göster - mesajın altında küçük emoji bubble'ları (WhatsApp tarzı) */}
+                    {!isProtocol && (() => {
+                      // Reaction'ları al - önce msg.reactions, yoksa msg.message.reactions
+                      const reactions = msg.reactions || msg.message?.reactions;
+                      if (!reactions) return null;
+                      
+                      // Debug: Reaction'ları console'a yazdır
+                      console.log('[MessageList] Reaction render ediliyor:', {
+                        messageId: msg.id || msg.key?.id,
+                        reactions,
+                        msgReactions: msg.reactions,
+                        msgMessageReactions: msg.message?.reactions,
+                        msgKeys: Object.keys(msg),
+                        messageKeys: msg.message ? Object.keys(msg.message) : null
+                      });
+                      
+                      return (
+                        <div className={`flex flex-wrap gap-1.5 mt-1 ${fromMe ? 'justify-end' : 'justify-start'}`}>
+                          {Array.isArray(reactions) ? (
+                            // Array formatı
+                            reactions.map((reaction: any, reactionIndex: number) => {
+                              const emoji = reaction?.emoji || reaction?.text || '👍';
+                              const key = reaction?.key || reaction?.id || `reaction-${reactionIndex}`;
+                              return (
+                                <div
+                                  key={key}
+                                  className="bg-gray-800 dark:bg-gray-700 rounded-lg px-2 py-1 flex items-center gap-1 shadow-md"
+                                  style={{ 
+                                    marginBottom: '2px',
+                                    marginTop: '2px'
+                                  }}
+                                >
+                                  <span className="text-base leading-none">{emoji}</span>
+                                </div>
+                              );
+                            })
+                          ) : typeof reactions === 'object' && reactions !== null ? (
+                            // Object formatı - key-value pairs veya emoji: count formatı
+                            Object.entries(reactions).map(([key, reaction]: [string, any]) => {
+                              // Eğer reaction bir obje ise
+                              if (typeof reaction === 'object' && reaction !== null) {
+                                const emoji = reaction?.emoji || reaction?.text || key;
+                                const count = reaction?.count || 1;
+                                return (
+                                  <div
+                                    key={key}
+                                    className="bg-gray-800 dark:bg-gray-700 rounded-lg px-2 py-1 flex items-center gap-1 shadow-md"
+                                    style={{ 
+                                      marginBottom: '2px',
+                                      marginTop: '2px'
+                                    }}
+                                  >
+                                    <span className="text-base leading-none">{emoji}</span>
+                                    {count > 1 && <span className="text-gray-300 text-[10px] font-medium">{count}</span>}
+                                  </div>
+                                );
+                              } else {
+                                // Direkt emoji string ise
+                                return (
+                                  <div
+                                    key={key}
+                                    className="bg-gray-800 dark:bg-gray-700 rounded-lg px-2 py-1 flex items-center gap-1 shadow-md"
+                                    style={{ 
+                                      marginBottom: '2px',
+                                      marginTop: '2px'
+                                    }}
+                                  >
+                                    <span className="text-base leading-none">{key}</span>
+                                  </div>
+                                );
+                              }
+                            })
+                          ) : null}
+                        </div>
+                      );
+                    })()}
 
                     {!isProtocol && (
                       <div className={`absolute ${fromMe ? 'left-0' : 'right-0'} -top-8 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white rounded shadow-lg p-1 z-10`}>
@@ -523,6 +811,63 @@ export default function MessageList({
                           </button>
                         </>
                       )}
+                      {onSendReaction && (() => {
+                        const msgId = `${msg.id || msg.key?.id || `msg-${index}`}-${msg.timestamp || index}`;
+                        const isOpen = emojiPopupMessageId === msgId;
+                        
+                        return (
+                          <div className="relative">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEmojiPopupMessageId(isOpen ? null : msgId);
+                              }}
+                              className="p-1 hover:bg-gray-100 rounded"
+                              title="Reaksiyon"
+                            >
+                              <Smile size={14} />
+                            </button>
+                            {isOpen && (
+                              <>
+                                <div 
+                                  className="fixed inset-0 z-40" 
+                                  onClick={() => {
+                                    setEmojiPopupMessageId(null);
+                                  }}
+                                />
+                                <div 
+                                  className={`absolute bottom-full mb-2 bg-white rounded-lg shadow-xl border border-gray-200 p-2 z-50 ${
+                                    fromMe ? 'right-0' : 'left-0'
+                                  }`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ 
+                                    width: '220px',
+                                    maxWidth: 'calc(100vw - 20px)'
+                                  }}
+                                >
+                                  <div className="grid grid-cols-6 gap-1">
+                                    {['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏', '🎉', '💯', '😍', '🤔', '😴', '👎', '💔', '😊', '😎', '🤗', '😋', '🤩', '😭', '😡', '🤯', '🥳'].map((emoji, emojiIndex) => (
+                                      <button
+                                        key={`${msg.id || msg.key?.id || index}-${emoji}-${emojiIndex}`}
+                                        onClick={() => {
+                                          if (onSendReaction) {
+                                            onSendReaction(msg, emoji);
+                                            setEmojiPopupMessageId(null);
+                                          }
+                                        }}
+                                        className="w-8 h-8 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-lg hover:scale-110"
+                                        title={emoji}
+                                      >
+                                        {emoji}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <button
                         onClick={() => {
                           onSelectMessage(msg);
@@ -573,8 +918,9 @@ export default function MessageList({
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mesaj İşlemleri</p>
             </div>
 
-            {/* Menu Items */}
+            {/* Menu Items - Resimdeki sıraya göre */}
             <div className="py-1">
+              {/* 1. Cevapla (Reply) */}
               <button
                 onClick={() => {
                   onSetReplyingTo(selectedMessage);
@@ -586,9 +932,80 @@ export default function MessageList({
                 <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
                   <Reply size={16} className="text-gray-600" />
                 </div>
-                <span className="text-sm font-medium">Yanıtla</span>
+                <span className="text-sm font-medium">Cevapla</span>
               </button>
 
+              {/* 2. İfade Bırak (Reaction) */}
+              {onSendReaction && (
+                <button
+                  onClick={() => {
+                    // Basit emoji seçici - daha sonra modal ile geliştirilebilir
+                    const emojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+                    const selectedEmoji = prompt('Emoji seçin:', emojis.join(' '));
+                    if (selectedEmoji && emojis.includes(selectedEmoji)) {
+                      onSendReaction(selectedMessage, selectedEmoji);
+                    }
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                    <Smile size={16} className="text-gray-600" />
+                  </div>
+                  <span className="text-sm font-medium">İfade Bırak</span>
+                </button>
+              )}
+
+              {/* 3. Yıldız Ekle (Star) */}
+              {onStarMessage && (
+                <button
+                  onClick={() => {
+                    onStarMessage(selectedMessage, !selectedMessage.starred);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                >
+                  <div className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
+                    selectedMessage.starred 
+                      ? 'bg-yellow-50 group-hover:bg-yellow-100' 
+                      : 'bg-gray-100 group-hover:bg-gray-200'
+                  }`}>
+                    {selectedMessage.starred ? (
+                      <StarOff size={16} className="text-yellow-600" />
+                    ) : (
+                      <Star size={16} className="text-gray-600" />
+                    )}
+                  </div>
+                  <span className="text-sm font-medium">
+                    {selectedMessage.starred ? 'Yıldızı Kaldır' : 'Yıldız Ekle'}
+                  </span>
+                </button>
+              )}
+
+              {/* 4. Sabitle (Pin Message) */}
+              {onPinMessage && (
+                <button
+                  onClick={() => {
+                    if (selectedMessage.key || selectedMessage.id) {
+                      // Eğer zaten pinliyse kaldır, değilse pinle
+                      const isPinned = false; // TODO: pinned state kontrolü
+                      onPinMessage(selectedMessage, isPinned ? 0 : 1, 86400);
+                    }
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                    <Pin size={16} className="text-gray-600" />
+                  </div>
+                  <span className="text-sm font-medium">Sabitle</span>
+                </button>
+              )}
+
+              {/* 5. İlet (Forward) */}
               <button
                 onClick={() => {
                   onForwardMessage(selectedMessage);
@@ -606,89 +1023,45 @@ export default function MessageList({
                 <span className="text-sm font-medium">İlet</span>
               </button>
 
-              {selectedMessage.fromMe && (
+              {/* 6. Kopyala (Copy) */}
+              {onCopyMessage && (
+                <button
+                  onClick={() => {
+                    onCopyMessage(selectedMessage);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                    <Copy size={16} className="text-gray-600" />
+                  </div>
+                  <span className="text-sm font-medium">Kopyala</span>
+                </button>
+              )}
+
+              {/* 7. Bilgi (Info) */}
+              {onShowMessageInfo && (
                 <>
+                  <div className="my-1 border-t border-gray-100"></div>
                   <button
                     onClick={() => {
-                      onSetEditingMessage(selectedMessage);
-                      onSetEditingText(selectedMessage.text || selectedMessage.body || '');
+                      onShowMessageInfo(selectedMessage);
                       onShowMessageMenu(false);
                       onSelectMessage(null as any);
                     }}
                     className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
                   >
                     <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
-                      <Edit2 size={16} className="text-gray-600" />
+                      <Info size={16} className="text-gray-600" />
                     </div>
-                    <span className="text-sm font-medium">Düzenle</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      onStarMessage(selectedMessage, !selectedMessage.starred);
-                      onShowMessageMenu(false);
-                      onSelectMessage(null as any);
-                    }}
-                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
-                  >
-                    <div className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
-                      selectedMessage.starred 
-                        ? 'bg-yellow-50 group-hover:bg-yellow-100' 
-                        : 'bg-gray-100 group-hover:bg-gray-200'
-                    }`}>
-                      {selectedMessage.starred ? (
-                        <StarOff size={16} className="text-yellow-600" />
-                      ) : (
-                        <Star size={16} className="text-gray-600" />
-                      )}
-                    </div>
-                    <span className="text-sm font-medium">
-                      {selectedMessage.starred ? 'Yıldızı kaldır' : 'Yıldızla'}
-                    </span>
+                    <span className="text-sm font-medium">Bilgi</span>
                   </button>
                 </>
               )}
 
-              {/* {onPinMessage && (
-                <>
-                  <button
-                    onClick={() => {
-                      if (selectedMessage.key) {
-                        onPinMessage(selectedMessage, 1, 86400);
-                        onShowMessageMenu(false);
-                        onSelectMessage(null as any);
-                      }
-                    }}
-                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
-                  >
-                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
-                      <Pin size={16} className="text-gray-600" />
-                    </div>
-                    <span className="text-sm font-medium">Sabitle</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (selectedMessage.key) {
-                        onPinMessage(selectedMessage, 0);
-                        onShowMessageMenu(false);
-                        onSelectMessage(null as any);
-                      }
-                    }}
-                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
-                  >
-                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
-                      <PinOff size={16} className="text-gray-600" />
-                    </div>
-                    <span className="text-sm font-medium">Sabitlemeyi kaldır</span>
-                  </button>
-                </>
-              )} */}
-
-              {/* Divider */}
+              {/* 8. Sil (Delete) */}
               <div className="my-1 border-t border-gray-100"></div>
-
-              {/* Delete Options */}
               <button
                 onClick={() => {
                   onDeleteMessage(selectedMessage, false);
@@ -703,36 +1076,24 @@ export default function MessageList({
                 <span className="text-sm font-medium">Sil</span>
               </button>
 
-              {selectedMessage.fromMe && (
-                <button
-                  onClick={() => {
-                    onDeleteMessage(selectedMessage, true);
-                    onShowMessageMenu(false);
-                    onSelectMessage(null as any);
-                  }}
-                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
-                >
-                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
-                    <Trash2 size={16} className="text-red-600" />
-                  </div>
-                  <span className="text-sm font-medium">Herkes için sil</span>
-                </button>
-              )}
-
-              {onDeleteMessageForMe && (
-                <button
-                  onClick={() => {
-                    onDeleteMessageForMe(selectedMessage);
-                    onShowMessageMenu(false);
-                    onSelectMessage(null as any);
-                  }}
-                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
-                >
-                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
-                    <Trash2 size={16} className="text-red-600" />
-                  </div>
-                  <span className="text-sm font-medium">Sadece benim için sil</span>
-                </button>
+              {/* 9. Mesajları seç (Select Messages) */}
+              {onSelectMessages && (
+                <>
+                  <div className="my-1 border-t border-gray-100"></div>
+                  <button
+                    onClick={() => {
+                      onSelectMessages();
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
+                  >
+                    <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                      <CheckCircle2 size={16} className="text-gray-600" />
+                    </div>
+                    <span className="text-sm font-medium">Mesajları seç</span>
+                  </button>
+                </>
               )}
             </div>
           </div>

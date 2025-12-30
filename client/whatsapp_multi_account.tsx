@@ -621,13 +621,18 @@ export default function WhatsAppMultiAccount() {
   const [editingText, setEditingText] = useState<string>('');
 
   const handleReplyMessage = async (msg: Message, replyText?: string) => {
-    if (!activeAccount || !chatsHook.selectedChat || !msg) return;
+    if (!activeAccount || !chatsHook.selectedChat || !msg || !sendRequest) return;
     
     const textToSend = replyText || messagesHook.message;
     if (!textToSend.trim()) return;
     
     try {
-      await api.replyToMessage(activeAccount.id, chatsHook.selectedChat.id, msg.id || '', textToSend);
+      await sendRequest('replyToMessage', {
+        sessionId: activeAccount.id,
+        jid: chatsHook.selectedChat.id,
+        messageId: msg.id || '',
+        text: textToSend,
+      });
       messagesHook.setMessage('');
       setReplyingTo(null);
       
@@ -882,14 +887,24 @@ export default function WhatsAppMultiAccount() {
   };
 
   const handleStarMessage = async (msg: Message, star: boolean) => {
-    if (!activeAccount || !chatsHook.selectedChat) return;
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
     
     try {
-      await api.starMessage(activeAccount.id, chatsHook.selectedChat.id, msg.id || '', star);
+      await sendRequest('starMessage', {
+        sessionId: activeAccount.id,
+        jid: chatsHook.selectedChat.id,
+        messageId: msg.id || '',
+        fromMe: msg.fromMe !== undefined ? msg.fromMe : false, // Frontend'den fromMe bilgisini gönder
+        star: star,
+      });
+      setToast({ message: star ? 'Mesaj yıldızlandı' : 'Yıldız kaldırıldı', type: 'success' });
       messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     } catch (error) {
       console.error('Mesaj yıldızlanamadı:', error);
-      alert('Mesaj yıldızlanamadı');
+      setToast({ 
+        message: 'Mesaj yıldızlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
     }
   };
 
@@ -907,15 +922,24 @@ export default function WhatsAppMultiAccount() {
   };
 
   const handlePinMessage = async (msg: Message, type: number, time: number = 86400) => {
-    if (!activeAccount || !chatsHook.selectedChat) return;
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
     
     try {
-      await api.pinMessage(activeAccount.id, chatsHook.selectedChat.id, msg.key || { id: msg.id }, type, time);
-      alert(type === 1 ? 'Mesaj sabitlendi' : 'Mesaj sabitlemesi kaldırıldı');
+      await sendRequest('pinMessage', {
+        sessionId: activeAccount.id,
+        jid: chatsHook.selectedChat.id,
+        messageKey: msg.key || { id: msg.id, remoteJid: chatsHook.selectedChat.id },
+        type: type,
+        time: time,
+      });
+      setToast({ message: type === 1 ? 'Mesaj sabitlendi' : 'Mesaj sabitlemesi kaldırıldı', type: 'success' });
       messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     } catch (error) {
       console.error('Mesaj pinlenemedi:', error);
-      alert('Mesaj pinlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+      setToast({ 
+        message: 'Mesaj pinlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
     }
   };
 
@@ -1026,6 +1050,27 @@ export default function WhatsAppMultiAccount() {
     }
   };
 
+  const handleSetDisappearingMessages = async (chat: Chat, duration: number) => {
+    if (!activeAccount) return;
+    
+    try {
+      await api.setDisappearingMessages(activeAccount.id, chat.id, duration);
+      chatsHook.loadChats(activeAccount.id, 50);
+      setToast({ 
+        message: duration === 0 
+          ? 'Geçici mesajlar kapatıldı' 
+          : `Geçici mesajlar açıldı (${duration === 86400 ? '24 saat' : duration === 604800 ? '7 gün' : duration === 7776000 ? '90 gün' : 'özel'})`, 
+        type: 'success' 
+      });
+    } catch (error) {
+      console.error('Geçici mesajlar ayarlanamadı:', error);
+      setToast({ 
+        message: 'Geçici mesajlar ayarlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
+    }
+  };
+
   const handleDeleteMessageForMe = async (msg: Message) => {
     if (!activeAccount || !chatsHook.selectedChat) return;
     
@@ -1036,6 +1081,50 @@ export default function WhatsAppMultiAccount() {
       console.error('Mesaj silinemedi:', error);
       alert('Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
+  };
+
+  const handleSendReaction = async (msg: Message, emoji: string) => {
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
+    
+    try {
+      // Backend message.key.id bekliyor, önce key.id'yi dene, yoksa msg.id kullan
+      const messageId = msg.key?.id || msg.id || '';
+      
+      await sendRequest('sendReaction', {
+        sessionId: activeAccount.id,
+        jid: chatsHook.selectedChat.id,
+        messageId: messageId,
+        emoji: emoji,
+      });
+      setToast({ message: 'Reaksiyon gönderildi', type: 'success' });
+    } catch (error) {
+      console.error('Reaksiyon gönderilemedi:', error);
+      setToast({ 
+        message: 'Reaksiyon gönderilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
+    }
+  };
+
+  const handleCopyMessage = (msg: Message) => {
+    const text = msg.text || msg.body || extractMessageText(msg) || '';
+    if (text) {
+      navigator.clipboard.writeText(text);
+      setToast({ message: 'Mesaj kopyalandı', type: 'success' });
+    } else {
+      setToast({ message: 'Kopyalanacak metin bulunamadı', type: 'error' });
+    }
+  };
+
+  const handleShowMessageInfo = (msg: Message) => {
+    // Mesaj bilgilerini göster (timestamp, status, etc.)
+    const info = `Mesaj ID: ${msg.id}\nTarih: ${msg.timestamp || msg.messageTimestamp ? new Date(msg.timestamp || msg.messageTimestamp).toLocaleString('tr-TR') : 'Bilinmiyor'}\nDurum: ${msg.status || 'Bilinmiyor'}`;
+    alert(info);
+  };
+
+  const handleSelectMessages = () => {
+    // Mesaj seçim modunu aktifleştir
+    setToast({ message: 'Mesaj seçim modu yakında eklenecek', type: 'info' });
   };
 
   const insertEmoji = (emoji: string) => {
@@ -1532,6 +1621,12 @@ export default function WhatsAppMultiAccount() {
             onLoadContacts={contactsHook.loadContacts}
             onOpenContactSelector={contactsHook.handleOpenContactSelector}
             onMarkAsRead={handleMarkAsRead}
+            onArchiveChat={handleArchiveChat}
+            onMuteChat={handleMuteChat}
+            onMarkChatRead={handleMarkChatRead}
+            onPinChat={handlePinChat}
+            onDeleteChat={handleDeleteChat}
+            onSetDisappearingMessages={handleSetDisappearingMessages}
             onRetryMessage={async (msg) => {
               if (!activeAccount || !chatsHook.selectedChat || !msg.text) return;
               try {
@@ -1553,6 +1648,10 @@ export default function WhatsAppMultiAccount() {
             onPinMessage={handlePinMessage}
             onRejectCall={handleRejectCall}
             onDeleteMessageForMe={handleDeleteMessageForMe}
+            onSendReaction={handleSendReaction}
+            onCopyMessage={handleCopyMessage}
+            onShowMessageInfo={handleShowMessageInfo}
+            onSelectMessages={handleSelectMessages}
             searchTerm={messageSearchTerm}
             onSearchChange={setMessageSearchTerm}
           />

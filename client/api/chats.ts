@@ -123,6 +123,20 @@ export const muteChat = async (sessionId: string, jid: string, durationMs: numbe
 };
 
 /**
+ * Disappearing Messages ayarla (Geçici Mesajlar)
+ * duration: seconds cinsinden (0 = kapalı, 86400 = 24h, 604800 = 7d, 7776000 = 90d)
+ */
+export const setDisappearingMessages = async (sessionId: string, jid: string, duration: number = 0): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/disappearing-messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ duration }),
+  });
+  if (!response.ok) throw new Error('Geçici mesajlar ayarlanamadı');
+  return response.json();
+};
+
+/**
  * Chat geçmişi sorgula (Query Chat History)
  */
 export const queryChatHistory = async (sessionId: string, jid: string, quantity: number = 50, oldestMessage?: any): Promise<any> => {

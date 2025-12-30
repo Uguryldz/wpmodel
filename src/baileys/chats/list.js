@@ -10,15 +10,10 @@ export const listChats = async (accountId, cursor, limit = 25) => {
   const sessionId = getAccountId(accountId);
   
   try {
-    console.log(`[listChats] WhatsApp cihazından chat listesi çekiliyor (sessionId: ${sessionId})...`);
     const instance = getOrCreateInstance(accountId);
     
-    console.log(`[listChats] Connection state: ${instance.connectionState.status}`);
-    
     if (instance.connectionState.status !== "open") {
-      console.log(`[listChats] ⚠️ Bağlantı açık değil! Status: ${instance.connectionState.status}`);
       // Bağlantı açık değilse veritabanından çek (fallback)
-      console.log(`[listChats] Veritabanından chat listesi çekiliyor (fallback)...`);
       try {
         const chats = await prisma.chat.findMany({
           cursor: cursor ? { pkId: Number(cursor) } : undefined,
@@ -27,8 +22,6 @@ export const listChats = async (accountId, cursor, limit = 25) => {
           where: { sessionId },
           orderBy: { conversationTimestamp: "desc" },
         });
-
-        console.log(`[listChats] Veritabanından ${chats.length} chat bulundu`);
         const serialized = chats.map((c) => serializePrisma(c));
         const nextCursor =
           serialized.length !== 0 && serialized.length === Number(limit)
@@ -73,8 +66,6 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     // Bağlantı açıksa memory store'dan çek
     const allChats = Array.from(instance.chatsStore.values())
       .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
-
-    console.log(`[listChats] Memory store'dan ${allChats.length} chat bulundu`);
 
     // Cursor ile sayfalama
     let startIndex = 0;

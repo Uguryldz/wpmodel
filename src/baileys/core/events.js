@@ -814,18 +814,197 @@ export const bindSocketEvents = (instance) => {
       return;
     }
     
+    // Reaction mesajlarını tespit et ve orijinal mesaja ekle
+    const reactionMessages = [];
+    const nonReactionMessages = [];
+    
     for (const msg of messages) {
+      // Debug: Tüm mesajları logla (reaction tespiti için)
+      if (msg.message?.reactionMessage || msg.text?.includes('👍') || msg.text?.includes('😮')) {
+        logger.info({ 
+          sessionId, 
+          messageId: msg.key?.id,
+          hasReactionMessage: !!msg.message?.reactionMessage,
+          reactionMessage: msg.message?.reactionMessage,
+          text: msg.text,
+          messageKeys: msg.message ? Object.keys(msg.message) : [],
+          keyRemoteJid: msg.key?.remoteJid,
+          fullMessage: JSON.stringify(msg).substring(0, 500)
+        }, "Mesaj kontrol ediliyor (reaction tespiti için)");
+      }
+      
+      // Reaction mesajı mı kontrol et
+      if (msg.message?.reactionMessage) {
+        reactionMessages.push(msg);
+        logger.info({ 
+          sessionId, 
+          reactionMessageId: msg.key?.id,
+          originalMessageId: msg.message.reactionMessage.key?.id,
+          reactionText: msg.message.reactionMessage.text,
+          from: msg.key?.remoteJid,
+          originalMessageJid: msg.message.reactionMessage.key?.remoteJid
+        }, "Reaction mesajı tespit edildi (messages.upsert)");
+        
+        // Orijinal mesajı bul ve reaction'ı ekle
+        try {
+          const originalMessageId = msg.message.reactionMessage.key?.id;
+          const originalMessageJid = msg.message.reactionMessage.key?.remoteJid || msg.key?.remoteJid;
+          
+          if (originalMessageId && originalMessageJid) {
+            const normalizedJid = jidNormalizedUser(originalMessageJid);
+            
+            // Prisma'da orijinal mesajı bul
+            const existingMessage = await prisma.message.findFirst({
+              where: {
+                sessionId,
+                remoteJid: normalizedJid,
+                id: originalMessageId,
+              },
+            });
+            
+            if (existingMessage) {
+              // Mesajın message JSON'unu parse et
+              const messageData = existingMessage.message ? (typeof existingMessage.message === "string" ? JSON.parse(existingMessage.message) : existingMessage.message) : {};
+              
+              // Reaction'ı ekle
+              if (!messageData.reactions) {
+                messageData.reactions = [];
+              }
+              
+              // Reaction'ın zaten var olup olmadığını kontrol et
+              const reactionExists = messageData.reactions.some((r) => 
+                r.key?.id === msg.key?.id || 
+                (r.text === msg.message.reactionMessage.text && r.key?.participant === msg.key?.participant)
+              );
+              
+              if (!reactionExists) {
+                messageData.reactions.push({
+                  key: msg.key,
+                  text: msg.message.reactionMessage.text,
+                  emoji: msg.message.reactionMessage.text || '👍'
+                });
+                
+                // Prisma'da güncelle
+                await prisma.message.updateMany({
+                  where: {
+                    sessionId,
+                    remoteJid: normalizedJid,
+                    id: originalMessageId,
+                  },
+                  data: {
+                    message: JSON.stringify(messageData),
+                  },
+                });
+                
+                logger.info({ 
+                  sessionId, 
+                  originalMessageId,
+                  reactionText: msg.message.reactionMessage.text,
+                  jid: normalizedJid
+                }, "Orijinal mesaja reaction eklendi (Prisma)");
+                
+                // Memory store'da da güncelle
+                const messages = instance.messagesStore.get(normalizedJid) || [];
+                const messageIndex = messages.findIndex((m) => 
+                  (m.key?.id === originalMessageId) || (m.id === originalMessageId)
+                );
+                
+                if (messageIndex !== -1) {
+                  const existingMsg = messages[messageIndex];
+                  const existingMsgData = existingMsg.message || {};
+                  if (!existingMsgData.reactions) {
+                    existingMsgData.reactions = [];
+                  }
+                  existingMsgData.reactions.push({
+                    key: msg.key,
+                    text: msg.message.reactionMessage.text,
+                    emoji: msg.message.reactionMessage.text || '👍'
+                  });
+                  messages[messageIndex] = {
+                    ...existingMsg,
+                    message: existingMsgData,
+                    reactions: existingMsgData.reactions
+                  };
+                  instance.messagesStore.set(normalizedJid, messages);
+                  
+                  logger.info({ 
+                    sessionId, 
+                    originalMessageId,
+                    jid: normalizedJid
+                  }, "Orijinal mesaja reaction eklendi (Memory store)");
+                }
+                
+                // WebSocket'e reaction update gönder
+                if (wsBroadcastFn) {
+                  // JID'i normalize et (msg.key?.remoteJid @lid formatında olabilir)
+                  // Orijinal mesajın JID'ini kullan, ama eğer @lid formatındaysa normalize et
+                  let webSocketJid = normalizedJid;
+                  if (originalMessageJid && originalMessageJid.includes('@lid')) {
+                    // @lid formatındaki JID'i normalize et
+                    webSocketJid = jidNormalizedUser(originalMessageJid);
+                    // Eğer hala @lid formatındaysa, msg.key?.remoteJid'den telefon numarasını çıkar
+                    if (webSocketJid.includes('@lid')) {
+                      // msg.key?.remoteJid'den telefon numarasını çıkar (eğer varsa)
+                      // Şimdilik normalizedJid'i kullan (Prisma'da kayıtlı olan)
+                      webSocketJid = normalizedJid;
+                    }
+                  }
+                  
+                  wsBroadcastFn({
+                    type: "messages.update",
+                    sessionId,
+                    updates: [{
+                      key: {
+                        id: originalMessageId,
+                        remoteJid: webSocketJid,
+                      },
+                      updateType: "reaction",
+                      updateData: {
+                        reactions: messageData.reactions,
+                      },
+                      jid: webSocketJid,
+                    }],
+                  });
+                  
+                  logger.info({ 
+                    sessionId, 
+                    originalMessageId,
+                    originalMessageJid,
+                    normalizedJid,
+                    webSocketJid,
+                    jid: webSocketJid
+                  }, "Reaction update WebSocket'e gönderildi");
+                }
+              }
+            }
+          }
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: msg.key?.id }, "Reaction mesajı işlenemedi");
+        }
+      } else {
+        nonReactionMessages.push(msg);
+      }
+      
       if (msg.key?.remoteJid) {
         saveMessages(instance, msg.key.remoteJid, [msg]);
       }
     }
-    await saveMessagesToPrisma(sessionId, messages);
+    
+    // Sadece non-reaction mesajlarını Prisma'ya kaydet (reaction mesajları ayrı mesaj olarak gösterilmemeli)
+    await saveMessagesToPrisma(sessionId, nonReactionMessages);
 
     // WebSocket'e bildir - TÜM mesajlar için (sadece notify değil)
     // type === "notify" yeni mesajlar için, type === "append" geçmiş mesajlar için
     if (wsBroadcastFn) {
-      const formattedMessages = messages.map(formatMessage);
-      logger.info({ sessionId, count: messages.length, type }, "Mesajlar WebSocket'e gönderiliyor");
+      // Reaction mesajlarını filtrele (ayrı mesaj olarak gösterilmemeli)
+      const formattedMessages = nonReactionMessages.map(formatMessage);
+      logger.info({ 
+        sessionId, 
+        totalCount: messages.length, 
+        reactionCount: reactionMessages.length,
+        nonReactionCount: nonReactionMessages.length,
+        type 
+      }, "Mesajlar WebSocket'e gönderiliyor");
       
       wsBroadcastFn({
         type: "messages.upsert",
@@ -836,7 +1015,7 @@ export const bindSocketEvents = (instance) => {
     }
     
     if (type === "notify") {
-      logger.info({ sessionId, count: messages.length }, "Yeni mesajlar alındı");
+      logger.info({ sessionId, count: nonReactionMessages.length }, "Yeni mesajlar alındı");
     }
   };
   sock.ev.on("messages.upsert", messagesUpsertListener);
@@ -849,6 +1028,14 @@ export const bindSocketEvents = (instance) => {
       return;
     }
 
+    // Debug: Tüm messages.update event'lerini logla
+    logger.info({ 
+      sessionId, 
+      updateCount: updates.length,
+      firstUpdateKeys: updates[0] ? Object.keys(updates[0]) : [],
+      firstUpdateStructure: updates[0] ? JSON.stringify(updates[0]).substring(0, 500) : 'null'
+    }, "messages.update event alındı (tüm update'ler)");
+
     const formattedUpdates = [];
 
     for (const update of updates) {
@@ -856,10 +1043,32 @@ export const bindSocketEvents = (instance) => {
       if (!key || !key.remoteJid) {
         continue;
       }
+      
+      // Debug: Tüm update yapısını logla
+      logger.info({ 
+        sessionId, 
+        messageId: key.id, 
+        updateKeys: Object.keys(update),
+        hasUpdateField: !!update.update,
+        updateType: typeof update.update,
+        updateStructure: JSON.stringify(update).substring(0, 2000)
+      }, "messages.update event yapısı (tüm update'ler için)");
 
       const normalizedJid = jidNormalizedUser(key.remoteJid);
       let updateType = "unknown";
       let updateData = null;
+      
+      // Debug: TÜM msgUpdate içeriğini logla (reaction tespiti için)
+      logger.info({ 
+        sessionId, 
+        messageId: key.id, 
+        jid: normalizedJid,
+        msgUpdateKeys: msgUpdate ? Object.keys(msgUpdate) : [],
+        hasReactions: !!(msgUpdate?.reactions),
+        hasReactionMessage: !!(msgUpdate?.reactionMessage),
+        msgUpdateType: typeof msgUpdate,
+        msgUpdate: msgUpdate ? JSON.stringify(msgUpdate).substring(0, 1000) : 'null'
+      }, "msgUpdate içeriği (tüm update'ler için)");
 
       // Poll votes decrypt (Baileys README'ye göre önemli)
       if (msgUpdate.pollUpdates) {
@@ -984,12 +1193,76 @@ export const bindSocketEvents = (instance) => {
         }
       }
 
-      // Reaksiyonlar
+      // Reaksiyonlar - tüm olası formatları kontrol et
+      // Baileys'de reaction'lar farklı formatta gelebilir:
+      // 1. msgUpdate.reactions (array)
+      // 2. msgUpdate.reactionMessage (object)
+      // 3. msgUpdate.message?.reactionMessage (nested)
+      // 4. update.message?.reactionMessage (parent level)
+      let reactionsData = null;
+      let hasReaction = false;
+      
       if (msgUpdate.reactions) {
+        reactionsData = msgUpdate.reactions;
+        hasReaction = true;
+      } else if (msgUpdate.reactionMessage) {
+        // reactionMessage formatından reactions array'i oluştur
+        reactionsData = [{
+          key: key,
+          text: msgUpdate.reactionMessage.text || '',
+          emoji: msgUpdate.reactionMessage.text || '👍'
+        }];
+        hasReaction = true;
+      } else if (msgUpdate.message?.reactionMessage) {
+        reactionsData = [{
+          key: key,
+          text: msgUpdate.message.reactionMessage.text || '',
+          emoji: msgUpdate.message.reactionMessage.text || '👍'
+        }];
+        hasReaction = true;
+      } else if (update.message?.reactionMessage) {
+        reactionsData = [{
+          key: key,
+          text: update.message.reactionMessage.text || '',
+          emoji: update.message.reactionMessage.text || '👍'
+        }];
+        hasReaction = true;
+      }
+      
+      // Debug: Reaction field'larını kontrol et
+      const hasReactionsField = !!(msgUpdate.reactions || msgUpdate.reactionMessage || msgUpdate.message?.reactionMessage || update.message?.reactionMessage);
+      if (hasReactionsField || JSON.stringify(msgUpdate).toLowerCase().includes('reaction')) {
+        logger.info({ 
+          sessionId, 
+          messageId: key.id, 
+          jid: normalizedJid,
+          msgUpdateKeys: Object.keys(msgUpdate || {}),
+          hasReactions: !!msgUpdate.reactions,
+          hasReactionMessage: !!msgUpdate.reactionMessage,
+          hasMessageReactionMessage: !!msgUpdate.message?.reactionMessage,
+          hasUpdateMessageReactionMessage: !!update.message?.reactionMessage,
+          msgUpdateString: JSON.stringify(msgUpdate).substring(0, 500),
+          updateString: JSON.stringify(update).substring(0, 500)
+        }, "Reaction field'ları tespit edildi (detaylı kontrol)");
+      }
+      
+      if (hasReaction && reactionsData) {
         updateType = "reaction";
         updateData = {
-          reactions: msgUpdate.reactions,
+          reactions: reactionsData,
         };
+        
+        logger.info({ 
+          sessionId, 
+          messageId: key.id, 
+          jid: normalizedJid,
+          reactions: reactionsData,
+          reactionsType: typeof reactionsData,
+          reactionsIsArray: Array.isArray(reactionsData),
+          hasReactionMessage: !!msgUpdate.reactionMessage,
+          reactionMessageText: msgUpdate.reactionMessage?.text || msgUpdate.message?.reactionMessage?.text,
+          msgUpdateKeys: Object.keys(msgUpdate || {})
+        }, "Reaction update tespit edildi");
         
         // Prisma'da mesajı güncelle (reaksiyonları ekle)
         try {

@@ -19,6 +19,10 @@ import {
   handleGroupParticipantsUpdate,
   handleConnectionUpdate,
   handleSessionsUpdate,
+  handleProfileUpdate,
+  handlePrivacyUpdate,
+  handleBroadcastQuery,
+  handleStatusUpdate,
 } from '../websocket/handlers';
 import { 
   ConnectionManager, 
@@ -195,6 +199,18 @@ export function useWebSocket({
               break;
             case 'sessions.update':
               handleSessionsUpdate(data, context);
+              break;
+            case 'profile.update':
+              handleProfileUpdate(data, context);
+              break;
+            case 'privacy.update':
+              handlePrivacyUpdate(data, context);
+              break;
+            case 'broadcast.query':
+              handleBroadcastQuery(data, context);
+              break;
+            case 'status.update':
+              handleStatusUpdate(data, context);
               break;
             case 'connected':
               console.log('[WebSocket] ✅ Bağlantı onayı alındı:', data.message);

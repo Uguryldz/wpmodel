@@ -6,4 +6,8 @@ export { handlePresenceUpdate } from './presenceHandlers';
 export { handleGroupsUpdate, handleGroupParticipantsUpdate } from './groupHandlers';
 export { handleConnectionUpdate } from './connectionHandlers';
 export { handleSessionsUpdate } from './sessionHandlers';
+export { handleProfileUpdate } from './profileHandlers';
+export { handlePrivacyUpdate } from './privacyHandlers';
+export { handleBroadcastQuery } from './broadcastHandlers';
+export { handleStatusUpdate } from './statusHandlers';
 

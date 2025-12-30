@@ -443,7 +443,7 @@ export default function ChatList({
 
             {/* Menu Items */}
             <div className="py-1">
-              {/* {onArchiveChat && (
+              {onArchiveChat && (
                 <button
                   onClick={() => {
                     onArchiveChat(contextMenuChat, !contextMenuChat.archived);
@@ -463,9 +463,9 @@ export default function ChatList({
                     {contextMenuChat.archived ? 'Arşivden Çıkar' : 'Arşivle'}
                   </span>
                 </button>
-              )} */}
+              )}
 
-              {/* {onMarkChatRead && (
+              {onMarkChatRead && (
                 <button
                   onClick={() => {
                     onMarkChatRead(contextMenuChat, contextMenuChat.unreadCount === 0);
@@ -487,9 +487,9 @@ export default function ChatList({
                       : 'Okunmadı İşaretle'}
                   </span>
                 </button>
-              )} */}
+              )}
 
-              {/* {onPinChat && (
+              {onPinChat && (
                 <button
                   onClick={() => {
                     onPinChat(contextMenuChat, !contextMenuChat.pinned);
@@ -509,9 +509,9 @@ export default function ChatList({
                     {contextMenuChat.pinned ? 'Sabitlemeyi Kaldır' : 'Sabitle'}
                   </span>
                 </button>
-              )} */}
+              )}
 
-              {/* {onMuteChat && (
+              {onMuteChat && (
                 <button
                   onClick={() => {
                     if (contextMenuChat.isMuted) {
@@ -535,12 +535,12 @@ export default function ChatList({
                     {contextMenuChat.isMuted ? 'Sessizliği Kaldır' : 'Sessize Al (8 saat)'}
                   </span>
                 </button>
-              )} */}
+              )}
 
               {/* Divider */}
-              {/* {onDeleteChat && (
+              {onDeleteChat && (
                 <div className="my-1 border-t border-gray-100"></div>
-              )} */}
+              )}
 
               {onDeleteChat && (
                 <button
