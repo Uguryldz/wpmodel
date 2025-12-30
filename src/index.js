@@ -822,7 +822,30 @@ app.get(
   })
 );
 
-// Oturumu silme
+// Oturumdan çıkış yap (auth klasörünü temizle ama veritabanından veri silme)
+app.post(
+  "/sessions/:sessionId/logout",
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    if (!sessionExists(sessionId)) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    await performLogout(sessionId);
+    
+    // WebSocket'e session listesi güncellemesi gönder (temp session'ları filtrele)
+    const allSessions = listSessions();
+    const validSessions = allSessions.filter(session => !session.id?.startsWith('temp-'));
+    broadcastToWebSocket({
+      type: "sessions.update",
+      sessions: validSessions,
+    });
+    
+    res.json({ status: "logged_out" });
+  })
+);
+
+// Oturumu silme (veritabanından da siler)
 app.delete(
   "/sessions/:sessionId",
   asyncHandler(async (req, res) => {

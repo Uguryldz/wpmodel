@@ -286,13 +286,17 @@ model GroupMetadata {
 // SESSION MODEL (Auth için)
 // ============================================
 model Session {
-  pkId      Int    @id @default(autoincrement())
-  sessionId String
-  id        String
-  data      String // Session data
+  pkId        Int       @id @default(autoincrement())
+  sessionId   String
+  id          String
+  data        String    // Session data
+  createdDate DateTime? @default(now())
+  isDeleted   Int       @default(0) // 0: aktif, 1: silinmiş
+  deletedDate DateTime?
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@index([isDeleted])
   @@map("sessions")
 }
 

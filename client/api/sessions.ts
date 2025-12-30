@@ -125,6 +125,13 @@ export const getQRCode = async (sessionId: string): Promise<string | null> => {
   }
 };
 
+export const logoutSession = async (sessionId: string): Promise<void> => {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/logout`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Çıkış yapılamadı');
+};
+
 export const deleteSession = async (sessionId: string): Promise<void> => {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
     method: 'DELETE',

@@ -489,17 +489,53 @@ export const sessionExists = (accountId) => {
 };
 
 /**
- * Logout yap (session'ı kapat ama silme)
+ * Logout yap (session'ı kapat, auth klasörünü temizle ama veritabanından veri silme)
  */
 export const performLogout = async (accountId) => {
   const instance = getOrCreateInstance(accountId);
-  if (!instance.sock) {
-    return;
+  const sessionId = instance.id;
+
+  // Socket varsa logout yap
+  if (instance.sock) {
+    try {
+      await instance.sock.logout();
+    } catch (error) {
+      logger.error({ error, sessionId }, "Logout sırasında socket hatası");
+      // Hata olsa bile devam et
+    }
   }
 
-  await instance.sock.logout();
+  // Session tablosunda isDeleted=1 ve deletedDate'i güncelle (veritabanından veri silmeden)
+  try {
+    await prisma.session.updateMany({
+      where: { sessionId },
+      data: {
+        isDeleted: 1,
+        deletedDate: new Date(),
+      },
+    });
+    logger.info({ sessionId }, "Session tablosu güncellendi (isDeleted=1, deletedDate)");
+  } catch (error) {
+    logger.error({ error, sessionId }, "Session tablosu güncellenemedi (logout)");
+  }
+
+  // Auth klasörünü temizle (veritabanından veri silmeden)
+  try {
+    const authDir = `${AUTH_FOLDER}/${sessionId}`;
+    if (existsSync(authDir)) {
+      await rm(authDir, { recursive: true, force: true });
+      logger.info({ sessionId, authDir }, "Auth klasörü temizlendi (logout)");
+    }
+  } catch (error) {
+    logger.error({ error, sessionId }, "Auth klasörü temizlenemedi (logout)");
+  }
+
+  // Connection state'i güncelle
   instance.connectionState.status = "logged_out";
   instance.connectionState.lastQr = null;
+  
+  // Instance'ı memory'den kaldır
+  removeInstance(accountId);
 };
 
 

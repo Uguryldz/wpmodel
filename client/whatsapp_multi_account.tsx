@@ -1765,7 +1765,7 @@ export default function WhatsAppMultiAccount() {
           onLogout={async () => {
             if (!activeAccount) return;
             try {
-              await api.deleteSession(activeAccount.id);
+              await api.logoutSession(activeAccount.id);
               setShowAccountMenu(false);
               accountsHook.loadAccounts();
             } catch (error) {
