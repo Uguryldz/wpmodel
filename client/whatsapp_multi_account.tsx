@@ -1232,11 +1232,41 @@ export default function WhatsAppMultiAccount() {
     if (!activeAccount || !chatsHook.selectedChat) return;
     
     try {
-      await api.deleteMessageForMe(activeAccount.id, chatsHook.selectedChat.id, msg.id || '', msg.fromMe || false);
-      messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
+      // Mesaj ID'sini al (önce key.id - WhatsApp mesaj ID'si, sonra id)
+      // README'ye göre key.id kullanılmalı (WhatsApp mesaj ID'si)
+      const messageId = msg.key?.id || msg.id || '';
+      const fromMe = msg.fromMe !== undefined ? msg.fromMe : (msg.key?.fromMe || false);
+      
+      if (!messageId) {
+        setToast({ message: 'Mesaj ID bulunamadı', type: 'error' });
+        return;
+      }
+      
+      // Optimistic UI: Mesajı hemen kaldır
+      messagesHook.setMessages(prev => prev.filter(m => {
+        const mId = m.id || m.key?.id;
+        return mId !== messageId;
+      }));
+      
+      await api.deleteMessageForMe(activeAccount.id, chatsHook.selectedChat.id, messageId, fromMe);
+      
+      // Toast notification göster
+      setToast({ message: 'Mesaj silindi', type: 'success' });
+      
+      // Mesajları yeniden yükle (güncel durumu görmek için)
+      setTimeout(() => {
+        if (chatsHook.selectedChat) {
+          messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
+        }
+      }, 500);
     } catch (error) {
       console.error('Mesaj silinemedi:', error);
-      alert('Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
+      setToast({ 
+        message: 'Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+        type: 'error' 
+      });
+      // Hata durumunda mesajları yeniden yükle
+      messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     }
   };
 
@@ -1275,7 +1305,8 @@ export default function WhatsAppMultiAccount() {
 
   const handleShowMessageInfo = (msg: Message) => {
     // Mesaj bilgilerini göster (timestamp, status, etc.)
-    const info = `Mesaj ID: ${msg.id}\nTarih: ${msg.timestamp || msg.messageTimestamp ? new Date(msg.timestamp || msg.messageTimestamp).toLocaleString('tr-TR') : 'Bilinmiyor'}\nDurum: ${msg.status || 'Bilinmiyor'}`;
+    const timestamp = msg.timestamp || msg.messageTimestamp;
+    const info = `Mesaj ID: ${msg.id}\nTarih: ${timestamp ? new Date(timestamp).toLocaleString('tr-TR') : 'Bilinmiyor'}\nDurum: ${msg.status || 'Bilinmiyor'}`;
     alert(info);
   };
 

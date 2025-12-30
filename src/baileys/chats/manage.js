@@ -25,23 +25,46 @@ export const archiveChat = async (accountId, jid, archive = true, lastMessage = 
     if (messages.length > 0) {
       const msg = messages[0];
       try {
-        const key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        let key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        
+        // Key'in tam olması gerekiyor: remoteJid, id, fromMe
+        if (!key || !key.id) {
+          key = {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: key?.fromMe || false,
+          };
+        }
+        
+        // Key'in remoteJid'i eksikse ekle
+        if (!key.remoteJid) {
+          key.remoteJid = normalizedJid;
+        }
+        
         lastMessage = {
           key: key,
           messageTimestamp: Number(msg.messageTimestamp),
         };
       } catch (error) {
         logger.error({ error, accountId, jid }, "Son mesaj parse edilemedi");
-        // Son mesaj bulunamazsa boş key ile dene
+        // Hata durumunda mesaj ID'sini kullan
         lastMessage = {
-          key: { remoteJid: normalizedJid, id: '', fromMe: false },
-          messageTimestamp: Date.now(),
+          key: {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: false,
+          },
+          messageTimestamp: Number(msg.messageTimestamp || Date.now()),
         };
       }
     } else {
       // Mesaj yoksa boş key ile dene
       lastMessage = {
-        key: { remoteJid: normalizedJid, id: '', fromMe: false },
+        key: { 
+          remoteJid: normalizedJid, 
+          id: '', 
+          fromMe: false 
+        },
         messageTimestamp: Date.now(),
       };
     }
@@ -139,14 +162,37 @@ export const markChatRead = async (accountId, jid, markRead = true, lastMessage 
     if (messages.length > 0) {
       const msg = messages[0];
       try {
-        const key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        let key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        
+        // Key'in tam olması gerekiyor: remoteJid, id, fromMe
+        if (!key || !key.id) {
+          key = {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: key?.fromMe || false,
+          };
+        }
+        
+        // Key'in remoteJid'i eksikse ekle
+        if (!key.remoteJid) {
+          key.remoteJid = normalizedJid;
+        }
+        
         lastMessage = {
           key: key,
           messageTimestamp: Number(msg.messageTimestamp),
         };
       } catch (error) {
         logger.error({ error, accountId, jid }, "Son mesaj parse edilemedi");
-        throw new Error("Son mesaj bulunamadı");
+        // Hata durumunda mesaj ID'sini kullan
+        lastMessage = {
+          key: {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: false,
+          },
+          messageTimestamp: Number(msg.messageTimestamp || Date.now()),
+        };
       }
     } else {
       throw new Error("Chat'te mesaj bulunamadı");
@@ -167,8 +213,10 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
   const normalizedJid = normalizeJid(jid);
   const sessionId = getAccountId(accountId);
 
-  // Mesajı bul
-  const message = await prisma.message.findFirst({
+  logger.debug({ sessionId, normalizedJid, messageId }, "Mesaj sadece benden siliniyor (deleteMessageForMe)...");
+
+  // Önce id ile ara
+  let message = await prisma.message.findFirst({
     where: {
       sessionId,
       remoteJid: normalizedJid,
@@ -176,32 +224,169 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
     },
   });
 
+  // Bulamazsa, key içinde id ile ara
   if (!message) {
+    logger.debug({ sessionId, normalizedJid, messageId }, "Key içinde id ile arama yapılıyor...");
+    const allMessages = await prisma.message.findMany({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+      },
+      take: 1000,
+    });
+
+    for (const msg of allMessages) {
+      try {
+        const key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        const keyId = key?.id;
+        const msgId = msg.id;
+        
+        if (keyId === messageId || msgId === messageId || keyId?.toString() === messageId?.toString() || msgId?.toString() === messageId?.toString()) {
+          message = msg;
+          logger.debug({ sessionId, normalizedJid, messageId, foundByKey: true }, "Mesaj key içinde bulundu!");
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Hala bulamazsa, memory store'dan ara
+  if (!message) {
+    logger.debug({ sessionId, normalizedJid, messageId }, "Memory store'da arama yapılıyor...");
+    const { getOrCreateInstance } = await import("../shared.js");
+    const instance = getOrCreateInstance(accountId);
+    const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+    
+    const foundMessage = memoryMessages.find(m => {
+      const msgId = m.key?.id || m.id;
+      return msgId === messageId || msgId?.toString() === messageId?.toString();
+    });
+
+    if (foundMessage) {
+      logger.debug({ sessionId, normalizedJid, messageId, foundInMemory: true }, "Mesaj memory store'da bulundu!");
+      
+      const key = foundMessage.key || {
+        remoteJid: normalizedJid,
+        id: foundMessage.id || messageId,
+        fromMe: foundMessage.fromMe || false,
+      };
+
+      // Key'in tam olması gerekiyor
+      if (!key.remoteJid) {
+        key.remoteJid = normalizedJid;
+      }
+      if (!key.id) {
+        key.id = foundMessage.id || messageId;
+      }
+
+      // fromMe: mesajın kimden geldiğini belirtir (benim gönderdiğim mesaj ise true, karşı tarafın gönderdiği ise false)
+      // ÖNEMLİ: Bu işlem sadece BENİM cihazımdan siler, karşı tarafa müdahale etmez
+      const actualFromMe = fromMe !== undefined ? fromMe : (foundMessage.fromMe !== undefined ? foundMessage.fromMe : (key.fromMe !== undefined ? key.fromMe : false));
+      let messageTimestamp = foundMessage.messageTimestamp || foundMessage.timestamp || Date.now();
+      
+      // Timestamp'i saniye cinsine çevir (README'de saniye cinsinden string)
+      if (messageTimestamp > 1000000000000) {
+        messageTimestamp = Math.floor(messageTimestamp / 1000);
+      }
+      const timestampStr = String(messageTimestamp);
+      const actualMessageId = String(key.id || messageId);
+
+      // README'ye göre: chatModify clear kullanılır
+      await sock.chatModify(
+        {
+          clear: {
+            messages: [
+              {
+                id: actualMessageId,
+                fromMe: actualFromMe,
+                timestamp: timestampStr,
+              },
+            ],
+          },
+        },
+        normalizedJid
+      );
+
+      logger.info({ sessionId, normalizedJid, messageId }, "✅ Mesaj başarıyla silindi (memory store, deleteMessageForMe)");
+      return { status: "deleted_for_me", messageId, jid: normalizedJid };
+    }
+  }
+
+  if (!message) {
+    logger.error({ sessionId, normalizedJid, messageId }, "❌ Mesaj bulunamadı (deleteMessageForMe)");
     throw new Error("Mesaj bulunamadı");
   }
 
   let key;
   try {
     key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
+    
+    // Key'in tam olması gerekiyor
+    if (!key || !key.id) {
+      key = {
+        remoteJid: normalizedJid,
+        id: message.id || messageId,
+        fromMe: key?.fromMe || false,
+      };
+    }
+    
+    // Key'in remoteJid'i eksikse ekle
+    if (!key.remoteJid) {
+      key.remoteJid = normalizedJid;
+    }
   } catch {
-    throw new Error("Mesaj anahtarı geçersiz");
+    // Key parse edilemezse, mesaj ID'sini kullan
+    key = {
+      remoteJid: normalizedJid,
+      id: message.id || messageId,
+      fromMe: false,
+    };
   }
 
   // README'ye göre: chatModify clear kullanılır
+  // id: key.id kullanılmalı (WhatsApp mesaj ID'si - string)
+  // fromMe: mesajın kimden geldiğini belirtir (benim gönderdiğim mesaj ise true, karşı tarafın gönderdiği ise false)
+  // timestamp: string (Unix timestamp saniye cinsinden)
+  // ÖNEMLİ: Bu işlem sadece BENİM cihazımdan siler, karşı tarafa müdahale etmez
+  const actualFromMe = fromMe !== undefined ? fromMe : (key.fromMe !== undefined ? key.fromMe : false);
+  const actualMessageId = String(key.id || messageId); // README'ye göre string olmalı
+  
+  // Timestamp'i saniye cinsine çevir (README'de saniye cinsinden string)
+  let messageTimestamp = message.messageTimestamp || Date.now();
+  // Eğer milisaniye cinsindeyse saniyeye çevir
+  if (messageTimestamp > 1000000000000) {
+    messageTimestamp = Math.floor(messageTimestamp / 1000);
+  }
+  const timestampStr = String(messageTimestamp);
+
+  logger.debug({ 
+    sessionId, 
+    normalizedJid, 
+    messageId, 
+    actualMessageId, 
+    actualFromMe, 
+    timestampStr,
+    originalTimestamp: message.messageTimestamp
+  }, "chatModify clear çağrılıyor (README formatına göre)...");
+
   await sock.chatModify(
     {
       clear: {
         messages: [
           {
-            id: messageId,
-            fromMe: fromMe !== undefined ? fromMe : (key.fromMe || false),
-            timestamp: String(message.messageTimestamp || Date.now()),
+            id: actualMessageId,
+            fromMe: actualFromMe,
+            timestamp: timestampStr,
           },
         ],
       },
     },
     normalizedJid
   );
+
+  logger.info({ sessionId, normalizedJid, messageId, actualMessageId, actualFromMe, timestampStr }, "✅ Mesaj başarıyla silindi (deleteMessageForMe)");
 
   // Prisma'dan sil
   await prisma.message.deleteMany({
@@ -213,6 +398,78 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
   });
 
   return { status: "deleted_for_me", messageId, jid: normalizedJid };
+};
+
+/**
+ * Sohbet mesajlarını herkesten sil (Clear Chat Messages for Everyone)
+ * README'ye göre: chatModify clear kullanılır, tüm mesajları temizler
+ */
+export const clearChat = async (accountId, jid) => {
+  const sock = ensureSocket(accountId);
+  const normalizedJid = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
+
+  // Tüm mesajları al
+  const messages = await prisma.message.findMany({
+    where: {
+      sessionId,
+      remoteJid: normalizedJid,
+    },
+    orderBy: { messageTimestamp: 'asc' },
+  });
+
+  if (messages.length === 0) {
+    return { status: "no_messages", jid: normalizedJid };
+  }
+
+  // Mesajları clear formatına çevir (README'ye göre: id, fromMe, timestamp)
+  const clearMessages = messages.map((msg) => {
+    let key;
+    try {
+      key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+    } catch {
+      key = { remoteJid: normalizedJid, id: msg.id || '', fromMe: false };
+    }
+
+    // Mesaj ID'sini key'den veya msg.id'den al
+    const messageId = key?.id || msg.id || '';
+    
+    // Eğer messageId boşsa bu mesajı atla
+    if (!messageId) {
+      return null;
+    }
+
+    return {
+      id: messageId,
+      fromMe: key?.fromMe || false,
+      timestamp: String(msg.messageTimestamp || Date.now()),
+    };
+  }).filter(msg => msg !== null); // null olanları filtrele
+
+  // Eğer temizlenecek mesaj yoksa
+  if (clearMessages.length === 0) {
+    return { status: "no_messages", jid: normalizedJid };
+  }
+
+  // README'ye göre: chatModify clear kullanılır
+  await sock.chatModify(
+    {
+      clear: {
+        messages: clearMessages,
+      },
+    },
+    normalizedJid
+  );
+
+  // Prisma'dan mesajları sil
+  await prisma.message.deleteMany({
+    where: {
+      sessionId,
+      remoteJid: normalizedJid,
+    },
+  });
+
+  return { status: "cleared", jid: normalizedJid, messageCount: messages.length };
 };
 
 /**
@@ -238,19 +495,47 @@ export const deleteChat = async (accountId, jid, lastMessage = null) => {
     if (messages.length > 0) {
       const msg = messages[0];
       try {
-        const key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        let key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        
+        // Key'in tam olması gerekiyor: remoteJid, id, fromMe
+        if (!key || !key.id) {
+          // Eğer key'de id yoksa, mesajın id'sini kullan
+          key = {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: key?.fromMe || false,
+          };
+        }
+        
+        // Key'in remoteJid'i eksikse ekle
+        if (!key.remoteJid) {
+          key.remoteJid = normalizedJid;
+        }
+        
         lastMessage = {
           key: key,
           messageTimestamp: Number(msg.messageTimestamp),
         };
       } catch (error) {
         logger.error({ error, accountId, jid }, "Son mesaj parse edilemedi");
-        throw new Error("Son mesaj bulunamadı");
+        // Hata durumunda mesaj ID'sini kullan
+        lastMessage = {
+          key: {
+            remoteJid: normalizedJid,
+            id: msg.id || '',
+            fromMe: false,
+          },
+          messageTimestamp: Number(msg.messageTimestamp || Date.now()),
+        };
       }
     } else {
       // Mesaj yoksa boş key ile dene
       lastMessage = {
-        key: { remoteJid: normalizedJid, id: '', fromMe: false },
+        key: { 
+          remoteJid: normalizedJid, 
+          id: '', 
+          fromMe: false 
+        },
         messageTimestamp: Date.now(),
       };
     }

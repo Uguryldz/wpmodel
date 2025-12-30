@@ -96,6 +96,18 @@ export const deleteChat = async (sessionId: string, jid: string, lastMessage?: a
 };
 
 /**
+ * Sohbet mesajlarını herkesten sil (Clear Chat Messages for Everyone)
+ */
+export const clearChat = async (sessionId: string, jid: string): Promise<any> => {
+  const response = await fetch(`${API_BASE}/${sessionId}/chats/${encodeURIComponent(jid)}/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) throw new Error('Sohbet mesajları temizlenemedi');
+  return response.json();
+};
+
+/**
  * Sohbeti sabitle/kaldır (Pin/Unpin Chat)
  */
 export const pinChat = async (sessionId: string, jid: string, pin: boolean = true): Promise<any> => {

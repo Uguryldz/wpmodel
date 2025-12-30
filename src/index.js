@@ -55,6 +55,7 @@ import {
   markChatRead,
   deleteMessageForMe,
   deleteChat,
+  clearChat,
   setDisappearingMessages,
   queryChatHistory,
   subscribeToPresence,
@@ -1761,6 +1762,17 @@ app.delete(
     const { lastMessage } = req.body;
 
     const result = await deleteChat(sessionId, jid, lastMessage || null);
+    res.json(result);
+  })
+);
+
+// Sohbet mesajlarını herkesten sil (Clear Chat Messages for Everyone) - README'ye göre
+app.post(
+  "/:sessionId/chats/:jid/clear",
+  asyncHandler(async (req, res) => {
+    const { sessionId, jid } = req.params;
+
+    const result = await clearChat(sessionId, jid);
     res.json(result);
   })
 );

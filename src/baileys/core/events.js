@@ -54,18 +54,20 @@ export const bindSocketEvents = (instance) => {
     console.log(`[${sessionId}] chats.set event geldi: ${chats.length} chat`);
     
     for (const chat of chats) {
-      instance.chatsStore.set(chat.id, chat);
+      // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
+      const normalizedChatId = jidNormalizedUser(chat.id);
+      instance.chatsStore.set(normalizedChatId, { ...chat, id: normalizedChatId });
       try {
         await prisma.chat.upsert({
           where: {
             sessionId_id: {
               sessionId,
-              id: chat.id,
+              id: normalizedChatId,
             },
           },
           create: {
             sessionId,
-            id: chat.id,
+            id: normalizedChatId,
             name: chat.name || null,
             displayName: chat.displayName || null,
             unreadCount: chat.unreadCount || 0,
@@ -291,18 +293,21 @@ export const bindSocketEvents = (instance) => {
       
       // Tüm chat'leri memory store'a ekle
       for (const chat of history.chats) {
-        instance.chatsStore.set(chat.id, chat);
+        // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
+        const normalizedChatId = jidNormalizedUser(chat.id);
+        instance.chatsStore.set(normalizedChatId, { ...chat, id: normalizedChatId });
         try {
+          
           await prisma.chat.upsert({
             where: {
               sessionId_id: {
                 sessionId,
-                id: chat.id,
+                id: normalizedChatId,
               },
             },
             create: {
               sessionId,
-              id: chat.id,
+              id: normalizedChatId,
               name: chat.name || null,
               displayName: chat.displayName || null,
               unreadCount: chat.unreadCount || 0,
@@ -469,18 +474,21 @@ export const bindSocketEvents = (instance) => {
     console.log(`[${sessionId}] chats.upsert event: ${chats.length} chat alındı`);
     
     for (const chat of chats) {
-      instance.chatsStore.set(chat.id, chat);
+      // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
+      const normalizedChatId = jidNormalizedUser(chat.id);
+      instance.chatsStore.set(normalizedChatId, { ...chat, id: normalizedChatId });
       try {
+        
         await prisma.chat.upsert({
           where: {
             sessionId_id: {
               sessionId,
-              id: chat.id,
+              id: normalizedChatId,
             },
           },
           create: {
             sessionId,
-            id: chat.id,
+            id: normalizedChatId,
             name: chat.name || null,
             displayName: chat.displayName || null,
             unreadCount: chat.unreadCount || 0,
@@ -552,15 +560,17 @@ export const bindSocketEvents = (instance) => {
 
   const chatsUpdateListener = async (updates) => {
     for (const update of updates) {
-      const existing = instance.chatsStore.get(update.id) || {};
-      const merged = { ...existing, ...update };
-      instance.chatsStore.set(update.id, merged);
+      // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
+      const normalizedUpdateId = jidNormalizedUser(update.id);
+      const existing = instance.chatsStore.get(normalizedUpdateId) || {};
+      const merged = { ...existing, ...update, id: normalizedUpdateId };
+      instance.chatsStore.set(normalizedUpdateId, merged);
 
       try {
         await prisma.chat.updateMany({
           where: {
             sessionId,
-            id: update.id,
+            id: normalizedUpdateId,
           },
           data: {
             name: update.name !== undefined ? update.name : undefined,

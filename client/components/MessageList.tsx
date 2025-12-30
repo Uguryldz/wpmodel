@@ -1051,23 +1051,89 @@ export default function MessageList({
                 </>
               )}
 
-              {/* 8. Sil (Delete) */}
+              {/* 8. Benden Sil (Delete for Me) - Sadece benden siler */}
               <div className="my-1 border-t border-gray-100"></div>
-              <button
-                onClick={() => {
-                  onDeleteMessage(selectedMessage, false);
-                  onShowMessageMenu(false);
-                  onSelectMessage(null as any);
-                }}
-                className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
-              >
-                <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
-                  <Trash2 size={16} className="text-red-600" />
-                </div>
-                <span className="text-sm font-medium">Sil</span>
-              </button>
+              {onDeleteMessageForMe ? (
+                <button
+                  onClick={() => {
+                    onDeleteMessageForMe(selectedMessage);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                    <Trash2 size={16} className="text-red-600" />
+                  </div>
+                  <span className="text-sm font-medium">Benden Sil</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    onDeleteMessage(selectedMessage, false);
+                    onShowMessageMenu(false);
+                    onSelectMessage(null as any);
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-red-50 flex items-center space-x-3 text-red-600 transition-colors group"
+                >
+                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 group-hover:bg-red-100 transition-colors">
+                    <Trash2 size={16} className="text-red-600" />
+                  </div>
+                  <span className="text-sm font-medium">Benden Sil</span>
+                </button>
+              )}
 
-              {/* 9. Mesajları seç (Select Messages) */}
+              {/* 9. Herkesten Sil (Delete for Everyone) */}
+              {(() => {
+                // Seçili mesajın zamanını bul
+                let messageTime = 0;
+                
+                if (selectedMessage) {
+                  if (selectedMessage.timestamp) {
+                    messageTime = selectedMessage.timestamp > 1000000000000 
+                      ? selectedMessage.timestamp 
+                      : selectedMessage.timestamp * 1000;
+                  } else if (selectedMessage.messageTimestamp) {
+                    messageTime = selectedMessage.messageTimestamp > 1000000000000 
+                      ? selectedMessage.messageTimestamp 
+                      : selectedMessage.messageTimestamp * 1000;
+                  }
+                }
+                
+                // 48 saat = 172800000 ms
+                const hours48 = 48 * 60 * 60 * 1000;
+                const isOlderThan48Hours = messageTime > 0 
+                  ? (Date.now() - messageTime) > hours48 
+                  : false;
+                
+                return (
+                  <button
+                    onClick={() => {
+                      onDeleteMessage(selectedMessage, true);
+                      onShowMessageMenu(false);
+                      onSelectMessage(null as any);
+                    }}
+                    disabled={isOlderThan48Hours}
+                    className={`w-full text-left px-4 py-2.5 flex items-center space-x-3 transition-colors group ${
+                      isOlderThan48Hours 
+                        ? 'text-gray-400 cursor-not-allowed opacity-50' 
+                        : 'hover:bg-red-50 text-red-600'
+                    }`}
+                    title={isOlderThan48Hours ? 'Mesaj üzerinden 48 saat geçtiği için bu işlem yapılamaz' : 'Bu mesajı herkesten sil'}
+                  >
+                    <div className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
+                      isOlderThan48Hours 
+                        ? 'bg-gray-100' 
+                        : 'bg-red-50 group-hover:bg-red-100'
+                    }`}>
+                      <Trash2 size={16} className={isOlderThan48Hours ? 'text-gray-400' : 'text-red-600'} />
+                    </div>
+                    <span className="text-sm font-medium">Herkesten Sil</span>
+                  </button>
+                );
+              })()}
+
+              {/* 10. Mesajları seç (Select Messages) */}
               {onSelectMessages && (
                 <>
                   <div className="my-1 border-t border-gray-100"></div>

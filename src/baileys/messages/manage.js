@@ -69,24 +69,143 @@ export const markMessagesAsRead = async (accountId, jid, messageIds = []) => {
 export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone = false) => {
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
 
-  const message = await prisma.message.findFirst({
+  logger.debug({ sessionId, normalizedJid, messageId, messageIdType: typeof messageId }, "Mesaj silme işlemi başlatılıyor...");
+
+  // Önce id ile ara
+  let message = await prisma.message.findFirst({
     where: {
-      sessionId: getAccountId(accountId),
+      sessionId,
       remoteJid: normalizedJid,
       id: messageId,
     },
   });
 
+  logger.debug({ sessionId, normalizedJid, messageId, foundById: !!message }, "Prisma'da id ile arama sonucu");
+
+  // Bulamazsa, key içinde id ile ara
   if (!message) {
+    logger.debug({ sessionId, normalizedJid, messageId }, "Key içinde id ile arama yapılıyor...");
+    const allMessages = await prisma.message.findMany({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+      },
+      take: 1000, // Limit ekle performans için
+    });
+
+    logger.debug({ sessionId, normalizedJid, messageId, totalMessages: allMessages.length }, "Tüm mesajlar alındı, key içinde aranıyor...");
+
+    // Key içinde messageId'yi ara
+    for (const msg of allMessages) {
+      try {
+        const key = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        const keyId = key?.id;
+        const msgId = msg.id;
+        
+        // Hem key.id hem de msg.id ile karşılaştır
+        if (keyId === messageId || msgId === messageId || keyId?.toString() === messageId?.toString() || msgId?.toString() === messageId?.toString()) {
+          message = msg;
+          logger.debug({ sessionId, normalizedJid, messageId, foundByKey: true, keyId, msgId }, "Mesaj key içinde bulundu!");
+          break;
+        }
+      } catch (error) {
+        // Key parse edilemezse devam et
+        logger.debug({ sessionId, error: error.message }, "Key parse hatası, devam ediliyor...");
+        continue;
+      }
+    }
+  }
+
+  // Hala bulamazsa, memory store'dan ara
+  if (!message) {
+    logger.debug({ sessionId, normalizedJid, messageId }, "Memory store'da arama yapılıyor...");
+    const instance = getOrCreateInstance(accountId);
+    const memoryMessages = instance.messagesStore.get(normalizedJid) || [];
+    
+    logger.debug({ sessionId, normalizedJid, messageId, memoryStoreCount: memoryMessages.length }, "Memory store mesaj sayısı");
+    
+    const foundMessage = memoryMessages.find(m => {
+      const msgId = m.key?.id || m.id;
+      return msgId === messageId || msgId?.toString() === messageId?.toString();
+    });
+
+    if (foundMessage) {
+      logger.debug({ sessionId, normalizedJid, messageId, foundInMemory: true }, "Mesaj memory store'da bulundu!");
+      
+      // Memory store'dan bulunan mesajı kullan
+      // Key'i oluştur
+      const key = foundMessage.key || {
+        remoteJid: normalizedJid,
+        id: foundMessage.id || messageId,
+        fromMe: foundMessage.fromMe || false,
+      };
+
+      // Key'in tam olması gerekiyor
+      if (!key.remoteJid) {
+        key.remoteJid = normalizedJid;
+      }
+      if (!key.id) {
+        key.id = foundMessage.id || messageId;
+      }
+
+      logger.debug({ sessionId, normalizedJid, messageId, key }, "Memory store'dan alınan key");
+
+      // Baileys kaynak koduna göre: content.delete kullanılır
+      await sock.sendMessage(normalizedJid, {
+        delete: {
+          remoteJid: key.remoteJid || normalizedJid,
+          id: key.id || messageId,
+          fromMe: key.fromMe || false,
+        },
+      });
+
+      if (deleteForEveryone) {
+        // Herkes için sil - fromMe: true ile tekrar gönder
+        await sock.sendMessage(normalizedJid, {
+          delete: {
+            remoteJid: key.remoteJid || normalizedJid,
+            id: key.id || messageId,
+            fromMe: true,
+          },
+        });
+      }
+
+      logger.info({ sessionId, normalizedJid, messageId, deleteForEveryone }, "✅ Mesaj başarıyla silindi (memory store)");
+      return { status: "deleted", messageId, deleteForEveryone };
+    }
+  }
+
+  if (!message) {
+    logger.error({ sessionId, normalizedJid, messageId }, "❌ Mesaj bulunamadı - ne Prisma'da ne de memory store'da");
     throw new Error("Mesaj bulunamadı");
   }
 
   let key;
   try {
     key = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
+    
+    // Key'in tam olması gerekiyor
+    if (!key || !key.id) {
+      key = {
+        remoteJid: normalizedJid,
+        id: message.id || messageId,
+        fromMe: key?.fromMe || false,
+      };
+    }
+    
+    // Key'in remoteJid'i eksikse ekle
+    if (!key.remoteJid) {
+      key.remoteJid = normalizedJid;
+    }
   } catch {
-    throw new Error("Mesaj anahtarı geçersiz");
+    // Key parse edilemezse, mesaj ID'sini kullan
+    key = {
+      remoteJid: normalizedJid,
+      id: message.id || messageId,
+      fromMe: false,
+    };
   }
 
   // Baileys kaynak koduna göre: content.delete kullanılır
@@ -109,16 +228,44 @@ export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone
     });
   }
 
-  // Prisma'dan sil
-  await prisma.message.deleteMany({
-    where: {
-      sessionId: getAccountId(accountId),
-      remoteJid: normalizedJid,
-      id: messageId,
-    },
-  });
+  // Prisma'dan sil (bulunan mesajın id'sini kullan)
+  if (message.id) {
+    await prisma.message.deleteMany({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+        id: message.id,
+      },
+    });
+  } else {
+    // Eğer message.id yoksa, key.id ile mesajı bul ve sil
+    const messagesToDelete = await prisma.message.findMany({
+      where: {
+        sessionId,
+        remoteJid: normalizedJid,
+      },
+    });
 
-  return { status: "deleted", messageId, deleteForEveryone };
+    for (const msg of messagesToDelete) {
+      try {
+        const msgKey = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
+        if (msgKey && msgKey.id === key.id) {
+          await prisma.message.deleteMany({
+            where: {
+              sessionId,
+              remoteJid: normalizedJid,
+              id: msg.id,
+            },
+          });
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return { status: "deleted", messageId: key.id || messageId, deleteForEveryone };
 };
 
 /**
