@@ -37,6 +37,7 @@ export * from "./chats/search.js";
 export * from "./chats/sync.js";
 export * from "./chats/history.js";
 export * from "./chats/history-sync.js";
+export * from "./chats/broadcast.js";
 
 // Media modules
 export * from "./media/download.js";

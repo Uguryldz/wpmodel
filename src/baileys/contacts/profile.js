@@ -122,5 +122,124 @@ export const refreshContacts = async (accountId, { clearDb = true } = {}) => {
   return { status: "refreshing" };
 };
 
+/**
+ * Profil durumu güncelle (README'ye göre)
+ */
+export const updateProfileStatus = async (accountId, status) => {
+  const sock = ensureSocket(accountId);
+  const sessionId = getAccountId(accountId);
+  const { getWebSocketBroadcast } = await import("../shared.js");
+  
+  try {
+    await sock.updateProfileStatus(status);
+    
+    // WebSocket'e bildir
+    const wsBroadcastFn = getWebSocketBroadcast();
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "profile.update",
+        sessionId,
+        updateType: "status",
+        status,
+      });
+    }
+    
+    return { status: "success", message: "Profil durumu güncellendi", data: { status } };
+  } catch (error) {
+    logger.error({ error, accountId, status }, "Profil durumu güncellenemedi");
+    throw error;
+  }
+};
+
+/**
+ * Profil adı güncelle (README'ye göre)
+ */
+export const updateProfileName = async (accountId, name) => {
+  const sock = ensureSocket(accountId);
+  const sessionId = getAccountId(accountId);
+  const { getWebSocketBroadcast } = await import("../shared.js");
+  
+  try {
+    await sock.updateProfileName(name);
+    
+    // WebSocket'e bildir
+    const wsBroadcastFn = getWebSocketBroadcast();
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "profile.update",
+        sessionId,
+        updateType: "name",
+        name,
+      });
+    }
+    
+    return { status: "success", message: "Profil adı güncellendi", data: { name } };
+  } catch (error) {
+    logger.error({ error, accountId, name }, "Profil adı güncellenemedi");
+    throw error;
+  }
+};
+
+/**
+ * Profil resmi güncelle (README'ye göre - gruplar için de çalışır)
+ */
+export const updateProfilePicture = async (accountId, jid, picture) => {
+  const sock = ensureSocket(accountId);
+  const normalized = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
+  const { getWebSocketBroadcast } = await import("../shared.js");
+  
+  try {
+    // Picture buffer, url veya stream olabilir
+    await sock.updateProfilePicture(normalized, picture);
+    
+    // WebSocket'e bildir
+    const wsBroadcastFn = getWebSocketBroadcast();
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "profile.update",
+        sessionId,
+        updateType: "picture",
+        jid: normalized,
+      });
+    }
+    
+    return { status: "success", message: "Profil resmi güncellendi", data: { jid: normalized } };
+  } catch (error) {
+    logger.error({ error, accountId, jid }, "Profil resmi güncellenemedi");
+    throw error;
+  }
+};
+
+/**
+ * Profil resmini kaldır (README'ye göre - gruplar için de çalışır)
+ */
+export const removeProfilePicture = async (accountId, jid) => {
+  const sock = ensureSocket(accountId);
+  const normalized = normalizeJid(jid);
+  const sessionId = getAccountId(accountId);
+  const { getWebSocketBroadcast } = await import("../shared.js");
+  
+  try {
+    await sock.removeProfilePicture(normalized);
+    
+    // WebSocket'e bildir
+    const wsBroadcastFn = getWebSocketBroadcast();
+    if (wsBroadcastFn) {
+      wsBroadcastFn({
+        type: "profile.update",
+        sessionId,
+        updateType: "picture_removed",
+        jid: normalized,
+      });
+    }
+    
+    return { status: "success", message: "Profil resmi kaldırıldı", data: { jid: normalized } };
+  } catch (error) {
+    logger.error({ error, accountId, jid }, "Profil resmi kaldırılamadı");
+    throw error;
+  }
+};
+
 
 
