@@ -12,85 +12,144 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
   const sessionId = getAccountId(accountId);
 
   // Memory store'dan full message'ı bul (Baileys quoted parametresi için gerekli)
+  // README'ye göre: quoted direkt bir message objesi olmalı
   const { getMessageFromStore } = await import("../shared.js");
   const msgFromStore = await getMessageFromStore({ remoteJid: normalizedJid, id: messageId }, sessionId);
   
-  let key = null;
+  // Debug: msgFromStore'u logla
+  logger.info({ 
+    sessionId, 
+    messageId, 
+    normalizedJid,
+    hasMsgFromStore: !!msgFromStore,
+    msgFromStoreKeys: msgFromStore ? Object.keys(msgFromStore) : [],
+    msgFromStoreKey: msgFromStore?.key,
+    msgFromStoreMessage: msgFromStore?.message ? Object.keys(msgFromStore.message) : null,
+    msgFromStoreKeyType: typeof msgFromStore?.key,
+    msgFromStoreKeyFromMe: msgFromStore?.key?.fromMe
+  }, "getMessageFromStore sonucu");
+  
   let quotedMessage = null;
 
-  if (msgFromStore) {
-    // Memory store'dan gelen mesajı kullan
-    if (msgFromStore.key) {
-      key = msgFromStore.key;
-    }
-    if (msgFromStore.message) {
-      quotedMessage = msgFromStore;
-    }
-  }
-
-  // Memory store'da mesaj yoksa, messageId'den key oluştur
-  if (!key) {
-    key = {
+  // README'ye göre: quoted direkt message objesi olmalı
+  // Eğer memory store'da full message varsa, onu direkt kullan
+  if (msgFromStore && msgFromStore.message && typeof msgFromStore.message === 'object') {
+    // Full message objesi var - README'ye göre direkt kullan
+    // Ama key'i mutlaka eklemeliyiz (Baileys key bekliyor)
+    quotedMessage = { ...msgFromStore.message }; // Copy yap
+    
+    logger.info({ 
+      messageId,
+      hasQuotedMessage: !!quotedMessage,
+      quotedMessageKeys: quotedMessage ? Object.keys(quotedMessage) : [],
+      hasQuotedMessageKey: !!quotedMessage?.key,
+      quotedMessageKeyType: typeof quotedMessage?.key,
+      quotedMessageKeyFromMe: quotedMessage?.key?.fromMe
+    }, "Full message objesi bulundu");
+    
+    // Key'i mutlaka ekle veya güncelle (Baileys key bekliyor)
+    let key = msgFromStore.key || {
       remoteJid: normalizedJid,
       id: messageId,
       fromMe: false,
-    };
-    logger.warn({ sessionId, messageId, normalizedJid }, "Yanıtlanacak mesaj memory store'da bulunamadı, key oluşturuldu");
-  }
-
-  // Key'i garanti et - undefined kontrolü
-  if (!key) {
-    key = {
-      remoteJid: normalizedJid,
-      id: messageId,
-      fromMe: false,
-    };
-  }
-
-  if (!key.remoteJid) {
-    key.remoteJid = normalizedJid;
-  }
-
-  if (!key.id) {
-    key.id = messageId;
-  }
-
-  // fromMe kontrolü - undefined ise false yap
-  if (key.fromMe === undefined) {
-    key.fromMe = false;
-  }
-
-  // Baileys API için quoted parametresi - README'ye göre full message objesi olmalı
-  // Ama eğer full message yoksa, key kullanılabilir
-  let quotedParam = null;
-  
-  if (quotedMessage && quotedMessage.message) {
-    // Full message objesi varsa onu kullan (tercih edilen)
-    quotedParam = quotedMessage.message;
-  } else if (key) {
-    // Full message yoksa key kullan
-    // Key'i Baileys formatına uygun şekilde hazırla
-    quotedParam = {
-      key: {
-        remoteJid: key.remoteJid || normalizedJid,
-        id: key.id || messageId,
-        fromMe: key.fromMe !== undefined ? Boolean(key.fromMe) : false,
-      }
     };
     
-    // Participant sadece grup mesajları için ve varsa ekle
-    if (key.participant && typeof key.participant === 'string' && key.participant.trim() !== '') {
-      quotedParam.key.participant = key.participant;
-    }
-  } else {
-    // Key de yoksa temel key oluştur
-    quotedParam = {
-      key: {
+    logger.info({ 
+      messageId,
+      keyType: typeof key,
+      keyKeys: key ? Object.keys(key) : [],
+      keyFromMe: key?.fromMe,
+      keyFromMeType: typeof key?.fromMe
+    }, "Key oluşturuluyor/güncelleniyor");
+    
+    // Key property'lerini garanti et
+    if (!key || typeof key !== 'object') {
+      key = {
         remoteJid: normalizedJid,
         id: messageId,
         fromMe: false,
-      }
+      };
+    }
+    
+    if (!key.remoteJid) key.remoteJid = normalizedJid;
+    if (!key.id) key.id = messageId;
+    if (key.fromMe === undefined || key.fromMe === null) {
+      key.fromMe = false;
+    }
+    key.fromMe = Boolean(key.fromMe);
+    
+    // Key'i mutlaka ekle (Baileys key bekliyor) - MUTLAKA EKLE!
+    quotedMessage.key = { ...key }; // Copy yap, referans sorunlarını önle
+    
+    logger.info({ 
+      messageId,
+      finalKey: key,
+      finalKeyFromMe: key.fromMe,
+      finalKeyFromMeType: typeof key.fromMe,
+      quotedMessageKeys: Object.keys(quotedMessage),
+      hasQuotedMessageKey: !!quotedMessage.key,
+      quotedMessageKeyFromMe: quotedMessage.key?.fromMe
+    }, "Key quotedMessage'a eklendi - SON KONTROL");
+    
+    logger.info({ 
+      messageId,
+      finalKey: key,
+      finalKeyFromMe: key.fromMe,
+      finalKeyFromMeType: typeof key.fromMe,
+      quotedMessageKeys: Object.keys(quotedMessage),
+      hasQuotedMessageKey: !!quotedMessage.key
+    }, "Key quotedMessage'a eklendi");
+  } else {
+    // Memory store'da full message yoksa, sadece key ile message oluştur
+    logger.warn({ 
+      messageId, 
+      hasMsgFromStore: !!msgFromStore,
+      hasMsgFromStoreMessage: !!(msgFromStore?.message),
+      msgFromStoreMessageType: typeof msgFromStore?.message
+    }, "Full message yok, key ile message oluşturuluyor");
+    
+    const key = msgFromStore?.key || {
+      remoteJid: normalizedJid,
+      id: messageId,
+      fromMe: false,
     };
+    
+    logger.info({ 
+      messageId,
+      keyType: typeof key,
+      keyKeys: key ? Object.keys(key) : [],
+      keyFromMe: key?.fromMe,
+      keyFromMeType: typeof key?.fromMe
+    }, "Key oluşturuluyor (full message yok)");
+    
+    // Key property'lerini garanti et
+    if (!key || typeof key !== 'object') {
+      key = {
+        remoteJid: normalizedJid,
+        id: messageId,
+        fromMe: false,
+      };
+    }
+    
+    if (!key.remoteJid) key.remoteJid = normalizedJid;
+    if (!key.id) key.id = messageId;
+    if (key.fromMe === undefined || key.fromMe === null) {
+      key.fromMe = false;
+    }
+    key.fromMe = Boolean(key.fromMe);
+    
+    // README'ye göre: quoted bir message objesi olmalı (key içeren)
+    quotedMessage = {
+      key: key
+    };
+    
+    logger.info({ 
+      messageId,
+      finalKey: key,
+      finalKeyFromMe: key.fromMe,
+      finalKeyFromMeType: typeof key.fromMe,
+      quotedMessage: quotedMessage
+    }, "Key ile message oluşturuldu");
   }
 
   let messageContent;
@@ -101,18 +160,101 @@ export const replyToMessage = async (accountId, jid, messageId, replyMessage) =>
   }
 
   try {
+    // quotedMessage.key'in geçerli olduğundan emin ol - SON KONTROL
+    if (!quotedMessage || typeof quotedMessage !== 'object' || quotedMessage === null) {
+      logger.error({ messageId, normalizedJid, quotedMessage }, "quotedMessage geçersiz");
+      throw new Error("quotedMessage geçersiz");
+    }
+    
+    if (!quotedMessage.key || typeof quotedMessage.key !== 'object' || quotedMessage.key === null) {
+      logger.error({ messageId, normalizedJid, quotedMessageKey: quotedMessage.key }, "quotedMessage.key geçersiz");
+      throw new Error("quotedMessage.key geçersiz");
+    }
+    
+    // Key property'lerini son kez garanti et
+    if (!quotedMessage.key.remoteJid) {
+      quotedMessage.key.remoteJid = normalizedJid;
+    }
+    if (!quotedMessage.key.id) {
+      quotedMessage.key.id = messageId;
+    }
+    
+    // fromMe kontrolü - EN ÖNEMLİ KONTROL
+    if (quotedMessage.key.fromMe === undefined || quotedMessage.key.fromMe === null) {
+      quotedMessage.key.fromMe = false;
+      logger.warn({ messageId, normalizedJid }, "quotedMessage.key.fromMe undefined/null, false yapıldı");
+    }
+    quotedMessage.key.fromMe = Boolean(quotedMessage.key.fromMe);
+    
+    // SON KONTROL: quotedMessage.key.fromMe'nin kesinlikle boolean olduğundan emin ol
+    if (typeof quotedMessage.key.fromMe !== 'boolean') {
+      logger.error({ 
+        messageId, 
+        normalizedJid, 
+        fromMeType: typeof quotedMessage.key.fromMe,
+        fromMeValue: quotedMessage.key.fromMe
+      }, "quotedMessage.key.fromMe boolean değil!");
+      quotedMessage.key.fromMe = false;
+    }
+    
+    // SON KONTROL: quotedMessage.key'in kesinlikle var olduğundan emin ol
+    if (!quotedMessage.key || typeof quotedMessage.key !== 'object') {
+      logger.error({ 
+        messageId, 
+        normalizedJid,
+        quotedMessageKeys: Object.keys(quotedMessage),
+        hasQuotedMessageKey: !!quotedMessage.key
+      }, "quotedMessage.key yok! Yeni key oluşturuluyor...");
+      
+      // Key yoksa, msgFromStore.key'den veya yeni key oluştur
+      let finalKey = msgFromStore?.key || {
+        remoteJid: normalizedJid,
+        id: messageId,
+        fromMe: false,
+      };
+      
+      // Key property'lerini garanti et
+      if (!finalKey || typeof finalKey !== 'object') {
+        finalKey = {
+          remoteJid: normalizedJid,
+          id: messageId,
+          fromMe: false,
+        };
+      }
+      
+      if (!finalKey.remoteJid) finalKey.remoteJid = normalizedJid;
+      if (!finalKey.id) finalKey.id = messageId;
+      if (finalKey.fromMe === undefined || finalKey.fromMe === null) {
+        finalKey.fromMe = false;
+      }
+      finalKey.fromMe = Boolean(finalKey.fromMe);
+      
+      quotedMessage.key = { ...finalKey }; // Copy yap
+      
+      logger.warn({ 
+        messageId,
+        finalKey,
+        finalKeyFromMe: finalKey.fromMe,
+        quotedMessageKeys: Object.keys(quotedMessage),
+        hasQuotedMessageKey: !!quotedMessage.key
+      }, "quotedMessage.key son anda eklendi!");
+    }
+    
     logger.info({ 
-      quotedParam: quotedParam?.key || quotedParam, 
-      originalKey: key, 
+      quotedMessageKey: quotedMessage.key,
+      quotedMessageKeyFromMe: quotedMessage.key?.fromMe,
+      quotedMessageKeyFromMeType: typeof quotedMessage.key?.fromMe,
+      quotedMessageKeyKeys: quotedMessage.key ? Object.keys(quotedMessage.key) : [],
       jid: normalizedJid, 
       messageId,
       messageContent,
-      hasFullMessage: !!(quotedMessage && quotedMessage.message)
+      quotedMessageStructure: JSON.stringify(quotedMessage).substring(0, 500)
     }, "Mesaj yanıtlanıyor...");
     
-    // Baileys API'ye quoted parametresini gönder
+    // README'ye göre: quoted direkt message objesi olmalı
+    // await sock.sendMessage(jid, { text: 'hello word' }, { quoted: message })
     await sock.sendMessage(normalizedJid, messageContent, {
-      quoted: quotedParam,
+      quoted: quotedMessage,
     });
     
     logger.info({ 

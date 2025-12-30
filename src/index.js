@@ -333,6 +333,22 @@ wss.on("connection", (ws, req) => {
               }
               break;
 
+            case 'sendMessage':
+              // Mesaj gönder (quoted desteği ile)
+              const { sessionId: sendSessionId, jid: sendJid, message: sendMessageText, options: sendOptions } = data.payload || {};
+              if (sendSessionId && sendJid && sendMessageText) {
+                const { sendTextMessage } = await import("./baileys/messages/send.js");
+                responseData = await sendTextMessage({
+                  accountId: sendSessionId,
+                  to: sendJid,
+                  message: sendMessageText,
+                  options: sendOptions || {},
+                });
+              } else {
+                throw new Error('sessionId, jid ve message gerekli');
+              }
+              break;
+
             case 'replyToMessage':
               // Mesaja yanıt gönder
               const { sessionId: replySessionId, jid: replyJid, messageId: replyMessageId, text: replyText } = data.payload || {};

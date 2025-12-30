@@ -42,6 +42,19 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
       const paginatedMessages = memoryMessages
         .slice(startIndex, startIndex + Number(limit));
 
+      // Debug: Reaction'ların korunduğunu kontrol et
+      const messagesWithReactions = paginatedMessages.filter(m => m.reactions || m.message?.reactions);
+      if (messagesWithReactions.length > 0) {
+        logger.debug({ 
+          totalMessages: paginatedMessages.length,
+          messagesWithReactions: messagesWithReactions.length,
+          sampleReactions: messagesWithReactions.slice(0, 3).map(m => ({
+            messageId: m.id || m.key?.id,
+            reactions: m.reactions || m.message?.reactions
+          }))
+        }, "Memory store'dan mesajlar döndürülüyor (reaction'lar ile)");
+      }
+
       const nextCursor = 
         memoryMessages.length > startIndex + Number(limit)
           ? (paginatedMessages[paginatedMessages.length - 1]?.id || paginatedMessages[paginatedMessages.length - 1]?.timestamp || null)
@@ -84,15 +97,45 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     const serialized = messages.map((m) => serializePrisma(m));
     const formatted = serialized.map(m => {
       try {
-        return formatMessage({
+        const parsedMessage = m.message ? (typeof m.message === "string" ? JSON.parse(m.message) : m.message) : undefined;
+        
+        const formattedMsg = formatMessage({
           key: m.key ? (typeof m.key === "string" ? JSON.parse(m.key) : m.key) : {
             remoteJid: m.remoteJid,
             id: m.id,
             fromMe: false,
           },
-          message: m.message ? (typeof m.message === "string" ? JSON.parse(m.message) : m.message) : undefined,
+          message: parsedMessage,
           messageTimestamp: Number(m.messageTimestamp || 0),
         });
+        
+        // Reaction'ları ekle - önce ayrı reactions field'ını kontrol et, sonra message.reactions'ı
+        let reactions = null;
+        
+        // 1. Prisma'dan gelen ayrı reactions field'ını kontrol et
+        if (m.reactions) {
+          try {
+            reactions = typeof m.reactions === "string" ? JSON.parse(m.reactions) : m.reactions;
+          } catch (reactionError) {
+            logger.warn({ error: reactionError, messageId: m.id }, "Reaction parse edilemedi (reactions field)");
+          }
+        }
+        
+        // 2. Eğer ayrı reactions field'ı yoksa, message.reactions'ı kontrol et
+        if (!reactions && parsedMessage?.reactions) {
+          reactions = parsedMessage.reactions;
+        }
+        
+        // 3. Reaction'ları ekle
+        if (reactions) {
+          formattedMsg.reactions = reactions;
+          // message.reactions'ı da güncelle (tutarlılık için)
+          if (formattedMsg.message) {
+            formattedMsg.message.reactions = reactions;
+          }
+        }
+        
+        return formattedMsg;
       } catch (error) {
         logger.error({ error, messageId: m.id }, "Mesaj formatlanamadı");
         return null;

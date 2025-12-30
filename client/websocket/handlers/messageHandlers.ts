@@ -428,6 +428,16 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
               continue;
             }
             // Eğer mevcut mesaj düzenlenmemişse, yeni mesajla güncelle
+            // Ama reaction'ları koru - mevcut mesajdaki reaction'ları yeni mesaja ekle
+            const existingReactions = existingMsg.reactions || existingMsg.message?.reactions;
+            if (existingReactions) {
+              newMsg.reactions = existingReactions;
+              if (newMsg.message) {
+                newMsg.message.reactions = existingReactions;
+              } else if (existingReactions) {
+                newMsg.message = { reactions: existingReactions };
+              }
+            }
             merged[existingIndex] = newMsg;
           } else {
             // Yeni mesaj, ekle
@@ -1115,14 +1125,25 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
               reactions: update.updateData.reactions,
               updateData: update.updateData
             });
+            
+            const existingMessage = updated[index];
+            const reactions = update.updateData.reactions;
+            
+            // Hem reactions hem de message.reactions'ı güncelle
             updated[index] = {
-              ...updated[index],
-              reactions: update.updateData.reactions,
+              ...existingMessage,
+              reactions: reactions,
+              message: existingMessage.message ? {
+                ...existingMessage.message,
+                reactions: reactions
+              } : { reactions: reactions }
             };
+            
             hasChanges = true;
             console.log('[WebSocket] ✅ Reaction eklendi, güncellenmiş mesaj:', {
               messageId: updated[index]?.id || updated[index]?.key?.id,
-              reactions: updated[index].reactions
+              reactions: updated[index].reactions,
+              messageReactions: updated[index].message?.reactions
             });
           }
           

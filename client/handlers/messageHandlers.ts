@@ -133,21 +133,105 @@ export const createMessageHandlers = (deps: MessageHandlersDeps) => {
     const textToSend = replyText || '';
     if (!textToSend.trim()) return;
     
+    setIsSending(true);
+    const tempMessageId = `temp-${Date.now()}`;
+    
+    // Mesajın key'ini al
+    const messageKey = msg.key || { 
+      remoteJid: selectedChat.id, 
+      id: msg.id || '', 
+      fromMe: msg.fromMe || false 
+    };
+    
+    const messageId = messageKey.id || msg.id || '';
+    if (!messageId) {
+      setIsSending(false);
+      setToast({ 
+        message: 'Yanıtlanacak mesaj ID\'si bulunamadı', 
+        type: 'error' 
+      });
+      return;
+    }
+    
+    // Optimistic mesaj ekle
+    const optimisticMessage: Message = {
+      id: tempMessageId,
+      text: textToSend,
+      body: textToSend,
+      fromMe: true,
+      timestamp: Math.floor(Date.now() / 1000),
+      from: selectedChat.id,
+      status: 'sending',
+      quotedMessage: {
+        id: messageId,
+        from: msg.fromMe ? 'Sen' : (msg.pushName || msg.from || 'Kişi'),
+        text: msg.text || msg.body || 'Mesaj',
+      },
+    };
+    
+    addOptimisticMessage(optimisticMessage);
+    setMessage('');
+    
     try {
-      await api.replyToMessage(activeAccount.id, selectedChat.id, msg.id || '', textToSend);
-      setMessage('');
+      // API kullanarak quoted mesaj gönder (messageHandlers.ts şu an API kullanıyor)
+      // WebSocket desteği için whatsapp_multi_account.tsx'teki handleReplyMessage kullanılmalı
+      const quotedMessage = {
+        key: {
+          remoteJid: messageKey.remoteJid || selectedChat.id,
+          id: messageId,
+          fromMe: Boolean(messageKey.fromMe || msg.fromMe),
+        },
+        message: msg.message || {
+          conversation: msg.text || msg.body || '',
+        },
+      };
+      
+      const response = await api.sendMessage(
+        activeAccount.id,
+        selectedChat.id,
+        textToSend,
+        { quoted: quotedMessage }
+      );
+      
       setReplyingTo(null);
       updateChatTimestamp(selectedChat.id, textToSend);
+      
+      // Optimistic mesajı güncelle
+      setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return {
+              ...m,
+              status: 'sent',
+              id: response?.id || m.id,
+            };
+          }
+          return m;
+        })
+      );
       
       setTimeout(() => {
         loadMessages(activeAccount!.id, selectedChat!.id);
       }, 500);
     } catch (error) {
       console.error('Mesaj yanıtlanamadı:', error);
+      
+      // Hata durumunda mesajı güncelle
+      setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return { ...m, status: 'error', error: (error instanceof Error ? error.message : 'Bilinmeyen hata') };
+          }
+          return m;
+        })
+      );
+      
       setToast({ 
         message: 'Mesaj yanıtlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
       });
+    } finally {
+      setIsSending(false);
     }
   };
 

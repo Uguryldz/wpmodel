@@ -791,25 +791,16 @@ export default function MessageList({
                         </button>
                       )}
                       {fromMe && (
-                        <>
-                          <button
-                            onClick={() => {
-                              onSetEditingMessage(msg);
-                              onSetEditingText(msg.text || msg.body || '');
-                            }}
-                            className="p-1 hover:bg-gray-100 rounded"
-                            title="Düzenle"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            onClick={() => onStarMessage(msg, !msg.starred)}
-                            className="p-1 hover:bg-gray-100 rounded"
-                            title={msg.starred ? "Yıldızı kaldır" : "Yıldızla"}
-                          >
-                            {msg.starred ? <StarOff size={14} className="text-yellow-500" /> : <Star size={14} />}
-                          </button>
-                        </>
+                        <button
+                          onClick={() => {
+                            onSetEditingMessage(msg);
+                            onSetEditingText(msg.text || msg.body || '');
+                          }}
+                          className="p-1 hover:bg-gray-100 rounded"
+                          title="Düzenle"
+                        >
+                          <Edit2 size={14} />
+                        </button>
                       )}
                       {onSendReaction && (() => {
                         const msgId = `${msg.id || msg.key?.id || `msg-${index}`}-${msg.timestamp || index}`;
@@ -934,28 +925,6 @@ export default function MessageList({
                 </div>
                 <span className="text-sm font-medium">Cevapla</span>
               </button>
-
-              {/* 2. İfade Bırak (Reaction) */}
-              {onSendReaction && (
-                <button
-                  onClick={() => {
-                    // Basit emoji seçici - daha sonra modal ile geliştirilebilir
-                    const emojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-                    const selectedEmoji = prompt('Emoji seçin:', emojis.join(' '));
-                    if (selectedEmoji && emojis.includes(selectedEmoji)) {
-                      onSendReaction(selectedMessage, selectedEmoji);
-                    }
-                    onShowMessageMenu(false);
-                    onSelectMessage(null as any);
-                  }}
-                  className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-center space-x-3 text-gray-700 transition-colors group"
-                >
-                  <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 group-hover:bg-gray-200 transition-colors">
-                    <Smile size={16} className="text-gray-600" />
-                  </div>
-                  <span className="text-sm font-medium">İfade Bırak</span>
-                </button>
-              )}
 
               {/* 3. Yıldız Ekle (Star) */}
               {onStarMessage && (

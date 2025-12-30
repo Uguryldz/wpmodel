@@ -621,22 +621,120 @@ export default function WhatsAppMultiAccount() {
   const [editingText, setEditingText] = useState<string>('');
 
   const handleReplyMessage = async (msg: Message, replyText?: string) => {
-    if (!activeAccount || !chatsHook.selectedChat || !msg || !sendRequest) return;
+    if (!activeAccount || !chatsHook.selectedChat || !msg) return;
     
     const textToSend = replyText || messagesHook.message;
     if (!textToSend.trim()) return;
     
-    try {
-      await sendRequest('replyToMessage', {
-        sessionId: activeAccount.id,
-        jid: chatsHook.selectedChat.id,
-        messageId: msg.id || '',
-        text: textToSend,
+    // Mesajın key'ini al - önce key objesi, sonra key.id, sonra id
+    const messageKey = msg.key || { 
+      remoteJid: chatsHook.selectedChat.id, 
+      id: msg.id || '', 
+      fromMe: msg.fromMe || false 
+    };
+    
+    const messageId = messageKey.id || msg.id || '';
+    if (!messageId) {
+      console.error('Yanıtlanacak mesaj ID\'si bulunamadı:', msg);
+      setToast({ 
+        message: 'Yanıtlanacak mesaj ID\'si bulunamadı', 
+        type: 'error' 
       });
+      return;
+    }
+    
+    setIsSending(true);
+    const tempMessageId = `temp-${Date.now()}`;
+    
+    // Optimistic mesaj ekle
+    const optimisticMessage: Message = {
+      id: tempMessageId,
+      text: textToSend,
+      body: textToSend,
+      fromMe: true,
+      timestamp: Math.floor(Date.now() / 1000),
+      from: chatsHook.selectedChat.id,
+      status: 'sending',
+      quotedMessage: {
+        id: messageId,
+        from: msg.fromMe ? 'Sen' : (msg.pushName || msg.from || 'Kişi'),
+        text: msg.text || msg.body || 'Mesaj',
+      },
+    };
+    
+    messagesHook.setMessages(prev => {
+      const existingIds = new Set(prev.map(m => m.id || m.key?.id));
+      if (existingIds.has(optimisticMessage.id)) {
+        return prev;
+      }
+      const merged = [...prev, optimisticMessage];
+      merged.sort((a, b) => {
+        const aTime = (a.timestamp || a.messageTimestamp || 0) > 1000000000000 
+          ? (a.timestamp || a.messageTimestamp || 0) 
+          : (a.timestamp || a.messageTimestamp || 0) * 1000;
+        const bTime = (b.timestamp || b.messageTimestamp || 0) > 1000000000000 
+          ? (b.timestamp || b.messageTimestamp || 0) 
+          : (b.timestamp || b.messageTimestamp || 0) * 1000;
+        return aTime - bTime;
+      });
+      return merged;
+    });
+    
+    try {
+      // README'ye göre: await sock.sendMessage(jid, { text: 'hello word' }, { quoted: message })
+      // Quoted mesaj objesi hazırla - backend'deki edit.js'deki gibi
+      const quotedMessage = {
+        key: {
+          remoteJid: messageKey.remoteJid || chatsHook.selectedChat.id,
+          id: messageId,
+          fromMe: Boolean(messageKey.fromMe || msg.fromMe),
+        },
+        message: msg.message || {
+          conversation: msg.text || msg.body || '',
+        },
+      };
+      
+      let response;
+      
+      // WebSocket varsa WebSocket kullan, yoksa API fallback
+      if (sendRequest) {
+        console.log('[handleReplyMessage] WebSocket üzerinden gönderiliyor...');
+        // WebSocket üzerinden sendMessage request'i gönder
+        response = await sendRequest('sendMessage', {
+          sessionId: activeAccount.id,
+          jid: chatsHook.selectedChat.id,
+          message: textToSend,
+          options: { quoted: quotedMessage },
+        });
+      } else {
+        console.log('[handleReplyMessage] WebSocket yok, API fallback kullanılıyor...');
+        // API fallback
+        response = await api.sendMessage(
+          activeAccount.id,
+          chatsHook.selectedChat.id,
+          textToSend,
+          { quoted: quotedMessage }
+        );
+      }
+      
       messagesHook.setMessage('');
       setReplyingTo(null);
       
-      // Chat listesindeki ilgili chat'i güncelle (yeniden sıralama yapmadan)
+      // Optimistic mesajı güncelle
+      messagesHook.setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return {
+              ...m,
+              status: 'sent',
+              id: response?.id || m.id,
+            };
+          }
+          return m;
+        })
+      );
+      
+      // Chat listesindeki ilgili chat'i güncelle
       chatsHook.setChats(prevChats => {
         const index = prevChats.findIndex(c => c.id === chatsHook.selectedChat!.id);
         if (index >= 0) {
@@ -659,10 +757,23 @@ export default function WhatsAppMultiAccount() {
       }, 500);
     } catch (error) {
       console.error('Mesaj yanıtlanamadı:', error);
+      
+      // Hata durumunda mesajı güncelle
+      messagesHook.setMessages(prev => 
+        prev.map(m => {
+          if (m.id === tempMessageId) {
+            return { ...m, status: 'error', error: (error instanceof Error ? error.message : 'Bilinmeyen hata') };
+          }
+          return m;
+        })
+      );
+      
       setToast({ 
         message: 'Mesaj yanıtlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
       });
+    } finally {
+      setIsSending(false);
     }
   };
 

@@ -95,6 +95,18 @@ export function useMessages() {
                     ? Boolean(msg.fromMe) 
                     : (msg.key?.fromMe === true || msg.key?.fromMe === 'true' || msg.key?.fromMe === 1);
 
+                  // Reaction'ları al - backend'den gelen reaction verilerini koru
+                  const reactions = msg.reactions || msg.message?.reactions;
+                  
+                  // Debug: Reaction'ları logla (sadece varsa)
+                  if (reactions) {
+                    console.log('[useMessages] 🔍 Backend\'den reaction bulundu:', {
+                      messageId: msgId,
+                      reactions: reactions,
+                      reactionsType: Array.isArray(reactions) ? 'array' : typeof reactions
+                    });
+                  }
+
                   return {
                     ...msg,
                     id: msgId,
@@ -104,6 +116,8 @@ export function useMessages() {
                     timestamp: msg.timestamp || msg.messageTimestamp || undefined,
                     edited: msg.edited,
                     editedAt: msg.editedAt,
+                    // Reaction'ları koru - backend'den gelen reaction verilerini sakla
+                    reactions: reactions || undefined,
                   };
                 });
 
@@ -224,9 +238,19 @@ export function useMessages() {
   // Mesajları cache'e kaydet (WebSocket'ten gelen yeni mesajlar için)
   const updateMessagesCache = (sessionId: string, chatId: string, newMessages: Message[]) => {
     const messagesKey = `${sessionId}-${chatId}`;
-    if (currentChatKeyRef.current === messagesKey) {
-      // Eğer bu chat şu anda açıksa, cache'i güncelle
-      messagesCacheRef.current.set(messagesKey, newMessages);
+    
+    // Tüm chat'ler için cache'i güncelle (sadece seçili chat için değil)
+    // Reaction'ların korunması için önemli
+    messagesCacheRef.current.set(messagesKey, newMessages);
+    
+    // Debug: Reaction'ların cache'e kaydedildiğini logla
+    const messagesWithReactions = newMessages.filter(m => m.reactions || m.message?.reactions);
+    if (messagesWithReactions.length > 0) {
+      console.log('[useMessages] ✅ Cache güncellendi (reaction\'lar ile):', {
+        chatId,
+        totalMessages: newMessages.length,
+        messagesWithReactions: messagesWithReactions.length
+      });
     }
   };
 

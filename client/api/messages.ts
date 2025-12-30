@@ -56,11 +56,11 @@ export const getMessages = async (sessionId: string, jid: string, limit: number 
   }
 };
 
-export const sendMessage = async (sessionId: string, jid: string, message: string): Promise<any> => {
+export const sendMessage = async (sessionId: string, jid: string, message: string, options?: any): Promise<any> => {
   const response = await fetch(`${API_BASE}/${sessionId}/messages/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jid, type: 'text', message }),
+    body: JSON.stringify({ jid, type: 'text', message, options }),
   });
   if (!response.ok) {
     const errorText = await response.text();

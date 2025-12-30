@@ -436,6 +436,17 @@ export const formatMessage = (msg) => {
     text = '';
   }
 
+  // Reaction'ları al - hem msg.reactions hem de msg.message.reactions'dan
+  const reactions = msg.reactions || msg.message?.reactions || null;
+  
+  // Eğer message objesi varsa ve reaction'lar message içindeyse, onu da koru
+  let messageObj = msg.message;
+  if (messageObj && reactions && !messageObj.reactions) {
+    messageObj = { ...messageObj, reactions };
+  } else if (messageObj && reactions) {
+    messageObj = { ...messageObj, reactions: messageObj.reactions || reactions };
+  }
+
   return {
     id: msg.key?.id,
     from: msg.key?.remoteJid,
@@ -447,10 +458,12 @@ export const formatMessage = (msg) => {
     type: type || 'unknown',
     text: text,
     quotedMessage,
-    message: msg.message,
+    message: messageObj,
     key: msg.key,
     messageStubType: messageStubType || null,
     messageStubParameters: messageStubParameters || null,
+    // Reaction'ları direkt olarak da ekle (hem msg.reactions hem de message.reactions için)
+    reactions: reactions || undefined,
   };
 };
 
@@ -582,14 +595,59 @@ export const saveMessages = (instance, jid, messages = []) => {
     existing.map(m => m.key?.id || m.id || `${m.timestamp || m.messageTimestamp || 0}-${m.from || ''}`)
   );
   
-  const formatted = messages.map(formatMessage);
+  const formatted = messages.map((originalMsg, index) => {
+    const formattedMsg = formatMessage(originalMsg);
+    
+    // Reaction'ları koru - orijinal mesajdan reaction'ları al
+    // formatMessage zaten reaction'ları koruyor ama ekstra güvence için burada da kontrol ediyoruz
+    const reactions = originalMsg.reactions || originalMsg.message?.reactions || formattedMsg.reactions;
+    if (reactions) {
+      formattedMsg.reactions = reactions;
+      // message.reactions'ı da güncelle (tutarlılık için)
+      if (formattedMsg.message) {
+        formattedMsg.message.reactions = reactions;
+      } else if (reactions) {
+        formattedMsg.message = { reactions };
+      }
+      
+      // Debug: Reaction'ların korunduğunu logla
+      logger.debug({ 
+        messageId: formattedMsg.id || formattedMsg.key?.id,
+        hasReactions: !!reactions,
+        reactionsCount: Array.isArray(reactions) ? reactions.length : (typeof reactions === 'object' ? Object.keys(reactions).length : 0)
+      }, "Reaction'lar saveMessages'da korundu");
+    }
+    
+    return formattedMsg;
+  });
+  
   const newMessages = formatted.filter(msg => {
     const msgId = msg.key?.id || msg.id || `${msg.timestamp || msg.messageTimestamp || 0}-${msg.from || ''}`;
     return !existingIds.has(msgId);
   });
   
+  // Mevcut mesajları güncelle - yeni mesajlardaki reaction'ları mevcut mesajlara ekle
+  const existingMap = new Map(
+    existing.map(m => [m.key?.id || m.id || `${m.timestamp || m.messageTimestamp || 0}-${m.from || ''}`, m])
+  );
+  
+  // Yeni mesajlardaki reaction'ları mevcut mesajlara ekle
+  formatted.forEach(formattedMsg => {
+    const msgId = formattedMsg.key?.id || formattedMsg.id || `${formattedMsg.timestamp || formattedMsg.messageTimestamp || 0}-${formattedMsg.from || ''}`;
+    const existingMsg = existingMap.get(msgId);
+    if (existingMsg && formattedMsg.reactions) {
+      // Mevcut mesajı güncelle - reaction'ları ekle
+      existingMsg.reactions = formattedMsg.reactions;
+      if (existingMsg.message) {
+        existingMsg.message.reactions = formattedMsg.reactions;
+      } else if (formattedMsg.reactions) {
+        existingMsg.message = { reactions: formattedMsg.reactions };
+      }
+    }
+  });
+  
   // Son N mesajı tut (memory optimization)
-  const updated = [...existing, ...newMessages]
+  const updated = [...Array.from(existingMap.values()), ...newMessages]
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
     .slice(0, MESSAGE_STORE_LIMIT);
   
@@ -664,8 +722,31 @@ export const getMessageFromStore = async (key, sessionId) => {
       source: "memory" 
     }, "Message found in memory store");
     
+    // Key'i garanti et - found.key varsa onu kullan, yoksa key parametresini kullan
+    let messageKey = found.key;
+    if (!messageKey || typeof messageKey !== 'object') {
+      messageKey = key;
+    }
+    
+    // Eğer hala key yoksa, temel key oluştur
+    if (!messageKey || typeof messageKey !== 'object') {
+      messageKey = {
+        remoteJid: key.remoteJid,
+        id: key.id,
+        fromMe: false,
+      };
+    }
+    
+    // Key property'lerini garanti et
+    if (!messageKey.remoteJid) messageKey.remoteJid = key.remoteJid;
+    if (!messageKey.id) messageKey.id = key.id;
+    if (messageKey.fromMe === undefined || messageKey.fromMe === null) {
+      messageKey.fromMe = found.fromMe !== undefined ? Boolean(found.fromMe) : false;
+    }
+    messageKey.fromMe = Boolean(messageKey.fromMe);
+    
     return {
-      key: found.key || key,
+      key: messageKey,
       message: found.message,
       messageTimestamp: found.timestamp || found.messageTimestamp,
     };
@@ -696,8 +777,38 @@ export const getMessageFromStore = async (key, sessionId) => {
         source: "database" 
       }, "Message found in database");
       
+      // Key'i parse et ve garanti et
+      let messageKey = null;
+      if (serialized.key) {
+        try {
+          messageKey = typeof serialized.key === "string" ? JSON.parse(serialized.key) : serialized.key;
+        } catch (e) {
+          logger.warn({ error: e.message, sessionId, messageId: key.id }, "Key parse edilemedi, fallback kullanılıyor");
+          messageKey = key;
+        }
+      } else {
+        messageKey = key;
+      }
+      
+      // Key'in geçerli olduğundan emin ol
+      if (!messageKey || typeof messageKey !== 'object') {
+        messageKey = {
+          remoteJid: key.remoteJid,
+          id: key.id,
+          fromMe: false,
+        };
+      }
+      
+      // Key property'lerini garanti et
+      if (!messageKey.remoteJid) messageKey.remoteJid = key.remoteJid;
+      if (!messageKey.id) messageKey.id = key.id;
+      if (messageKey.fromMe === undefined || messageKey.fromMe === null) {
+        messageKey.fromMe = false;
+      }
+      messageKey.fromMe = Boolean(messageKey.fromMe);
+      
       return {
-        key: serialized.key ? (typeof serialized.key === "string" ? JSON.parse(serialized.key) : serialized.key) : key,
+        key: messageKey,
         message: serialized.message ? (typeof serialized.message === "string" ? JSON.parse(serialized.message) : serialized.message) : null,
         messageTimestamp: Number(serialized.messageTimestamp || 0),
       };

@@ -370,7 +370,7 @@ export default function MessageInput({
                 e.preventDefault();
                 if (!isSending && message.trim()) {
                   if (replyingTo) {
-                    onReplyMessage(replyingTo);
+                    onReplyMessage(replyingTo, message);
                   } else {
                     onSendMessage();
                   }
@@ -453,7 +453,13 @@ export default function MessageInput({
         ) : message ? (
           <div className="flex flex-col items-end space-y-1">
             <button 
-              onClick={onSendMessage}
+              onClick={() => {
+                if (replyingTo) {
+                  onReplyMessage(replyingTo, message);
+                } else {
+                  onSendMessage();
+                }
+              }}
               className="text-green-600 hover:text-green-700"
               disabled={isSending}
             >
