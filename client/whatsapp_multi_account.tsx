@@ -780,8 +780,34 @@ export default function WhatsAppMultiAccount() {
   const handleForwardMessage = async (msg: Message, toJid: string) => {
     if (!activeAccount || !msg) return;
     
+    const fromJid = chatsHook.selectedChat?.id || '';
+    const messageId = msg.id || msg.key?.id || '';
+    
+    if (!fromJid || !toJid || !messageId) {
+      setToast({ 
+        message: 'Mesaj iletilemedi: Gerekli bilgiler eksik', 
+        type: 'error' 
+      });
+      return;
+    }
+    
     try {
-      await api.forwardMessage(activeAccount.id, chatsHook.selectedChat?.id || '', toJid, msg.id || '');
+      let response;
+      
+      // WebSocket varsa WebSocket kullan, yoksa API fallback
+      if (sendRequest) {
+        console.log('[handleForwardMessage] WebSocket üzerinden iletileniyor...');
+        response = await sendRequest('forwardMessage', {
+          sessionId: activeAccount.id,
+          fromJid: fromJid,
+          toJid: toJid,
+          messageId: messageId,
+        });
+      } else {
+        console.log('[handleForwardMessage] WebSocket yok, API fallback kullanılıyor...');
+        response = await api.forwardMessage(activeAccount.id, fromJid, toJid, messageId);
+      }
+      
       setShowForwardSelector(false);
       setForwardingMessage(null);
       

@@ -1,6 +1,5 @@
 // Message editing functions (reply, forward, edit)
-import { ensureSocket, normalizeJid, getAccountId } from "../shared.js";
-import { generateForwardMessageContent } from "baileys";
+import { ensureSocket, normalizeJid, getAccountId, getOrCreateInstance, getMessageFromStore } from "../shared.js";
 import { logger } from "../../shared.js";
 
 /**
@@ -289,20 +288,16 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
   const normalizedToJid = normalizeJid(toJid);
   const sessionId = getAccountId(accountId);
 
-  // Önce memory store'dan kontrol et
-  const instance = getOrCreateInstance(accountId);
-  let msgData = null;
-  
-  const memoryMessages = instance.messagesStore.get(normalizedFromJid) || [];
-  const memoryMsg = memoryMessages.find(m => (m.id || m.key?.id) === messageId);
-  
-  if (memoryMsg && memoryMsg.message) {
-    msgData = memoryMsg.message;
-    logger.info({ messageId, source: "memory_store" }, "İletilecek mesaj memory store'da bulundu");
-  }
+  // README'ye göre: getMessageFromStore kullan
+  // Önce getMessageFromStore ile tam WAMessage formatında al
+  let fullMessage = await getMessageFromStore(
+    { remoteJid: normalizedFromJid, id: messageId },
+    sessionId
+  );
 
-  // Memory store'da yoksa DB'den kontrol et
-  if (!msgData) {
+  // getMessageFromStore'da yoksa DB'den kontrol et
+  if (!fullMessage) {
+    const { prisma } = await import("../../shared.js");
     let message = await prisma.message.findFirst({
       where: {
         sessionId,
@@ -341,7 +336,19 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
     }
 
     try {
-      msgData = typeof message.message === "string" ? JSON.parse(message.message) : message.message;
+      const msgData = typeof message.message === "string" ? JSON.parse(message.message) : message.message;
+      const msgKey = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
+      
+      // Tam WAMessage formatına çevir
+      fullMessage = {
+        key: msgKey || {
+          remoteJid: normalizedFromJid,
+          id: messageId,
+          fromMe: message.fromMe || false,
+        },
+        message: msgData,
+      };
+      
       logger.info({ messageId, source: "database" }, "İletilecek mesaj database'de bulundu");
     } catch (error) {
       logger.error({ error, messageId }, "Mesaj verisi parse edilemedi");
@@ -349,23 +356,52 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
     }
   }
 
-  if (!msgData) {
+  if (!fullMessage || !fullMessage.message) {
+    logger.error({ 
+      messageId, 
+      hasFullMessage: !!fullMessage,
+      hasMessage: !!fullMessage?.message,
+      fullMessageKeys: fullMessage ? Object.keys(fullMessage) : []
+    }, "Mesaj içeriği bulunamadı");
     throw new Error("Mesaj içeriği bulunamadı");
   }
 
+  // Mesaj içeriğini kontrol et - Baileys'in beklediği format
+  const messageContent = fullMessage.message;
+  if (!messageContent || typeof messageContent !== 'object') {
+    logger.error({ 
+      messageId,
+      messageContentType: typeof messageContent,
+      messageContent: messageContent
+    }, "Mesaj içeriği geçersiz format");
+    throw new Error("Mesaj içeriği geçersiz format");
+  }
+
+  // Mesaj içeriğinde herhangi bir content var mı kontrol et
+  const contentKeys = Object.keys(messageContent);
+  if (contentKeys.length === 0) {
+    logger.error({ 
+      messageId,
+      messageContent,
+      fullMessage
+    }, "Mesaj içeriği boş - content yok");
+    throw new Error("Mesaj içeriği boş - content yok");
+  }
+
   try {
-    // Baileys kaynak koduna göre: generateForwardMessageContent kullanılır
-    const forwardContent = generateForwardMessageContent(msgData, false);
-    
-    if (!forwardContent) {
-      throw new Error("Forward içeriği oluşturulamadı");
-    }
+    // README'ye göre: await sock.sendMessage(jid, { forward: msg })
+    // fullMessage zaten tam WAMessage formatında (key + message)
+    const forwardContent = { forward: fullMessage };
     
     logger.info({ 
       fromJid: normalizedFromJid, 
       toJid: normalizedToJid, 
       messageId,
-      forwardContentKeys: Object.keys(forwardContent || {})
+      hasKey: !!fullMessage.key,
+      hasMessage: !!fullMessage.message,
+      messageKeys: contentKeys,
+      keyId: fullMessage.key?.id,
+      keyRemoteJid: fullMessage.key?.remoteJid
     }, "Mesaj iletilmeye çalışılıyor...");
     
     await sock.sendMessage(normalizedToJid, forwardContent);

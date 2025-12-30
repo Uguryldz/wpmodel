@@ -359,6 +359,17 @@ wss.on("connection", (ws, req) => {
                 throw new Error('sessionId, jid, messageId ve text gerekli');
               }
               break;
+
+            case 'forwardMessage':
+              // Mesaj ilet (forward)
+              const { sessionId: forwardSessionId, fromJid: forwardFromJid, toJid: forwardToJid, messageId: forwardMessageId } = data.payload || {};
+              if (forwardSessionId && forwardFromJid && forwardToJid && forwardMessageId) {
+                const { forwardMessage } = await import("./baileys/messages/edit.js");
+                responseData = await forwardMessage(forwardSessionId, forwardFromJid, forwardToJid, forwardMessageId);
+              } else {
+                throw new Error('sessionId, fromJid, toJid ve messageId gerekli');
+              }
+              break;
               
             default:
               throw new Error(`Bilinmeyen request type: ${data.requestType}`);
