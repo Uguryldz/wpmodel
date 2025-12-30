@@ -797,21 +797,34 @@ export default function WhatsAppMultiAccount() {
       // WebSocket varsa WebSocket kullan, yoksa API fallback
       if (sendRequest) {
         console.log('[handleForwardMessage] WebSocket üzerinden iletileniyor...');
-        response = await sendRequest('forwardMessage', {
-          sessionId: activeAccount.id,
-          fromJid: fromJid,
-          toJid: toJid,
-          messageId: messageId,
-        });
+        try {
+          response = await sendRequest('forwardMessage', {
+            sessionId: activeAccount.id,
+            fromJid: fromJid,
+            toJid: toJid,
+            messageId: messageId,
+          });
+          console.log('[handleForwardMessage] WebSocket response:', response);
+        } catch (wsError) {
+          console.error('[handleForwardMessage] WebSocket hatası:', wsError);
+          throw wsError;
+        }
       } else {
         console.log('[handleForwardMessage] WebSocket yok, API fallback kullanılıyor...');
         response = await api.forwardMessage(activeAccount.id, fromJid, toJid, messageId);
+        console.log('[handleForwardMessage] API response:', response);
       }
       
+      // Response başarılı (hata fırlatılmadıysa), toast göster
+      console.log('[handleForwardMessage] İşlem başarılı, toast gösteriliyor...');
       setShowForwardSelector(false);
       setForwardingMessage(null);
       
-      setToast({ message: 'Mesaj iletildi', type: 'success' });
+      // Toast'u setTimeout ile göster (state güncellemesi için)
+      setTimeout(() => {
+        setToast({ message: 'Mesaj iletildi', type: 'success' });
+        console.log('[handleForwardMessage] ✅ Toast gösterildi: Mesaj iletildi');
+      }, 100);
       
       if (chatsHook.selectedChat) {
         setTimeout(() => {
@@ -819,11 +832,18 @@ export default function WhatsAppMultiAccount() {
         }, 500);
       }
     } catch (error) {
-      console.error('Mesaj iletilemedi:', error);
-      setToast({ 
-        message: 'Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
-        type: 'error' 
-      });
+      console.error('[handleForwardMessage] ❌ Hata:', error);
+      setShowForwardSelector(false);
+      setForwardingMessage(null);
+      
+      // Hata toast'u da setTimeout ile göster
+      setTimeout(() => {
+        setToast({ 
+          message: 'Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
+          type: 'error' 
+        });
+        console.log('[handleForwardMessage] ❌ Hata toast gösterildi');
+      }, 100);
     }
   };
 

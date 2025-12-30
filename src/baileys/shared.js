@@ -447,6 +447,15 @@ export const formatMessage = (msg) => {
     messageObj = { ...messageObj, reactions: messageObj.reactions || reactions };
   }
 
+  // Forward edilen mesajı tespit et
+  const isForwarded = msg.message?.extendedTextMessage?.contextInfo?.isForwarded ||
+                     msg.message?.imageMessage?.contextInfo?.isForwarded ||
+                     msg.message?.videoMessage?.contextInfo?.isForwarded ||
+                     msg.message?.audioMessage?.contextInfo?.isForwarded ||
+                     msg.message?.documentMessage?.contextInfo?.isForwarded ||
+                     msg.message?.forwardedMessage ||
+                     false;
+
   return {
     id: msg.key?.id,
     from: msg.key?.remoteJid,
@@ -464,6 +473,8 @@ export const formatMessage = (msg) => {
     messageStubParameters: messageStubParameters || null,
     // Reaction'ları direkt olarak da ekle (hem msg.reactions hem de message.reactions için)
     reactions: reactions || undefined,
+    // Forward edilen mesaj bilgisi
+    isForwarded: isForwarded || undefined,
   };
 };
 

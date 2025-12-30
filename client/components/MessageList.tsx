@@ -618,6 +618,28 @@ export default function MessageList({
                       </div>
                     )}
                     
+                    {/* Forward edilen mesaj göstergesi */}
+                    {!isProtocol && (() => {
+                      // Forward edilen mesajı tespit et
+                      const isForwarded = msg.message?.extendedTextMessage?.contextInfo?.isForwarded ||
+                                         msg.message?.imageMessage?.contextInfo?.isForwarded ||
+                                         msg.message?.videoMessage?.contextInfo?.isForwarded ||
+                                         msg.message?.audioMessage?.contextInfo?.isForwarded ||
+                                         msg.message?.documentMessage?.contextInfo?.isForwarded ||
+                                         msg.message?.forwardedMessage ||
+                                         msg.isForwarded;
+                      
+                      if (isForwarded) {
+                        return (
+                          <div className="text-xs text-gray-500 mb-1 flex items-center space-x-1">
+                            <Forward size={12} className="text-gray-400" />
+                            <span>İletildi</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    
                     {!isProtocol && msg.quotedMessage && (
                       <div className="border-l-4 border-blue-500 pl-2 mb-1 text-xs text-gray-600 bg-gray-100 rounded py-1">
                         <div className="font-semibold text-blue-600">{msg.quotedMessage.from || 'Kişi'}</div>
