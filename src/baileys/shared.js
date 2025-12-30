@@ -437,14 +437,36 @@ export const formatMessage = (msg) => {
   }
 
   // Reaction'ları al - hem msg.reactions hem de msg.message.reactions'dan
-  const reactions = msg.reactions || msg.message?.reactions || null;
+  // Önce direkt msg.reactions'ı kontrol et (DB'den gelen ayrı field)
+  let reactions = msg.reactions || null;
+  
+  // Eğer msg.reactions yoksa, message.reactions'ı kontrol et
+  if (!reactions && msg.message?.reactions) {
+    reactions = msg.message.reactions;
+  }
+  
+  // Eğer hala yoksa, message objesi içinde başka yerlerde ara
+  if (!reactions && msg.message) {
+    // message objesi içinde reactions field'ı var mı?
+    if (msg.message.reactions) {
+      reactions = msg.message.reactions;
+    }
+  }
+  
+  // Reaction'ları parse et (eğer string ise)
+  if (reactions && typeof reactions === 'string') {
+    try {
+      reactions = JSON.parse(reactions);
+    } catch (e) {
+      logger.warn({ error: e, messageId: msg.key?.id }, "Reaction parse edilemedi (string format)");
+    }
+  }
   
   // Eğer message objesi varsa ve reaction'lar message içindeyse, onu da koru
   let messageObj = msg.message;
-  if (messageObj && reactions && !messageObj.reactions) {
+  if (messageObj && reactions) {
+    // Reaction'ları message objesine ekle (kalıcılık için)
     messageObj = { ...messageObj, reactions };
-  } else if (messageObj && reactions) {
-    messageObj = { ...messageObj, reactions: messageObj.reactions || reactions };
   }
 
   // Forward edilen mesajı tespit et
@@ -472,6 +494,8 @@ export const formatMessage = (msg) => {
     messageStubType: messageStubType || null,
     messageStubParameters: messageStubParameters || null,
     // Reaction'ları direkt olarak da ekle (hem msg.reactions hem de message.reactions için)
+    // ÖNEMLİ: Reaction'lar hem direkt field olarak hem de message.reactions içinde olmalı
+    // Frontend'de msg.reactions || msg.message?.reactions kontrolü yapılıyor
     reactions: reactions || undefined,
     // Forward edilen mesaj bilgisi
     isForwarded: isForwarded || undefined,

@@ -110,12 +110,15 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
         });
         
         // Reaction'ları ekle - önce ayrı reactions field'ını kontrol et, sonra message.reactions'ı
+        // ÖNEMLİ: Reaction'lar hem direkt field olarak hem de message.reactions içinde olmalı
+        // Frontend'de msg.reactions || msg.message?.reactions kontrolü yapılıyor
         let reactions = null;
         
         // 1. Prisma'dan gelen ayrı reactions field'ını kontrol et
         if (m.reactions) {
           try {
             reactions = typeof m.reactions === "string" ? JSON.parse(m.reactions) : m.reactions;
+            logger.debug({ messageId: m.id, reactionsCount: Array.isArray(reactions) ? reactions.length : Object.keys(reactions || {}).length }, "Reaction'lar DB'den yüklendi (reactions field)");
           } catch (reactionError) {
             logger.warn({ error: reactionError, messageId: m.id }, "Reaction parse edilemedi (reactions field)");
           }
@@ -124,15 +127,22 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
         // 2. Eğer ayrı reactions field'ı yoksa, message.reactions'ı kontrol et
         if (!reactions && parsedMessage?.reactions) {
           reactions = parsedMessage.reactions;
+          logger.debug({ messageId: m.id, reactionsCount: Array.isArray(reactions) ? reactions.length : Object.keys(reactions || {}).length }, "Reaction'lar DB'den yüklendi (message.reactions)");
         }
         
-        // 3. Reaction'ları ekle
+        // 3. Reaction'ları ekle - hem direkt field hem de message.reactions içinde
         if (reactions) {
           formattedMsg.reactions = reactions;
           // message.reactions'ı da güncelle (tutarlılık için)
           if (formattedMsg.message) {
             formattedMsg.message.reactions = reactions;
+          } else {
+            // Eğer message objesi yoksa oluştur
+            formattedMsg.message = { reactions };
           }
+          logger.debug({ messageId: m.id, hasReactions: true, reactionsType: Array.isArray(reactions) ? 'array' : typeof reactions }, "Reaction'lar formattedMsg'a eklendi");
+        } else {
+          logger.debug({ messageId: m.id, hasReactions: false }, "Reaction'lar bulunamadı");
         }
         
         return formattedMsg;
