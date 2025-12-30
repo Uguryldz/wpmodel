@@ -1717,16 +1717,30 @@ export const bindSocketEvents = (instance) => {
             }
 
             // WhatsApp numarasını sessionId ile eşleştir
+            // JID'den sadece telefon numarasını çıkar (regex ile)
+            // Örnekler: 
+            // 905538490699:67@s.whatsapp.net -> 905538490699
+            // 905538490699@s.whatsapp.net -> 905538490699
+            // 161782895247385@lid -> 161782895247385
+            const extractPhoneNumber = (jid) => {
+              if (!jid) return jid;
+              // İlk sayısal kısmı al (: veya @ karakterinden önce)
+              const match = jid.match(/^(\d+)/);
+              return match ? match[1] : jid;
+            };
+            
+            const phoneNumber = extractPhoneNumber(whatsappJid);
+            
             await prisma.session.upsert({
               where: {
                 sessionId_id: {
                   sessionId,
-                  id: `whatsapp-${whatsappJid}-${sessionId}`,
+                  id: phoneNumber,
                 },
               },
               create: {
                 sessionId,
-                id: `whatsapp-${whatsappJid}-${sessionId}`,
+                id: phoneNumber,
                 data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
               },
               update: {
