@@ -6,8 +6,9 @@
 -- ============================================
 
 -- Message type'a göre index (imageMessage, videoMessage, vb.)
+-- NOT: GIN text için kullanılamaz, bu yüzden B-tree index kullanıyoruz
 CREATE INDEX IF NOT EXISTS idx_messages_message_type 
-ON messages USING GIN ((message->>'type'));
+ON messages ((message->>'type'));
 
 -- Message içeriğinde arama için (text mesajları)
 CREATE INDEX IF NOT EXISTS idx_messages_message_text 
@@ -39,8 +40,8 @@ WHERE participant IS NOT NULL;
 
 -- Business profile sorguları için
 CREATE INDEX IF NOT EXISTS idx_contacts_business_profile 
-ON contacts USING GIN (business_profile)
-WHERE business_profile IS NOT NULL;
+ON contacts USING GIN ("businessProfile")
+WHERE "businessProfile" IS NOT NULL;
 
 -- ============================================
 -- GROUP METADATA JSONB INDEX'LERİ
@@ -56,17 +57,17 @@ ON group_metadata USING GIN (participants);
 
 -- Partial index'ler (sadece aktif chat'ler için)
 CREATE INDEX IF NOT EXISTS idx_chats_active 
-ON chats (session_id, conversation_timestamp DESC)
+ON chats ("sessionId", "conversationTimestamp" DESC)
 WHERE archived = false;
 
 -- Partial index'ler (sadece okunmamış mesajlar için)
 CREATE INDEX IF NOT EXISTS idx_messages_unread 
-ON messages (session_id, remote_jid, message_timestamp DESC)
+ON messages ("sessionId", "remoteJid", "messageTimestamp" DESC)
 WHERE status < 3; -- 0: pending, 1: server_ack, 2: delivery, 3: read
 
 -- Partial index'ler (sadece yıldızlı mesajlar için)
 CREATE INDEX IF NOT EXISTS idx_messages_starred 
-ON messages (session_id, remote_jid, message_timestamp DESC)
+ON messages ("sessionId", "remoteJid", "messageTimestamp" DESC)
 WHERE starred = true;
 
 -- ============================================
