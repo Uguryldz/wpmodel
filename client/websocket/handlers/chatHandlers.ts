@@ -1,6 +1,6 @@
 // Chat event handlers (chats.set, chats.upsert, chats.update)
 import { Chat } from '../../types';
-import { normalizeJid, extractPhoneFromJid, normalizePhoneNumber } from '../../utils/contactUtils';
+import { standardizeChatId, extractPhoneFromJid, normalizePhoneNumber, normalizeJid } from '../../utils/contactUtils';
 import { WebSocketContext, WebSocketEvent } from '../types';
 
 export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) => {
@@ -39,7 +39,7 @@ export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) 
     
     return {
       ...chat,
-      id: normalizeJid(chatId),
+      id: standardizeChatId(chatId),
     };
   });
 
@@ -140,7 +140,7 @@ export const handleChatsUpsert = (data: WebSocketEvent, context: WebSocketContex
     }
     return {
       ...chat,
-      id: normalizeJid(chatId),
+      id: standardizeChatId(chatId),
     };
   });
 
@@ -156,9 +156,9 @@ export const handleChatsUpsert = (data: WebSocketEvent, context: WebSocketContex
       const updatedChats = [...prevChats];
 
       normalizedChats.forEach((chat: any) => {
-        const normalizedChatId = normalizeJid(chat.id);
+        const normalizedChatId = standardizeChatId(chat.id);
         const index = updatedChats.findIndex(c => {
-          const cNormalized = normalizeJid(c.id);
+          const cNormalized = standardizeChatId(c.id);
           return cNormalized === normalizedChatId || c.id === normalizedChatId;
         });
         

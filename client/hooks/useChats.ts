@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 // API import kaldırıldı - WebSocket kullanılıyor
 import { Chat, Message } from '../types';
-import { normalizeJid, extractPhoneFromJid, normalizePhoneNumber } from '../utils/contactUtils';
+import { standardizeChatId, extractPhoneFromJid, normalizePhoneNumber, normalizeJid } from '../utils/contactUtils';
 
 interface UseChatsProps {
   activeAccountId: string | undefined;
@@ -60,8 +60,8 @@ export function useChats({
       const phoneNumber = extractPhoneFromJid(chatId); // Örnek: 905538781507
       
       if (!phoneNumber) {
-        // Telefon numarası çıkarılamadıysa, normalize edilmiş JID'yi direkt kullan
-        const normalizedJid = normalizeJid(chatId);
+        // Telefon numarası çıkarılamadıysa, standart formata getir
+        const normalizedJid = standardizeChatId(chatId);
         if (!phoneToChatMap.has(normalizedJid)) {
           phoneToChatMap.set(normalizedJid, { ...chat, id: normalizedJid });
         }
@@ -71,8 +71,8 @@ export function useChats({
       // Normalize edilmiş telefon numarasını oluştur
       const phoneNumberNormalized = normalizePhoneNumber(phoneNumber); // 05538781507 -> 905538781507
       
-      // Normalize edilmiş JID'yi oluştur
-      const normalizedJid = normalizeJid(chatId); // 905538781507@s.whatsapp.net formatına getir
+      // Standart formata getirilmiş JID'yi oluştur
+      const normalizedJid = standardizeChatId(chatId); // 905538781507@s.whatsapp.net formatına getir
       
       // Eğer bu telefon numarası için zaten bir chat varsa (DUPLICATE)
       if (phoneToChatMap.has(phoneNumberNormalized)) {
@@ -86,7 +86,7 @@ export function useChats({
           if (oldJid && oldJid.includes('@lid') && existingChatAny.lidJid) {
             oldJid = existingChatAny.lidJid;
           }
-          oldJid = normalizeJid(oldJid);
+          oldJid = standardizeChatId(oldJid);
           const newJid = normalizedJid;
           
           // Eski chat'in mesajlarını al

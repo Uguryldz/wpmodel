@@ -39,18 +39,11 @@ export const formatContactName = (c) => {
   );
 };
 
-export const normalizeJid = (value) => {
-  if (!value || typeof value !== "string") {
-    throw new Error("Alıcı (jid) değeri zorunludur.");
-  }
+// Merkezi JID converter modülünden normalizeJid'i import et
+import { normalizeJid as normalizeJidFromConverter } from "../utils/jidConverter.js";
 
-  if (value.includes("@")) {
-    return value;
-  }
-
-  const suffix = value.includes("-") ? "@g.us" : "@s.whatsapp.net";
-  return `${value}${suffix}`;
-};
+// Geriye dönük uyumluluk için export et
+export const normalizeJid = normalizeJidFromConverter;
 
 // Instance management
 export const getOrCreateInstance = (accountId) => {

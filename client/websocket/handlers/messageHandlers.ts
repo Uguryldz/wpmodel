@@ -1,7 +1,7 @@
 // Message event handlers (messages.upsert, messages.set, messages.update)
 import { Message, Chat } from '../../types';
 import { extractMessageText } from '../../utils/messageUtils';
-import { extractPhoneFromJid, normalizeJid, normalizePhoneNumber } from '../../utils/contactUtils';
+import { extractPhoneFromJid, standardizeMessageJid, standardizeChatId, normalizeGroupMessageJids, normalizeJid, normalizePhoneNumber } from '../../utils/contactUtils';
 import { WebSocketContext, WebSocketEvent } from '../types';
 
 export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketContext) => {
@@ -76,12 +76,12 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
       if (phoneToChatIdMap.has(phoneNumber)) {
         chatId = phoneToChatIdMap.get(phoneNumber)!;
       } else {
-        const normalizedChatId = normalizeJid(chatId);
+        const normalizedChatId = standardizeChatId(chatId);
         phoneToChatIdMap.set(phoneNumber, normalizedChatId);
         chatId = normalizedChatId;
       }
     } else {
-      chatId = normalizeJid(chatId);
+      chatId = standardizeChatId(chatId);
     }
     
     if (!messagesByChat.has(chatId)) {
@@ -108,7 +108,7 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
   
   // Her chat için mesajları işle
   for (const [chatId, chatMessages] of messagesByChat.entries()) {
-    const normalizedChatId = chatId.includes('@g.us') ? chatId : normalizeJid(chatId);
+    const normalizedChatId = chatId.includes('@g.us') ? chatId : standardizeChatId(chatId);
     
     // Silinen mesajları filtrele (messageStubType === 0 veya messageStubParameters varsa)
     // Ama reaction mesajlarını filtreleme (bunlar ayrı mesaj olarak gösterilmemeli ama silinmiş olarak da işaretlenmemeli)
@@ -802,21 +802,9 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
       return false;
     }
     
-    // JID normalizasyonu: device ID'yi kaldır (905538490699:66@s.whatsapp.net -> 905538490699@s.whatsapp.net)
-    // @lid formatını da normalize et (264655918346368@lid -> telefon numarasına çevir)
-    let normalizedUpdateJid = updateJid.replace(/:\d+@/, '@');
-    let normalizedSelectedChatId = currentSelectedChat.id?.replace(/:\d+@/, '@');
-    
-    // @lid formatını telefon numarasına çevir (LID mapping kullanarak)
-    if (normalizedUpdateJid.includes('@lid')) {
-      // @lid formatındaki JID'i telefon numarasına çevirmek için backend'den gelen mapping'i kullan
-      // Şimdilik telefon numarasını extractPhoneFromJid ile çıkar
-      const lidPhone = extractPhoneFromJid(normalizedUpdateJid);
-      if (lidPhone) {
-        // Telefon numarasından @s.whatsapp.net formatına çevir
-        normalizedUpdateJid = `${lidPhone}@s.whatsapp.net`;
-      }
-    }
+    // JID normalizasyonu: Merkezi converter kullan
+    const normalizedUpdateJid = standardizeChatId(updateJid);
+    const normalizedSelectedChatId = standardizeChatId(currentSelectedChat.id);
     
     // Telefon numarasına göre eşleştirme (@lid formatı için)
     const updatePhone = extractPhoneFromJid(updateJid) || extractPhoneFromJid(normalizedUpdateJid);
@@ -936,9 +924,9 @@ export const handleMessagesUpdate = (data: WebSocketEvent, context: WebSocketCon
             const mJid = m.from || m.key?.remoteJid;
             if (!mJid) return false;
             
-            // JID eşleştirmesi (normalize edilmiş)
-            const mJidNormalized = mJid.includes('@g.us') ? mJid : extractPhoneFromJid(mJid);
-            const updateJidNormalized = updateJid.includes('@g.us') ? updateJid : extractPhoneFromJid(updateJid);
+            // JID eşleştirmesi (standart formata getirilmiş)
+            const mJidNormalized = mJid.includes('@g.us') ? mJid : standardizeChatId(mJid);
+            const updateJidNormalized = updateJid.includes('@g.us') ? updateJid : standardizeChatId(updateJid);
             
             if (mJidNormalized !== updateJidNormalized) return false;
             
