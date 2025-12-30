@@ -19,8 +19,16 @@ model Chat {
   sessionId                 String
   
   // Temel Bilgiler (Baileys store'dan)
-  id                        String   // JID: "905335989539@s.whatsapp.net" veya "120363123456789012@g.us"
+  id                        String   // JID: "905335989539@s.whatsapp.net" veya "120363123456789012@g.us" (orijinal/raw)
   conversationTimestamp     BigInt?  // Son mesaj zamanı (Unix timestamp - saniye)
+  
+  // JID Format Alanları (jidConverter.ts için - arama ve eşleştirme için)
+  jidNormalized             String?  // Normalize edilmiş JID (normalizeJid)
+  jidStandardized            String?  // Standart JID (standardizeJid)
+  phoneRaw                   String?  // Telefon numarası (raw, extractPhoneFromJid)
+  phoneNormalized            String?  // Normalize edilmiş telefon (normalizePhoneNumber)
+  phoneFormat                String?  // Format: 'turkish' | 'international' | 'unknown' (detectPhoneFormat)
+  jidType                    String?  // JID tipi: 'user' | 'group' | 'newsletter' | 'broadcast' | 'lid' | 'unknown' (detectJidType)
   unreadCount               Int      @default(0)
   archived                  Boolean  @default(false)
   pinned                    BigInt?  // Sabitlenmiş mi? (timestamp)
@@ -88,6 +96,10 @@ model Chat {
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@index([jidNormalized]) // Normalize edilmiş JID için index (arama performansı)
+  @@index([jidStandardized]) // Standart JID için index
+  @@index([phoneRaw]) // Telefon numarası için index (arama performansı)
+  @@index([phoneNormalized]) // Normalize edilmiş telefon için index
   @@index([conversationTimestamp])
   @@index([archived])
   @@index([pinned])
@@ -101,7 +113,15 @@ model Chat {
 model Contact {
   pkId         Int     @id @default(autoincrement())
   sessionId    String
-  id           String  // JID: "905335989539@s.whatsapp.net"
+  id           String  // JID: "905335989539@s.whatsapp.net" (orijinal/raw)
+  
+  // JID Format Alanları (jidConverter.ts için - arama ve eşleştirme için)
+  jidNormalized             String?  // Normalize edilmiş JID (normalizeJid)
+  jidStandardized            String?  // Standart JID (standardizeJid)
+  phoneRaw                   String?  // Telefon numarası (raw, extractPhoneFromJid)
+  phoneNormalized            String?  // Normalize edilmiş telefon (normalizePhoneNumber)
+  phoneFormat                String?  // Format: 'turkish' | 'international' | 'unknown' (detectPhoneFormat)
+  jidType                    String?  // JID tipi: 'user' | 'group' | 'newsletter' | 'broadcast' | 'lid' | 'unknown' (detectJidType)
   
   // İsim Bilgileri
   name         String?
@@ -119,6 +139,10 @@ model Contact {
 
   @@unique([sessionId, id])
   @@index([sessionId])
+  @@index([jidNormalized]) // Normalize edilmiş JID için index (arama performansı)
+  @@index([jidStandardized]) // Standart JID için index
+  @@index([phoneRaw]) // Telefon numarası için index (arama performansı)
+  @@index([phoneNormalized]) // Normalize edilmiş telefon için index
   @@index([verifiedName])
   @@map("contacts")
 }
@@ -129,8 +153,16 @@ model Contact {
 model Message {
   pkId                            Int      @id @default(autoincrement())
   sessionId                       String
-  remoteJid                       String   // Chat JID: "905335989539@s.whatsapp.net"
+  remoteJid                       String   // Chat JID: "905335989539@s.whatsapp.net" (orijinal/raw)
   id                              String   // Mesaj ID
+  
+  // JID Format Alanları (jidConverter.ts için - arama ve eşleştirme için)
+  remoteJidNormalized             String?  // Normalize edilmiş remoteJid (normalizeJid)
+  remoteJidStandardized           String?  // Standart remoteJid (standardizeJid)
+  remoteJidPhoneRaw               String?  // Telefon numarası (raw, extractPhoneFromJid)
+  remoteJidPhoneNormalized        String?  // Normalize edilmiş telefon (normalizePhoneNumber)
+  remoteJidPhoneFormat            String?  // Format: 'turkish' | 'international' | 'unknown'
+  remoteJidType                   String?  // JID tipi: 'user' | 'group' | 'newsletter' | 'broadcast' | 'lid' | 'unknown'
   
   // Key Bilgileri (PostgreSQL JSONB - index'lenebilir!)
   key                             Json     // { remoteJid, fromMe, id, participant }
@@ -142,11 +174,19 @@ model Message {
   messageTimestamp                BigInt?  // Mesaj zamanı (Unix timestamp - saniye)
   messageC2STimestamp             BigInt?  // C2S timestamp
   pushName                        String?  // Gönderen adı
-  participant                     String?  // Participant JID (grup mesajları için)
+  participant                     String?  // Participant JID (grup mesajları için) (orijinal/raw)
+  
+  // Participant JID Format Alanları (jidConverter.ts için)
+  participantNormalized           String?  // Normalize edilmiş participant JID
+  participantPhoneRaw              String?  // Participant telefon numarası (raw)
+  participantPhoneNormalized       String?  // Normalize edilmiş participant telefon
+  participantPhoneFormat           String?  // Participant format: 'turkish' | 'international' | 'unknown'
+  
   broadcast                       Boolean? @default(false)
   multicast                       Boolean? @default(false)
   status                          Int?     // Mesaj durumu (0: pending, 1: server_ack, 2: delivery, 3: read)
   starred                         Boolean? @default(false)
+  isForwarded                      Boolean? @default(false) // Mesaj iletildi mi? (forward edildi mi?)
   
   // Reaction'lar (PostgreSQL JSONB - index'lenebilir!)
   reactions                       Json?    // Reaction array (JSON)
@@ -195,11 +235,15 @@ model Message {
   @@unique([sessionId, remoteJid, id])
   @@index([sessionId])
   @@index([remoteJid])
+  @@index([remoteJidNormalized]) // Normalize edilmiş JID için index (arama performansı)
+  @@index([remoteJidPhoneRaw]) // Telefon numarası için index (arama performansı)
+  @@index([remoteJidPhoneNormalized]) // Normalize edilmiş telefon için index
   @@index([sessionId, remoteJid]) // Composite index - chat bazında mesaj sorguları için
   @@index([messageTimestamp])
   @@index([status])
   @@index([starred])
   @@index([participant]) // Grup mesajları için
+  @@index([participantNormalized]) // Normalize edilmiş participant için index
   // PostgreSQL JSONB index'leri (migration'da eklenecek)
   // CREATE INDEX idx_message_type ON messages USING GIN ((message->>'type'));
   // CREATE INDEX idx_message_reactions ON messages USING GIN (reactions);

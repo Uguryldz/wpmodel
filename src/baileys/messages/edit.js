@@ -339,20 +339,68 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
       const msgData = typeof message.message === "string" ? JSON.parse(message.message) : message.message;
       const msgKey = typeof message.key === "string" ? JSON.parse(message.key) : message.key;
       
-      // Tam WAMessage formatına çevir
+      // Tam WAMessage formatına çevir (Baileys'in beklediği format)
+      // WAMessage = { key: { remoteJid, id, fromMe, participant? }, message: { ... } }
       fullMessage = {
         key: msgKey || {
           remoteJid: normalizedFromJid,
           id: messageId,
-          fromMe: message.fromMe || false,
+          fromMe: false,
         },
-        message: msgData,
+        message: msgData || {},
       };
       
-      logger.info({ messageId, source: "database" }, "İletilecek mesaj database'de bulundu");
+      // Key'i garanti et - Baileys forward için gerekli
+      if (!fullMessage.key.remoteJid) {
+        fullMessage.key.remoteJid = normalizedFromJid;
+      }
+      if (!fullMessage.key.id) {
+        fullMessage.key.id = messageId;
+      }
+      if (fullMessage.key.fromMe === undefined || fullMessage.key.fromMe === null) {
+        fullMessage.key.fromMe = false;
+      }
+      
+      logger.info({ 
+        messageId, 
+        source: "database",
+        hasKey: !!fullMessage.key,
+        hasMessage: !!fullMessage.message,
+        keyRemoteJid: fullMessage.key.remoteJid,
+        keyId: fullMessage.key.id,
+        keyFromMe: fullMessage.key.fromMe,
+        messageKeys: fullMessage.message ? Object.keys(fullMessage.message) : []
+      }, "İletilecek mesaj database'de bulundu ve formatlandı");
     } catch (error) {
       logger.error({ error, messageId }, "Mesaj verisi parse edilemedi");
       throw new Error("Mesaj verisi geçersiz");
+    }
+  }
+  
+  // getMessageFromStore'dan gelen mesajı da kontrol et ve formatla
+  if (fullMessage) {
+    // Key'i garanti et
+    if (!fullMessage.key) {
+      fullMessage.key = {
+        remoteJid: normalizedFromJid,
+        id: messageId,
+        fromMe: false,
+      };
+    } else {
+      if (!fullMessage.key.remoteJid) {
+        fullMessage.key.remoteJid = normalizedFromJid;
+      }
+      if (!fullMessage.key.id) {
+        fullMessage.key.id = messageId;
+      }
+      if (fullMessage.key.fromMe === undefined || fullMessage.key.fromMe === null) {
+        fullMessage.key.fromMe = false;
+      }
+    }
+    
+    // Message'i garanti et
+    if (!fullMessage.message) {
+      fullMessage.message = {};
     }
   }
 
@@ -391,6 +439,21 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
   try {
     // README'ye göre: await sock.sendMessage(jid, { forward: msg })
     // fullMessage zaten tam WAMessage formatında (key + message)
+    // Baileys'in beklediği format: { forward: WAMessage }
+    // WAMessage = { key: { remoteJid, id, fromMe }, message: { ... } }
+    
+    // fullMessage'ın doğru formatta olduğundan emin ol
+    if (!fullMessage.key || !fullMessage.message) {
+      logger.error({ 
+        messageId,
+        hasKey: !!fullMessage.key,
+        hasMessage: !!fullMessage.message,
+        fullMessage
+      }, "fullMessage formatı geçersiz - key veya message eksik");
+      throw new Error("Mesaj formatı geçersiz - key veya message eksik");
+    }
+    
+    // Forward için Baileys formatı: { forward: WAMessage }
     const forwardContent = { forward: fullMessage };
     
     logger.info({ 
@@ -401,9 +464,12 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
       hasMessage: !!fullMessage.message,
       messageKeys: contentKeys,
       keyId: fullMessage.key?.id,
-      keyRemoteJid: fullMessage.key?.remoteJid
+      keyRemoteJid: fullMessage.key?.remoteJid,
+      forwardContentKeys: Object.keys(forwardContent),
+      forwardMessageKeys: forwardContent.forward ? Object.keys(forwardContent.forward) : []
     }, "Mesaj iletilmeye çalışılıyor...");
     
+    // Baileys sendMessage ile forward
     await sock.sendMessage(normalizedToJid, forwardContent);
     
     logger.info({ 

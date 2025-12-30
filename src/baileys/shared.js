@@ -27,6 +27,85 @@ export const contactsCache = new Map();
 // Helper functions
 export const getAccountId = (accountId) => accountId || DEFAULT_ACCOUNT_ID;
 
+/**
+ * WhatsApp JID'den Türkiye formatında telefon numarası çıkar (session ID için)
+ * @param {string} whatsappJid - WhatsApp JID (örn: 905335989539@s.whatsapp.net)
+ * @returns {string} Türkiye formatında telefon numarası (örn: 905335989539)
+ */
+export const getSessionIdFromWhatsAppJid = (whatsappJid) => {
+  if (!whatsappJid || typeof whatsappJid !== 'string') {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  
+  try {
+    // Telefon numarasını çıkar
+    const phoneRaw = extractPhoneFromJid(whatsappJid);
+    if (!phoneRaw) {
+      logger.warn({ whatsappJid }, "Telefon numarası çıkarılamadı");
+      return DEFAULT_ACCOUNT_ID;
+    }
+    
+    // Türkiye formatına çevir
+    let phoneTurkish = convertInternationalToTurkish(phoneRaw);
+    
+    // Normalize et (0 ile başlıyorsa 90 ekle)
+    phoneTurkish = normalizePhoneNumber(phoneTurkish);
+    
+    // Eğer hala Türkiye formatında değilse (90 ile başlamıyorsa), tekrar dene
+    if (!phoneTurkish.startsWith('90') && phoneRaw.length >= 10) {
+      // Uluslararası formattan Türkiye formatına çevir
+      phoneTurkish = convertInternationalToTurkish(phoneRaw);
+      phoneTurkish = normalizePhoneNumber(phoneTurkish);
+    }
+    
+    // Eğer hala geçerli bir Türkiye numarası değilse, default kullan
+    if (!phoneTurkish || phoneTurkish.length < 10 || !phoneTurkish.startsWith('90')) {
+      logger.warn({ whatsappJid, phoneRaw, phoneTurkish }, "Geçerli Türkiye formatı numarası çıkarılamadı, default kullanılıyor");
+      return DEFAULT_ACCOUNT_ID;
+    }
+    
+    logger.info({ whatsappJid, phoneRaw, phoneTurkish }, "Session ID oluşturuldu (Türkiye formatı)");
+    return phoneTurkish;
+  } catch (error) {
+    logger.error({ error, whatsappJid }, "Session ID oluşturulamadı");
+    return DEFAULT_ACCOUNT_ID;
+  }
+};
+
+/**
+ * Instance'ın session ID'sini WhatsApp numarasına göre güncelle
+ * @param {object} instance - Instance objesi
+ * @param {string} whatsappJid - WhatsApp JID
+ * @returns {string} Yeni session ID
+ */
+export const updateInstanceSessionId = (instance, whatsappJid) => {
+  if (!instance || !whatsappJid) {
+    return instance?.id || DEFAULT_ACCOUNT_ID;
+  }
+  
+  const newSessionId = getSessionIdFromWhatsAppJid(whatsappJid);
+  const oldSessionId = instance.id;
+  
+  // Eğer yeni session ID farklıysa ve geçerli bir numara ise
+  if (newSessionId !== oldSessionId && newSessionId !== DEFAULT_ACCOUNT_ID) {
+    logger.info({ oldSessionId, newSessionId, whatsappJid }, "Session ID güncelleniyor (WhatsApp numarasına göre)");
+    
+    // Instance'ın ID'sini güncelle
+    instance.id = newSessionId;
+    
+    // Eğer instance Map'te eski ID ile kayıtlıysa, yeni ID ile yeniden kaydet
+    if (instances.has(oldSessionId)) {
+      instances.delete(oldSessionId);
+      instances.set(newSessionId, instance);
+      logger.info({ oldSessionId, newSessionId }, "Instance Map'te güncellendi");
+    }
+    
+    return newSessionId;
+  }
+  
+  return oldSessionId;
+};
+
 export const formatContactName = (c) => {
   const fallbackFromJid = c.id ? String(c.id).split("@")[0] : "";
   return (
@@ -40,7 +119,12 @@ export const formatContactName = (c) => {
 };
 
 // Merkezi JID converter modülünden normalizeJid'i import et
-import { normalizeJid as normalizeJidFromConverter } from "../utils/jidConverter.js";
+import { 
+  normalizeJid as normalizeJidFromConverter,
+  extractPhoneFromJid,
+  convertInternationalToTurkish,
+  normalizePhoneNumber,
+} from "../utils/jidConverter.js";
 
 // Geriye dönük uyumluluk için export et
 export const normalizeJid = normalizeJidFromConverter;
@@ -60,6 +144,7 @@ export const getOrCreateInstance = (accountId) => {
       chatsStore: new Map(),
       contactsStore: new Map(),
       messagesStore: new Map(),
+      datastore: null, // PostgreSQL tabanlı datastore (startSocket'da oluşturulacak)
       chatsSetReceived: false,
       chatsUpsertTimer: null,
       syncChatsInterval: null,
@@ -144,6 +229,15 @@ export const removeInstance = (accountId) => {
   if (instance.sock) {
     try {
       instance.sock.end();
+    } catch (error) {
+      // ignore
+    }
+  }
+
+  // Datastore batch processor'ı durdur
+  if (instance.datastore) {
+    try {
+      instance.datastore.stopBatchProcessor();
     } catch (error) {
       // ignore
     }

@@ -1,6 +1,7 @@
 // Socket event bindings and socket creation
 import makeWASocket, { Browsers } from "baileys";
 import { DisconnectReason, isJidBroadcast, jidNormalizedUser } from "baileys";
+import { DataStore } from "../datastore.js";
 import Boom from "@hapi/boom";
 import NodeCache from "node-cache";
 import { prisma, logger } from "../../shared.js";
@@ -8,6 +9,7 @@ import { serializePrisma } from "../../utils.js";
 import { findSessionByWhatsAppJid, migrateSessionData, findActiveSessionByWhatsAppJid } from "../../sessionMapper.js";
 import {
   getWebSocketBroadcast,
+  updateInstanceSessionId,
   instances,
   contactsCache,
   formatChat,
@@ -17,6 +19,60 @@ import {
   saveMessagesToPrisma,
   extractText,
 } from "../shared.js";
+
+/**
+ * Event listener'ları kur - Datastore kullanarak PostgreSQL'e direkt yaz
+ */
+const setupDataStoreListeners = (instance) => {
+  const sessionId = instance.id;
+  const datastore = instance.datastore;
+
+  if (!datastore) {
+    logger.warn({ sessionId }, "Datastore bulunamadı, event listener'lar kurulamadı");
+    return;
+  }
+
+  // Chats.upsert event'i - Chat'leri queue'ya ekle (NON-BLOCKING)
+  // ✅ DOĞRU MODEL: DB yazma cevap göndermeyi bloklamaz
+  instance.sock.ev.on('chats.upsert', (chats) => {
+    if (!Array.isArray(chats)) return;
+    
+    // Queue'ya ekle (await YOK - non-blocking)
+    for (const chat of chats) {
+      datastore.queueChat(chat);
+    }
+    
+    // Log (opsiyonel, performans için kaldırılabilir)
+    // console.log(`[${sessionId}] 📥 chats.upsert - ${chats.length} chat (queue'ya eklendi)`);
+  });
+
+  // Contacts.upsert event'i - Contact'ları queue'ya ekle (NON-BLOCKING)
+  instance.sock.ev.on('contacts.upsert', (contacts) => {
+    if (!Array.isArray(contacts)) return;
+    
+    // Queue'ya ekle (await YOK - non-blocking)
+    for (const contact of contacts) {
+      datastore.queueContact(contact);
+    }
+  });
+
+  // Messages.upsert event'i - Mesajları queue'ya ekle (NON-BLOCKING)
+  // ✅ DOĞRU MODEL: Mesaj geldiğinde anında cevap verilebilir, DB yazma arka planda
+  instance.sock.ev.on('messages.upsert', ({ messages, type }) => {
+    if (!Array.isArray(messages)) return;
+    
+    // Queue'ya ekle (await YOK - non-blocking)
+    // Bot logic burada çalışabilir, cevap gönderebilir - DB yazma beklemez
+    for (const msg of messages) {
+      datastore.queueMessage(msg);
+    }
+    
+    // ⚠️ ÖNEMLİ: Burada bot logic çalışabilir, cevap gönderilebilir
+    // DB yazma işlemi arka planda batch olarak yapılacak
+  });
+
+  console.log(`[${sessionId}] ✅ Datastore event listener'ları kuruldu`);
+};
 
 /**
  * Socket event'lerini bağla
@@ -1603,6 +1659,19 @@ export const bindSocketEvents = (instance) => {
           instance.whatsappJid = whatsappJid;
           
           if (whatsappJid) {
+            // Session ID'yi WhatsApp numarasına göre güncelle (Türkiye formatı)
+            const newSessionId = updateInstanceSessionId(instance, whatsappJid);
+            if (newSessionId !== sessionId) {
+              logger.info({ oldSessionId: sessionId, newSessionId, whatsappJid }, "Session ID güncellendi (WhatsApp numarasına göre)");
+              
+              // Datastore'un sessionId'sini de güncelle
+              if (instance.datastore) {
+                instance.datastore.sessionId = newSessionId;
+              }
+              
+              // sessionId değişkenini güncelle (bu scope'ta kullanılan)
+              sessionId = newSessionId;
+            }
             // Aynı WhatsApp numarası için aktif session'ları bul (memory'den)
             const activeOldSessionId = findActiveSessionByWhatsAppJid(whatsappJid);
             
@@ -2284,6 +2353,12 @@ export const startSocket = (instance) => {
 
   const sessionId = instance.id;
 
+  // Datastore oluştur (PostgreSQL tabanlı)
+  if (!instance.datastore) {
+    instance.datastore = new DataStore(sessionId);
+    console.log(`[${sessionId}] ✅ Datastore oluşturuldu (PostgreSQL)`);
+  }
+
   // Grup metadata cache (README'ye göre öneriliyor - NodeCache ile TTL desteği)
   // stdTTL: 5 dakika (300 saniye) - README'deki örnekle aynı
   const groupCache = new NodeCache({ stdTTL: 5 * 60, useClones: false });
@@ -2307,7 +2382,13 @@ export const startSocket = (instance) => {
       return false;
     },
     // getMessage config (README'ye göre öneriliyor - poll votes decrypt için)
+    // Datastore'dan mesaj getir
     getMessage: async (key) => {
+      if (instance.datastore) {
+        const message = await instance.datastore.loadMessage(key.remoteJid, key.id);
+        if (message) return message;
+      }
+      // Fallback: shared.js'deki getMessageFromStore
       const { getMessageFromStore } = await import("../shared.js");
       return await getMessageFromStore(key, sessionId);
     },
@@ -2383,6 +2464,9 @@ export const startSocket = (instance) => {
       logger.error({ error, groupId: update?.id }, "Grup metadata cache'lenemedi");
     }
   });
+
+  // Datastore event listener'larını kur
+  setupDataStoreListeners(instance);
 
   bindSocketEvents(instance);
 };
