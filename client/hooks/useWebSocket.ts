@@ -153,9 +153,130 @@ export function useWebSocket({
           context.selectedChat = selectedChat;
           context.chatProfilePictures = chatProfilePictures;
 
-          // Response mesajları request handler'da işleniyor, buraya gelmez
+          // Response mesajları - reaction response'larını özel olarak işle
           if (data.type === 'response') {
-            // Request handler tarafından işlenecek
+            // Reaction response'unu kontrol et
+            if (data.success && data.data?.status === 'reacted' && data.data?.messageId && data.data?.emoji) {
+              console.log('[WebSocket] 🎭 Reaction response alındı:', data.data);
+              
+              // İlgili mesajı bul ve güncelle
+              setMessages(prevMessages => {
+                const messageId = data.data.messageId;
+                const emoji = data.data.emoji;
+                
+                // Debug: Mevcut mesajların ID'lerini logla
+                console.log('[WebSocket] 🔍 Mesaj arama - Aranan messageId:', messageId);
+                console.log('[WebSocket] 🔍 Mevcut mesajların ID\'leri:', prevMessages.map((msg, idx) => ({
+                  index: idx,
+                  id: msg.id,
+                  keyId: msg.key?.id,
+                  matches: (msg.id === messageId) || (msg.key?.id === messageId)
+                })).slice(0, 5));
+                
+                // Mesajı bul - daha kapsamlı arama
+                const messageIndex = prevMessages.findIndex(msg => {
+                  // Tam eşleşme
+                  if (msg.id === messageId || msg.key?.id === messageId) {
+                    return true;
+                  }
+                  // Case-insensitive eşleşme
+                  if (msg.id && msg.id.toUpperCase() === messageId.toUpperCase()) {
+                    return true;
+                  }
+                  if (msg.key?.id && msg.key.id.toUpperCase() === messageId.toUpperCase()) {
+                    return true;
+                  }
+                  // String olarak karşılaştır (trim ve normalize)
+                  const msgIdStr = String(msg.id || msg.key?.id || '').trim();
+                  const searchIdStr = String(messageId).trim();
+                  if (msgIdStr && searchIdStr && msgIdStr === searchIdStr) {
+                    return true;
+                  }
+                  return false;
+                });
+                
+                if (messageIndex === -1) {
+                  console.warn('[WebSocket] ⚠️ Reaction için mesaj bulunamadı:', {
+                    searchedMessageId: messageId,
+                    availableIds: prevMessages.slice(0, 10).map(m => ({
+                      id: m.id,
+                      keyId: m.key?.id
+                    }))
+                  });
+                  return prevMessages;
+                }
+                
+                console.log('[WebSocket] ✅ Mesaj bulundu:', {
+                  index: messageIndex,
+                  messageId: messageId,
+                  foundMessageId: prevMessages[messageIndex].id || prevMessages[messageIndex].key?.id
+                });
+                
+                const updatedMessages = [...prevMessages];
+                const message = updatedMessages[messageIndex];
+                
+                // Reaction'ları güncelle
+                // Reaction formatı: array veya object olabilir
+                let reactions = message.reactions || message.message?.reactions || [];
+                
+                // Eğer array değilse, array'e çevir
+                if (!Array.isArray(reactions)) {
+                  if (typeof reactions === 'object' && reactions !== null) {
+                    reactions = Object.entries(reactions).map(([key, value]: [string, any]) => ({
+                      emoji: value?.emoji || value?.text || key,
+                      key: value?.key || key,
+                      count: value?.count || 1
+                    }));
+                  } else {
+                    reactions = [];
+                  }
+                }
+                
+                // Aynı emoji'yi kontrol et - varsa güncelle, yoksa ekle
+                const existingReactionIndex = reactions.findIndex((r: any) => 
+                  (r.emoji === emoji) || (r.text === emoji)
+                );
+                
+                if (existingReactionIndex >= 0) {
+                  // Reaction zaten var, güncelle (count artır veya değiştir)
+                  reactions[existingReactionIndex] = {
+                    ...reactions[existingReactionIndex],
+                    emoji: emoji,
+                    count: (reactions[existingReactionIndex].count || 1) + 1
+                  };
+                } else {
+                  // Yeni reaction ekle
+                  reactions.push({
+                    emoji: emoji,
+                    key: `reaction-${Date.now()}`,
+                    count: 1
+                  });
+                }
+                
+                // Mesajı güncelle
+                updatedMessages[messageIndex] = {
+                  ...message,
+                  reactions: reactions,
+                  message: message.message ? {
+                    ...message.message,
+                    reactions: reactions
+                  } : undefined
+                };
+                
+                console.log('[WebSocket] ✅ Reaction eklendi, güncellenmiş mesaj:', {
+                  messageId: messageId,
+                  emoji: emoji,
+                  reactions: reactions
+                });
+                
+                return updatedMessages;
+              });
+              
+              // Request handler'a da bırak (pending request varsa resolve etsin)
+              return;
+            }
+            
+            // Diğer response'lar request handler'da işlenecek
             return;
           }
 
