@@ -1380,14 +1380,35 @@ export const bindSocketEvents = (instance) => {
           messageStubParameters: msgUpdate.messageStubParameters,
         };
         
-        // KVKK uyumlu: Mesaj veritabanından silinmez, sadece loglama yapılır
-        // WhatsApp'tan mesaj silme event'i geldi, ancak veri KVKK gereği saklanıyor
-        logger.info({ 
-          sessionId, 
-          messageId: key.id, 
-          remoteJid: normalizedJid,
-          messageStubType: msgUpdate.messageStubType 
-        }, "Mesaj silme event'i alındı (KVKK uyumlu - veri silinmedi)");
+        // KVKK uyumlu: Veritabanından veri silinmez, sadece isDeleted=true yapılır
+        // messageStubType === 0 genellikle "delete for everyone" anlamına gelir
+        // Ama kesin olarak ayırt edilemediği için null bırakıyoruz (null = WhatsApp'tan gelen otomatik silme)
+        try {
+          const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+          if (phoneMapId) {
+            await prisma.message.updateMany({
+              where: {
+                phoneMapId: phoneMapId,
+                remoteJid: normalizedJid,
+                id: key.id,
+              },
+              data: {
+                isDeleted: true,
+                deleteType: null, // WhatsApp'tan gelen otomatik silme (türü belirsiz)
+                messageStubType: msgUpdate.messageStubType || 0,
+                messageStubParameters: msgUpdate.messageStubParameters || null,
+              },
+            });
+            logger.info({ 
+              sessionId, 
+              messageId: key.id, 
+              remoteJid: normalizedJid,
+              messageStubType: msgUpdate.messageStubType 
+            }, "Mesaj silme event'i işlendi - isDeleted=true yapıldı (KVKK uyumlu)");
+          }
+        } catch (error) {
+          logger.error({ error, sessionId, messageId: key.id }, "Mesaj silme işaretlenemedi");
+        }
       }
 
       // Reaksiyonlar - tüm olası formatları kontrol et

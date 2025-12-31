@@ -191,6 +191,8 @@ model Message {
   status                          Int?     // Mesaj durumu (0: pending, 1: server_ack, 2: delivery, 3: read)
   starred                         Boolean? @default(false)
   isForwarded                      Boolean? @default(false) // Mesaj iletildi mi? (forward edildi mi?)
+  isDeleted                        Boolean? @default(false) // Mesaj silindi mi? (KVKK uyumlu)
+  deleteType                       String?  // Silme türü: "delete_for_me" (sadece benden sil) | "delete_for_everyone" (herkesten sil) | null (silinmedi)
   
   // Reaction'lar (PostgreSQL JSONB - index'lenebilir!)
   reactions                       Json?    // Reaction array (JSON)
@@ -248,6 +250,8 @@ model Message {
   @@index([messageTimestamp])
   @@index([status])
   @@index([starred])
+  @@index([isDeleted]) // Silinen mesajları filtrelemek için
+  @@index([deleteType]) // Silme türüne göre filtrelemek için
   @@index([participant]) // Grup mesajları için
   @@index([participantNormalized]) // Normalize edilmiş participant için index
   // PostgreSQL JSONB index'leri (migration'da eklenecek)

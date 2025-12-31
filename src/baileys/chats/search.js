@@ -26,6 +26,7 @@ export const searchMessages = async (
   
   const where = {
     phoneMapId: phoneMapId,
+    isDeleted: false, // Silinen mesajları filtrele
     message: {
       contains: query,
       mode: "insensitive",

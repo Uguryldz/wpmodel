@@ -1,6 +1,6 @@
 // Chat management functions (archive, pin, mute)
 import { ensureSocket, normalizeJid, getAccountId } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 
 /**
  * Sohbeti arşivle/kaldır (Archive a Chat)
@@ -215,10 +215,17 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
 
   logger.debug({ sessionId, normalizedJid, messageId }, "Mesaj sadece benden siliniyor (deleteMessageForMe)...");
 
+  // phoneMapId'yi al
+  const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+  if (!phoneMapId) {
+    logger.warn({ sessionId }, "deleteMessageForMe: phoneMapId bulunamadı");
+    throw new Error("phoneMapId bulunamadı");
+  }
+
   // Önce id ile ara
   let message = await prisma.message.findFirst({
     where: {
-      sessionId,
+      phoneMapId: phoneMapId,
       remoteJid: normalizedJid,
       id: messageId,
     },
@@ -229,7 +236,7 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
     logger.debug({ sessionId, normalizedJid, messageId }, "Key içinde id ile arama yapılıyor...");
     const allMessages = await prisma.message.findMany({
       where: {
-        sessionId,
+        phoneMapId: phoneMapId,
         remoteJid: normalizedJid,
       },
       take: 1000,
@@ -308,6 +315,26 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
         },
         normalizedJid
       );
+
+      // KVKK uyumlu: Veritabanında isDeleted=true ve deleteType="delete_for_me" yap (memory store'dan bulunan mesaj için)
+      if (phoneMapId) {
+        const actualMessageId = key.id || messageId;
+        await prisma.message.updateMany({
+          where: {
+            phoneMapId: phoneMapId,
+            remoteJid: normalizedJid,
+            OR: [
+              { id: actualMessageId },
+              { key: { path: ['id'], equals: actualMessageId } },
+            ],
+          },
+          data: {
+            isDeleted: true,
+            deleteType: "delete_for_me", // Sadece benden sil
+          },
+        });
+        logger.info({ sessionId, normalizedJid, messageId: actualMessageId }, "Mesaj veritabanında işaretlendi (isDeleted=true, deleteType=delete_for_me) - KVKK uyumlu (memory store)");
+      }
 
       logger.info({ sessionId, normalizedJid, messageId }, "✅ Mesaj başarıyla silindi (memory store, deleteMessageForMe)");
       return { status: "deleted_for_me", messageId, jid: normalizedJid };
@@ -388,14 +415,21 @@ export const deleteMessageForMe = async (accountId, jid, messageId, fromMe = fal
 
   logger.info({ sessionId, normalizedJid, messageId, actualMessageId, actualFromMe, timestampStr }, "✅ Mesaj başarıyla silindi (deleteMessageForMe)");
 
-  // Prisma'dan sil
-  await prisma.message.deleteMany({
-    where: {
-      sessionId,
-      remoteJid: normalizedJid,
-      id: messageId,
-    },
-  });
+  // KVKK uyumlu: Veritabanından veri silinmez, sadece isDeleted=true ve deleteType="delete_for_me" yapılır
+  if (phoneMapId) {
+    await prisma.message.updateMany({
+      where: {
+        phoneMapId: phoneMapId,
+        remoteJid: normalizedJid,
+        id: messageId,
+      },
+      data: {
+        isDeleted: true,
+        deleteType: "delete_for_me", // Sadece benden sil
+      },
+    });
+    logger.info({ sessionId, normalizedJid, messageId }, "Mesaj veritabanında işaretlendi (isDeleted=true, deleteType=delete_for_me) - KVKK uyumlu");
+  }
 
   return { status: "deleted_for_me", messageId, jid: normalizedJid };
 };

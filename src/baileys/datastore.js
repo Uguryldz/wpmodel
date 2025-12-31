@@ -557,6 +557,8 @@ export class DataStore {
           messageStubType: msg.messageStubType || null,
           messageStubParameters: msg.messageStubParameters || null,
           isForwarded: isForwarded || false, // Mesaj iletildi mi?
+          isDeleted: false, // Yeni mesajlar silinmiş olarak kaydedilmez
+          deleteType: null, // Yeni mesajlar silinmediği için deleteType null
           // JID format alanları (jidConverter.ts için)
           ...remoteJidFieldsPrefixed,
           ...participantFieldsPrefixed,
@@ -719,6 +721,7 @@ export class DataStore {
       const messages = await prisma.message.findMany({
         where: {
           phoneMapId: phoneMapId,
+          isDeleted: false, // Silinen mesajları filtrele
           OR: [
             { remoteJid: normalizedJidForQuery },
             // @lid formatındaysa, lidJid ile de ara

@@ -83,6 +83,7 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     const whereClause = {
       phoneMapId: phoneMapId,
       remoteJid: normalizedJid,
+      isDeleted: false, // Silinen mesajları filtrele
       // Eğer cursor yoksa (ilk sayfa), bugünün mesajlarını da dahil et
       ...(cursor ? {} : {
         OR: [
