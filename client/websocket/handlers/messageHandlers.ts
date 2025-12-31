@@ -110,6 +110,23 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
   for (const [chatId, chatMessages] of messagesByChat.entries()) {
     const normalizedChatId = chatId.includes('@g.us') ? chatId : standardizeChatId(chatId);
     
+    // Chat ID eşleştirmesi: Hem tam eşleşme hem de telefon numarası eşleşmesi kontrol et (mesaj filtrelenmeden önce)
+    let isSelectedChat = false;
+    if (currentSelectedChat) {
+      // Tam eşleşme
+      if (normalizedChatId === currentSelectedChat.id) {
+        isSelectedChat = true;
+      }
+      // Telefon numarası eşleşmesi (bireysel chat'ler için)
+      else if (!currentSelectedChat.id.includes('@g.us') && !normalizedChatId.includes('@g.us')) {
+        const msgPhone = extractPhoneFromJid(normalizedChatId);
+        const selectedPhone = extractPhoneFromJid(currentSelectedChat.id);
+        if (msgPhone && selectedPhone && msgPhone === selectedPhone) {
+          isSelectedChat = true;
+        }
+      }
+    }
+    
     // Silinen mesajları filtrele (messageStubType === 0 veya messageStubParameters varsa)
     // Ama reaction mesajlarını filtreleme (bunlar ayrı mesaj olarak gösterilmemeli ama silinmiş olarak da işaretlenmemeli)
     const validMessages = chatMessages.filter((msg: any) => {
@@ -136,28 +153,22 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
     });
     
     if (validMessages.length === 0) {
-      console.log('[WebSocket] ℹ️ Tüm mesajlar silinmiş, atlanıyor:', normalizedChatId);
+      // Seçili chat ise bilgilendirici log ekle
+      if (isSelectedChat) {
+        console.log('[WebSocket] ℹ️ Seçili chat için mesajlar alındı ama tümü silinmiş, atlanıyor:', {
+          normalizedChatId,
+          selectedChatId: currentSelectedChat?.id,
+          totalMessages: chatMessages.length,
+          filteredMessages: validMessages.length
+        });
+      } else {
+        console.log('[WebSocket] ℹ️ Tüm mesajlar silinmiş, atlanıyor:', normalizedChatId);
+      }
       continue;
     }
     
-    // Chat ID eşleştirmesi: Hem tam eşleşme hem de telefon numarası eşleşmesi kontrol et
-    let isSelectedChat = false;
-    if (currentSelectedChat) {
-      // Tam eşleşme
-      if (normalizedChatId === currentSelectedChat.id) {
-        isSelectedChat = true;
-      }
-      // Telefon numarası eşleşmesi (bireysel chat'ler için)
-      else if (!currentSelectedChat.id.includes('@g.us') && !normalizedChatId.includes('@g.us')) {
-        const msgPhone = extractPhoneFromJid(normalizedChatId);
-        const selectedPhone = extractPhoneFromJid(currentSelectedChat.id);
-        if (msgPhone && selectedPhone && msgPhone === selectedPhone) {
-          isSelectedChat = true;
-        }
-      }
-      
-      // Debug: Eşleşme kontrolü
-      if (!isSelectedChat && chatMessages.length > 0) {
+    // Debug: Eşleşme kontrolü (gönderilen mesajlar için)
+    if (currentSelectedChat && !isSelectedChat && chatMessages.length > 0) {
         const hasFromMe = chatMessages.some((m: any) => {
           const fromMe = m.fromMe !== undefined 
             ? Boolean(m.fromMe) 
@@ -177,7 +188,6 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
             }))
           });
         }
-      }
     }
     
     // Seçili chat'teki mesajları işle (gönderilen mesajlar dahil)

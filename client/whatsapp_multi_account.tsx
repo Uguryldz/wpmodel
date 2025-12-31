@@ -355,6 +355,12 @@ export default function WhatsAppMultiAccount() {
   const sendMessage = async () => {
     if (!messagesHook.message.trim() || !activeAccount || !chatsHook.selectedChat || isSending) return;
     
+    // WebSocket yoksa mesaj gönderilemez
+    if (!sendRequest) {
+      alert('Mesaj gönderilemedi: WebSocket bağlantısı yok');
+      return;
+    }
+    
     setIsSending(true);
     const messageText = messagesHook.message.trim();
     
@@ -363,7 +369,12 @@ export default function WhatsAppMultiAccount() {
     setShowEmojiPicker(false);
     
     try {
-      await api.sendMessage(activeAccount.id, chatsHook.selectedChat.id, messageText);
+      // WebSocket üzerinden sendMessage request'i gönder
+      await sendRequest('sendMessage', {
+        sessionId: activeAccount.id,
+        jid: chatsHook.selectedChat.id,
+        message: messageText,
+      });
       
       // Chat listesindeki ilgili chat'i güncelle
       chatsHook.setChats(prevChats => {
@@ -1450,7 +1461,19 @@ export default function WhatsAppMultiAccount() {
             onRetryMessage={async (msg) => {
               if (!activeAccount || !chatsHook.selectedChat || !msg.text) return;
               try {
-                await api.sendMessage(activeAccount.id, chatsHook.selectedChat.id, msg.text);
+                let response;
+                
+                // WebSocket varsa WebSocket kullan, yoksa API fallback
+                if (sendRequest) {
+                  response = await sendRequest('sendMessage', {
+                    sessionId: activeAccount.id,
+                    jid: chatsHook.selectedChat.id,
+                    message: msg.text,
+                  });
+                } else {
+                  response = await api.sendMessage(activeAccount.id, chatsHook.selectedChat.id, msg.text);
+                }
+                
                 // Mesaj durumunu güncelle
                 messagesHook.setMessages(prev => 
                   prev.map(m => {
