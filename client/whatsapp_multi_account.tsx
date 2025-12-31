@@ -321,9 +321,6 @@ export default function WhatsAppMultiAccount() {
   // Ses kaydı gönderme handler'ı
   const handleSendVoiceMessage = async (audioBlob: Blob) => {
     if (!activeAccount || !chatsHook.selectedChat) return;
-    
-    // Optimistik UI: Ses mesajını hemen ekle
-    const tempMessageId = `temp-voice-${Date.now()}`;
 
     try {
       // Blob'un mimetype'ini al (MediaRecorder'dan gelen format)
@@ -332,41 +329,6 @@ export default function WhatsAppMultiAccount() {
       const originalMimetype = audioBlob.type || 'audio/webm';
       // BaileyTipREADME.md örneğine göre: audio/mp4 kullan (PTT için de çalışır)
       const mimetype = 'audio/mp4'; // BaileyTipREADME.md'deki örneğe göre
-      const optimisticMessage: Message = {
-        id: tempMessageId,
-        text: '🎤 Ses mesajı',
-        body: '🎤 Ses mesajı',
-        fromMe: true,
-        timestamp: Math.floor(Date.now() / 1000),
-        from: chatsHook.selectedChat.id,
-        status: 'sending',
-        type: 'audioMessage',
-        message: {
-          audioMessage: {
-            mimetype: mimetype,
-            ptt: true, // Push to Talk
-          }
-        }
-      };
-
-      messagesHook.setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
-        if (existingIds.has(optimisticMessage.id)) {
-          return prev;
-        }
-        
-        const merged = [...prev, optimisticMessage];
-        merged.sort((a, b) => {
-          const normalizeTimestamp = (ts: number | undefined) => {
-            if (!ts) return 0;
-            return ts > 1000000000000 ? ts : ts * 1000;
-          };
-          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
-          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-          return aTime - bTime;
-        });
-        return merged;
-      });
 
       // Ses mesajını gönder (PTT - Push to Talk)
       // api.sendMediaMessage Blob'u otomatik olarak base64'e çevirir
@@ -399,17 +361,10 @@ export default function WhatsAppMultiAccount() {
         return prevChats;
       });
       
-      // Mesajları yeniden yükle (gerçek mesajı almak için)
-      setTimeout(() => {
-        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id, 50, false);
-      }, 1000);
+      // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error) {
       console.error('Ses mesajı gönderilemedi:', error);
       alert('Ses mesajı gönderilemedi');
-      
-      // Hata durumunda temp mesajı kaldır
-      const finalTempMessageId = tempMessageId;
-      messagesHook.setMessages(prev => prev.filter(m => m.id !== finalTempMessageId));
     }
   };
 
@@ -418,45 +373,13 @@ export default function WhatsAppMultiAccount() {
     
     setIsSending(true);
     const messageText = messagesHook.message.trim();
-    const tempMessageId = `temp-${Date.now()}`;
     
-    // Optimistik UI güncellemesi: Mesajı hemen ekle (gönderiliyor durumu ile)
-      const optimisticMessage: Message = {
-      id: tempMessageId,
-        text: messageText,
-        body: messageText,
-        fromMe: true,
-        timestamp: Math.floor(Date.now() / 1000),
-        from: chatsHook.selectedChat.id,
-      status: 'sending',
-      };
-      
-    // Mesajı hemen ekle (gönderiliyor durumu ile)
-      messagesHook.setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
-        if (existingIds.has(optimisticMessage.id)) {
-          return prev;
-        }
-        
-        const merged = [...prev, optimisticMessage];
-        merged.sort((a, b) => {
-          const normalizeTimestamp = (ts: number | undefined) => {
-            if (!ts) return 0;
-            return ts > 1000000000000 ? ts : ts * 1000;
-          };
-          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
-          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-          return aTime - bTime;
-        });
-        return merged;
-      });
-    
-    // Mesaj girişini temizle
+    // Mesaj girişini temizle (WebSocket'ten gerçek mesaj geldiğinde otomatik eklenecek)
     messagesHook.setMessage('');
     setShowEmojiPicker(false);
     
     try {
-      const response = await api.sendMessage(activeAccount.id, chatsHook.selectedChat.id, messageText);
+      await api.sendMessage(activeAccount.id, chatsHook.selectedChat.id, messageText);
       
       // Chat listesindeki ilgili chat'i güncelle
       chatsHook.setChats(prevChats => {
@@ -475,43 +398,9 @@ export default function WhatsAppMultiAccount() {
         return prevChats;
       });
       
-      // Optimistik mesajı güncelle (gönderildi durumuna)
-      // WebSocket'ten gerçek mesaj gelecek, bu yüzden temp mesajı kaldırmak yerine ID'sini güncelle
-      // WebSocket handler'ı temp mesajı otomatik olarak kaldıracak
-      if (response?.id) {
-        messagesHook.setMessages(prev => 
-          prev.map(m => {
-            if (m.id === tempMessageId) {
-              // Gerçek mesaj ID'si ile güncelle, WebSocket'ten gelince temp mesaj kaldırılacak
-              return {
-                ...m,
-                status: 'sent',
-                id: response.id,
-              };
-            }
-            return m;
-          })
-        );
-      }
-      
-      // WebSocket'ten gerçek mesaj geldiğinde optimistic mesaj replace edilecek
+      // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error: any) {
       console.error('Mesaj gönderilemedi:', error);
-      
-      // Optimistik mesajı hata durumuna güncelle
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return {
-              ...m,
-              status: 'error',
-              error: error.message || 'Mesaj gönderilemedi',
-            };
-          }
-          return m;
-        })
-      );
-      
       // Kullanıcıya bilgi ver
       alert(`Mesaj gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
     } finally {
@@ -526,7 +415,6 @@ export default function WhatsAppMultiAccount() {
     if (!activeAccount || !chatsHook.selectedChat || isSending) return;
     
     setIsSending(true);
-    const tempMessageId = `temp-media-${Date.now()}`;
     
     try {
       // Mimetype belirle
@@ -537,34 +425,6 @@ export default function WhatsAppMultiAccount() {
         mimetype = 'video/mp4';
       }
       
-      // Optimistic UI mesajı
-      const optimisticMessage: Message = {
-        id: tempMessageId,
-        text: type === 'image' ? '📷 Resim' : type === 'video' ? '🎥 Video' : `📎 ${file.name}`,
-        body: type === 'image' ? '📷 Resim' : type === 'video' ? '🎥 Video' : `📎 ${file.name}`,
-        fromMe: true,
-        timestamp: Math.floor(Date.now() / 1000),
-        from: chatsHook.selectedChat.id,
-        status: 'sending',
-        type: type === 'image' ? 'imageMessage' : type === 'video' ? 'videoMessage' : 'documentMessage',
-      };
-      
-      messagesHook.setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id || m.key?.id));
-        if (existingIds.has(optimisticMessage.id)) {
-          return prev;
-        }
-        return [...prev, optimisticMessage].sort((a, b) => {
-          const normalizeTimestamp = (ts: number | undefined) => {
-            if (!ts) return 0;
-            return ts > 1000000000000 ? ts : ts * 1000;
-          };
-          const aTime = normalizeTimestamp(a.timestamp || a.messageTimestamp);
-          const bTime = normalizeTimestamp(b.timestamp || b.messageTimestamp);
-          return aTime - bTime;
-        });
-      });
-      
       // Medya mesajını gönder
       await api.sendMediaMessage(
         activeAccount.id,
@@ -572,41 +432,14 @@ export default function WhatsAppMultiAccount() {
         file,
         mimetype,
         caption,
-        //undefined, // caption
         type === 'video' ? { ptv: true } : undefined
       );
       setShowMediaPreview(false);
       setSelectedMediaFile(null);
       
-      // WebSocket'ten gerçek mesaj geldiğinde optimistic mesaj replace edilecek
-      // Şimdilik optimistic mesajı 'sent' durumuna güncelle
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return { ...m, status: 'sent' };
-          }
-          return m;
-        })
-      );
-      
-      // Mesajları yeniden yükle (gerçek mesajı almak için)
-      // WebSocket'ten gelen mesaj optimistic mesajı replace edecek
-      setTimeout(() => {
-        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id, 50, false);
-      }, 1000);
+      // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error: any) {
       console.error('Medya mesajı gönderilemedi:', error);
-      
-      // Hata durumunda mesajı güncelle
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return { ...m, status: 'error', error: error.message || 'Medya gönderilemedi' };
-          }
-          return m;
-        })
-      );
-      
       alert(`Medya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
     } finally {
       setIsSending(false);
@@ -644,41 +477,6 @@ export default function WhatsAppMultiAccount() {
     }
     
     setIsSending(true);
-    const tempMessageId = `temp-${Date.now()}`;
-    
-    // Optimistic mesaj ekle
-    const optimisticMessage: Message = {
-      id: tempMessageId,
-      text: textToSend,
-      body: textToSend,
-      fromMe: true,
-      timestamp: Math.floor(Date.now() / 1000),
-      from: chatsHook.selectedChat.id,
-      status: 'sending',
-      quotedMessage: {
-        id: messageId,
-        from: msg.fromMe ? 'Sen' : (msg.pushName || msg.from || 'Kişi'),
-        text: msg.text || msg.body || 'Mesaj',
-      },
-    };
-    
-    messagesHook.setMessages(prev => {
-      const existingIds = new Set(prev.map(m => m.id || m.key?.id));
-      if (existingIds.has(optimisticMessage.id)) {
-        return prev;
-      }
-      const merged = [...prev, optimisticMessage];
-      merged.sort((a, b) => {
-        const aTime = (a.timestamp || a.messageTimestamp || 0) > 1000000000000 
-          ? (a.timestamp || a.messageTimestamp || 0) 
-          : (a.timestamp || a.messageTimestamp || 0) * 1000;
-        const bTime = (b.timestamp || b.messageTimestamp || 0) > 1000000000000 
-          ? (b.timestamp || b.messageTimestamp || 0) 
-          : (b.timestamp || b.messageTimestamp || 0) * 1000;
-        return aTime - bTime;
-      });
-      return merged;
-    });
     
     try {
       // README'ye göre: await sock.sendMessage(jid, { text: 'hello word' }, { quoted: message })
@@ -720,20 +518,6 @@ export default function WhatsAppMultiAccount() {
       messagesHook.setMessage('');
       setReplyingTo(null);
       
-      // Optimistic mesajı güncelle
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return {
-              ...m,
-              status: 'sent',
-              id: response?.id || m.id,
-            };
-          }
-          return m;
-        })
-      );
-      
       // Chat listesindeki ilgili chat'i güncelle
       chatsHook.setChats(prevChats => {
         const index = prevChats.findIndex(c => c.id === chatsHook.selectedChat!.id);
@@ -751,22 +535,9 @@ export default function WhatsAppMultiAccount() {
         return prevChats;
       });
       
-      // Mesajları yeniden yükle
-      setTimeout(() => {
-        messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
-      }, 500);
+      // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error) {
       console.error('Mesaj yanıtlanamadı:', error);
-      
-      // Hata durumunda mesajı güncelle
-      messagesHook.setMessages(prev => 
-        prev.map(m => {
-          if (m.id === tempMessageId) {
-            return { ...m, status: 'error', error: (error instanceof Error ? error.message : 'Bilinmeyen hata') };
-          }
-          return m;
-        })
-      );
       
       setToast({ 
         message: 'Mesaj yanıtlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
@@ -850,67 +621,7 @@ export default function WhatsAppMultiAccount() {
   const handleEditMessage = async (msg: Message, newText: string) => {
     if (!activeAccount || !chatsHook.selectedChat || !newText.trim()) return;
     
-    let messageId = msg.id || msg.key?.id;
-    if (!messageId) {
-      alert('Mesaj ID\'si bulunamadı');
-      return;
-    }
-    
-    // Eğer mesaj ID'si "temp-" ile başlıyorsa, gerçek mesaj ID'sini bul
-    if (String(messageId).startsWith('temp-')) {
-      console.log('[handleEditMessage] ⚠️ Temp ID tespit edildi, gerçek mesaj ID\'si aranıyor:', messageId);
-      
-      // Mesajlar listesinde aynı text ve timestamp'e sahip gerçek mesajı bul
-      const realMessage = messagesHook.messages.find(m => {
-        const mId = m.id || m.key?.id;
-        // Temp ID değilse ve text eşleşiyorsa
-        if (mId && !String(mId).startsWith('temp-')) {
-          // Sadece bizim gönderdiğimiz mesajlarda eşleştir (edit zaten fromMe olmalı)
-          const msgFromMe = msg.fromMe !== undefined ? Boolean(msg.fromMe) : (msg.key?.fromMe === true);
-          const mFromMe = m.fromMe !== undefined ? Boolean(m.fromMe) : (m.key?.fromMe === true);
-          if (!msgFromMe || !mFromMe) return false;
-
-          const msgText = msg.text || msg.body || '';
-          const mText = m.text || m.body || '';
-          if (msgText && mText && msgText.trim() === mText.trim()) {
-            // Timestamp'e göre de kontrol et (10 saniye içinde)
-            const msgTime = msg.timestamp || msg.messageTimestamp || 0;
-            const mTime = m.timestamp || m.messageTimestamp || 0;
-            if (msgTime > 0 && mTime > 0) {
-              const msgTimeNormalized = msgTime > 1000000000000 ? Math.floor(msgTime / 1000) : msgTime;
-              const mTimeNormalized = mTime > 1000000000000 ? Math.floor(mTime / 1000) : mTime;
-              const timeDiff = Math.abs(msgTimeNormalized - mTimeNormalized);
-              if (timeDiff < 10) {
-                return true;
-              }
-            }
-          }
-        }
-        return false;
-      });
-      
-      if (realMessage) {
-        const realId = realMessage.id || realMessage.key?.id;
-        if (realId) {
-          messageId = realId;
-          console.log('[handleEditMessage] ✅ Gerçek mesaj ID\'si bulundu:', messageId);
-        } else {
-          console.warn('[handleEditMessage] ⚠️ Gerçek mesaj ID\'si bulunamadı, temp ID kullanılacak:', messageId);
-        }
-      } else {
-        console.warn('[handleEditMessage] ⚠️ Gerçek mesaj ID\'si bulunamadı, temp ID kullanılacak:', messageId);
-      }
-
-      // Hâlâ temp ise backend'e gönderme — bu ID Baileys/DB tarafında yok
-      if (String(messageId).startsWith('temp-')) {
-        setToast({
-          message: 'Mesaj henüz gönderiliyor. Lütfen iletildikten sonra düzenleyin.',
-          type: 'error',
-        });
-        return;
-      }
-    }
-    
+    const messageId = msg.id || msg.key?.id;
     if (!messageId) {
       alert('Mesaj ID\'si bulunamadı');
       return;

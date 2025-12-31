@@ -196,8 +196,7 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
       
       setMessages(prev => {
         const existingIds = new Set(prev.map(m => {
-          const id = m.id || m.key?.id;
-          return id && id.toString().startsWith('temp-') ? id : id;
+          return m.id || m.key?.id;
         }));
         
         const newMessages: Message[] = [];
@@ -325,44 +324,6 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
         
         if (newMessages.length === 0) return prev;
         
-        // Temp mesajları kaldır - WebSocket'ten gerçek mesaj geldiğinde temp mesajları temizle
-        let filteredPrev = prev;
-        newMessages.forEach(newMsg => {
-          if (newMsg.fromMe) {
-            // Gönderdiğimiz mesajlar için: temp mesajları kaldır
-            filteredPrev = filteredPrev.filter(m => {
-              const mId = m.id || m.key?.id;
-              if (!mId || !mId.toString().startsWith('temp-')) return true; // Temp değilse tut
-              
-              // Temp mesaj ise, gerçek mesajla eşleşip eşleşmediğini kontrol et
-              if (!m.fromMe) return true; // Başkasından gelen mesajları tut
-              
-              // Aynı text içeriğine sahip temp mesajı kaldır
-              if (newMsg.text && m.text) {
-                const newText = (newMsg.text || '').trim();
-                const mText = (m.text || '').trim();
-                if (mText === newText && m.fromMe === true) {
-                  console.log('[WebSocket] 🗑️ Temp mesaj kaldırıldı (text eşleşmesi):', mId, '->', newMsg.id || newMsg.key?.id);
-                  return false;
-                }
-              }
-              
-              // Timestamp'e göre de kontrol et (10 saniye içindeki temp mesajları kaldır)
-              if (m.fromMe === true && newMsg.timestamp && m.timestamp) {
-                const newTime = newMsg.timestamp > 1000000000000 ? newMsg.timestamp / 1000 : newMsg.timestamp;
-                const mTime = m.timestamp > 1000000000000 ? m.timestamp / 1000 : m.timestamp;
-                const timeDiff = Math.abs(newTime - mTime);
-                if (timeDiff < 10) {
-                  console.log('[WebSocket] 🗑️ Temp mesaj kaldırıldı (timestamp eşleşmesi):', mId, '->', newMsg.id || newMsg.key?.id);
-                  return false;
-                }
-              }
-              
-              return true; // Eşleşme yoksa temp mesajı tut
-            });
-          }
-        });
-        
         // Birleştir ve sırala
         // ÖNEMLİ: Düzenlenmiş mesajları koru - messages.upsert ile güncelleme yapma
         const merged: Message[] = [];
@@ -370,7 +331,7 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
         const editedMessages = new Map<string, Message>();
         
         // Önce mevcut mesajları ekle (düzenlenmiş mesajları özellikle koru)
-        for (const msg of filteredPrev) {
+        for (const msg of prev) {
           const msgId = msg.id || msg.key?.id;
           if (msgId) {
             const msgIdStr = String(msgId);
@@ -456,21 +417,11 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
           return aTime - bTime;
         });
         
-        // Duplicate kontrolü ve eski temp mesajları temizle (30 saniyeden eski temp mesajları kaldır)
+        // Duplicate kontrolü
         // ÖNEMLİ: Düzenlenmiş mesajları koru - duplicate kontrolünde düzenlenmiş mesajları önceliklendir
-        const now = Date.now();
         const uniqueMessages = merged.filter((msg, index, self) => {
           const msgId = msg.id || msg.key?.id;
           if (!msgId) return true;
-          
-          // Eski temp mesajları temizle (30 saniyeden eski)
-          if (msgId.toString().startsWith('temp-')) {
-            const tempTimestamp = parseInt(msgId.toString().replace('temp-', '').split('-')[0]);
-            if (!isNaN(tempTimestamp) && now - tempTimestamp > 30000) {
-              console.log('[WebSocket] 🗑️ Eski temp mesaj kaldırıldı (30 saniye geçti):', msgId);
-              return false;
-            }
-          }
           
           // Duplicate kontrolü - düzenlenmiş mesajları önceliklendir
           const duplicates = self.filter(m => {

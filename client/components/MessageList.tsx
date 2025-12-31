@@ -600,7 +600,7 @@ export default function MessageList({
                         : fromMe 
                           ? 'bg-[#d9fdd3] text-gray-900 rounded-[7.5px] rounded-tr-[4px]' 
                           : 'bg-white text-gray-900 rounded-[7.5px] rounded-tl-[4px]'
-                    } ${msg.id?.startsWith('temp-') || msg.status === 'sending' 
+                    } ${msg.status === 'sending' 
                       ? 'opacity-75 scale-95 animate-slide-in' 
                       : 'opacity-100 scale-100 animate-fade-in'}`}
                     style={isProtocol ? {} : {

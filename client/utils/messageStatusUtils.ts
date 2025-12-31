@@ -8,8 +8,8 @@ export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error';
  * @returns Mesaj durumu
  */
 export const getMessageStatus = (message: any): MessageStatus => {
-  // Optimistic mesaj (henüz gönderilmemiş)
-  if (message.id?.startsWith('temp-') || message.status === 'sending') {
+  // Mesaj gönderiliyor durumu
+  if (message.status === 'sending') {
     return 'sending';
   }
   
