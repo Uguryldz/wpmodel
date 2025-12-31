@@ -29,7 +29,6 @@ export function useContacts({
     try {
       // Temp session'lar için API çağrısı yapma (geçersiz session'lar)
       if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
-        console.log('[useContacts] ⚠️ Temp session için loadContacts çağrıldı, atlanıyor:', sessionId);
         return new Map<string, any>();
       }
       
@@ -37,12 +36,10 @@ export function useContacts({
       // Cache'den kontrol et
       const cached = contactsCacheRef.current.get(sessionId);
       if (!forceReload && cached) {
-        console.log('[useContacts] ✅ Contact\'lar cache\'den kullanılıyor:', cached.data.size);
         return cached.data;
       }
 
       // WebSocket'ten contacts.set event'i bekleniyor
-      console.log('[useContacts] ⏳ WebSocket\'ten contacts.set event\'i bekleniyor...', { sessionId, forceReload });
       
       // Eğer cache'de yoksa, WebSocket event'ini bekliyoruz
       // contacts.set event'i geldiğinde cache dolacak ve bu fonksiyon tekrar çağrılabilir
@@ -51,7 +48,6 @@ export function useContacts({
         try {
           const deviceContacts = await api.getDeviceContacts(sessionId);
           if (deviceContacts && deviceContacts.length > 0) {
-            console.log('[useContacts] ✅ Cihaz rehberinden contact\'lar yüklendi:', deviceContacts.length);
             // Cihaz rehberindeki contact'ları cache'e ekle
             const contactsMap = cached ? new Map(cached.data) : new Map<string, any>();
             deviceContacts.forEach((deviceContact: any) => {
@@ -77,7 +73,7 @@ export function useContacts({
             return contactsMap;
           }
         } catch (deviceError) {
-          console.warn('[useContacts] ⚠️ Cihaz rehberinden contact\'lar yüklenemedi:', deviceError);
+          // Cihaz rehberinden contact'lar yüklenemedi
         }
       }
       
@@ -101,7 +97,6 @@ export function useContacts({
       const contactsArray = Array.from(cached.data.values());
       setContacts(contactsArray);
       setFilteredContacts(contactsArray);
-      console.log('Contact\'lar WebSocket cache\'den yüklendi:', contactsArray.length);
       
       // Sadece ilk yüklemede profil fotoğraflarını çek
       if (!alreadyLoaded) {
@@ -113,7 +108,6 @@ export function useContacts({
         contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
       }
     } else {
-      console.log('Contact cache boş, API\'den yükleniyor...');
       // Cache boşsa API'den yükle
       try {
         setIsLoadingContacts(true);
@@ -121,7 +115,6 @@ export function useContacts({
         const contactsArray = Array.from(contactsMap.values());
         setContacts(contactsArray);
         setFilteredContacts(contactsArray);
-        console.log('Contact\'lar API\'den yüklendi:', contactsArray.length);
         
         // Sadece ilk yüklemede profil fotoğraflarını çek
         if (!alreadyLoaded) {
@@ -180,7 +173,6 @@ export function useContacts({
       const contactsArray = Array.from(cached.data.values());
       setContacts(contactsArray);
       setFilteredContacts(contactsArray);
-      console.log('Contact\'lar WebSocket cache\'den yüklendi:', contactsArray.length);
       
       // Sadece ilk yüklemede profil fotoğraflarını çek
       if (!alreadyLoaded) {
@@ -192,7 +184,6 @@ export function useContacts({
         contactsProfilePicturesLoadedRef.current.set(activeAccountId, true);
       }
     } else {
-      console.log('Contact cache boş, API\'den yükleniyor...');
       // Cache boşsa API'den yükle
       try {
         setIsLoadingContacts(true);
@@ -200,7 +191,6 @@ export function useContacts({
         const contactsArray = Array.from(contactsMap.values());
         setContacts(contactsArray);
         setFilteredContacts(contactsArray);
-        console.log('Contact\'lar API\'den yüklendi:', contactsArray.length);
         
         // Sadece ilk yüklemede profil fotoğraflarını çek
         if (!alreadyLoaded) {

@@ -728,16 +728,6 @@ export default function MessageList({
                       const reactions = msg.reactions || msg.message?.reactions;
                       if (!reactions) return null;
                       
-                      // Debug: Reaction'ları console'a yazdır
-                      console.log('[MessageList] Reaction render ediliyor:', {
-                        messageId: msg.id || msg.key?.id,
-                        reactions,
-                        msgReactions: msg.reactions,
-                        msgMessageReactions: msg.message?.reactions,
-                        msgKeys: Object.keys(msg),
-                        messageKeys: msg.message ? Object.keys(msg.message) : null
-                      });
-                      
                       return (
                         <div className={`flex flex-wrap gap-1.5 mt-1 ${fromMe ? 'justify-end' : 'justify-start'}`}>
                           {Array.isArray(reactions) ? (

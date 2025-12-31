@@ -49,14 +49,10 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
 
   const loadAccounts = async () => {
     try {
-      console.log('[useAccounts] ⏳ Hesaplar yükleniyor...');
-      
       // Önce WebSocket request dene (eğer sendRequestRef varsa)
       if (sendRequestRef.current) {
         try {
-          console.log('[useAccounts] WebSocket üzerinden sessions çekiliyor...');
           const sessions = await sendRequestRef.current('getSessions', {});
-          console.log('[useAccounts] ✅ Sessions WebSocket\'ten alındı:', sessions?.length || 0);
           
           if (sessions && Array.isArray(sessions) && sessions.length > 0) {
             // localStorage'dan hesap adlarını yükle
@@ -78,7 +74,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
                     whatsappJid: session.whatsappJid || null,
                   };
                 } catch (error) {
-                  console.warn(`[useAccounts] Session ${session.id} işlenemedi:`, error);
                   const accountName = accountNames[session.id] || session.id;
                   return {
                     id: session.id,
@@ -123,11 +118,10 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
             }
             
             setAccounts(finalAccounts);
-            console.log('[useAccounts] ✅ Hesaplar WebSocket\'ten yüklendi:', finalAccounts.length);
             return;
           }
         } catch (wsError) {
-          console.warn('[useAccounts] ⚠️ WebSocket request başarısız, API fallback kullanılıyor:', wsError);
+          // WebSocket request başarısız, API fallback kullanılıyor
         }
       }
       
@@ -137,10 +131,8 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
       // Eğer WebSocket bağlı değilse veya event gelmezse, fallback olarak API kullan
       try {
         const sessions = await api.getSessions();
-        console.log('[useAccounts] ✅ Sessions API\'den alındı (fallback):', sessions.length);
         
         if (!sessions || sessions.length === 0) {
-          console.log('[useAccounts] Session bulunamadı');
           setAccounts([]);
           return;
         }
@@ -168,7 +160,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
                 whatsappJid: (session as any).whatsappJid || null,
               };
             } catch (error) {
-              console.warn(`[useAccounts] Session ${session.id} status alınamadı:`, error);
               const accountName = accountNames[session.id] || session.id;
               return {
                 id: session.id,
@@ -303,14 +294,12 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
         try {
           const status = await api.getSessionStatus(currentAccountId);
           if (status.status !== 'open') {
-            console.log(`[Timeout] 5 dakika içinde bağlantı kurulmadı, session siliniyor: ${currentAccountId}`);
             try {
               await api.deleteSession(currentAccountId);
               const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
               delete accountNames[currentAccountId];
               localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
               setAccounts(prevAccounts => prevAccounts.filter(acc => acc.id !== currentAccountId));
-              console.log(`[Timeout] ✅ Session silindi: ${currentAccountId}`);
             } catch (error) {
               console.error('[Timeout] ❌ Session silme hatası:', error);
             }
@@ -325,21 +314,16 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
         }
       }, 5 * 60 * 1000); // 5 dakika
     
-      console.log('[handleAddAccount] QR kod oluşturuluyor, session ID:', accountId);
-      
       // Session oluştur - bu endpoint artık direkt QR kod döndürüyor
       const sessionResponse = await api.createSession(accountId);
-      console.log('[handleAddAccount] Session response:', sessionResponse);
       
       // QR kod response'da var mı kontrol et
       const qrValue = sessionResponse.qr || sessionResponse.lastQr;
       
       if (qrValue && typeof qrValue === 'string' && qrValue.length > 0) {
-        console.log('[handleAddAccount] ✅ QR kod direkt response\'da geldi, görüntüye dönüştürülüyor...');
         // QR kod string'ini görsel QR kod'a çevir
         QRCode.toDataURL(qrValue)
           .then(url => {
-            console.log('[handleAddAccount] ✅ QR kod görüntüye dönüştürüldü');
             setQrCode(url);
             setIsLoadingQR(false);
           })
@@ -347,8 +331,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
             console.error('[handleAddAccount] ❌ QR kod oluşturulamadı:', err);
             setIsLoadingQR(false);
           });
-      } else {
-        console.log('[handleAddAccount] ⚠️ QR kod henüz gelmedi, SSE ile takip ediliyor...');
       }
 
       // SSE ile QR kod dinle
@@ -356,18 +338,11 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
       if (!currentAccountId) return;
       
       sseRef.current = api.subscribeToQR(currentAccountId, (data) => {
-        console.log('[handleAddAccount] SSE güncellemesi alındı:', {
-          hasQr: !!data.qr,
-          hasLastQr: !!data.lastQr,
-          status: data.status,
-        });
-        
         // QR kod kontrolü
         if (data.qr || data.lastQr) {
           const qrValue = data.qr || data.lastQr;
           QRCode.toDataURL(qrValue)
             .then(url => {
-              console.log('[handleAddAccount] ✅ SSE\'den QR kod görüntüye dönüştürüldü');
               setQrCode(url);
               setIsLoadingQR(false);
             })
@@ -379,8 +354,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
         
         // Bağlantı açıldıysa hesap adını kaydet ve modal'ı kapat
         if (data.status === 'open') {
-          console.log('[handleAddAccount] Bağlantı açıldı, hesap adı kaydediliyor...');
-          
           // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
           // Ref kullanarak güncel değeri al (closure sorunu için)
           const currentAccountName = newAccountNameRef.current;
@@ -390,12 +363,10 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           if (currentAccountName && currentAccountName.trim()) {
             // Kullanıcı hesap adı girmişse onu kullan
             accountName = currentAccountName.trim();
-            console.log('[handleAddAccount] Kullanıcı hesap adı girdi:', accountName);
           } else {
             // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
             const existingCount = Object.keys(accountNames).length;
             accountName = `Hesap ${existingCount + 1}`;
-            console.log('[handleAddAccount] Otomatik hesap adı atandı:', accountName);
           }
           
           // Hesap adını kaydet
@@ -410,7 +381,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           
           accountNames[currentAccountId] = accountName;
           localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
-          console.log('[handleAddAccount] Hesap adı kaydedildi:', accountName, 'Session ID:', currentAccountId);
           
           if (sseRef.current) {
             sseRef.current();
@@ -456,7 +426,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           if (qr && typeof qr === 'string' && qr.length > 0 && !qrCode) {
             QRCode.toDataURL(qr)
               .then(url => {
-                console.log('[handleAddAccount] ✅ Alternatif yöntemle QR kod görüntüye dönüştürüldü');
                 setQrCode(url);
                 setIsLoadingQR(false);
                 clearInterval(checkQRInterval);
@@ -467,8 +436,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           }
           
           if (status.status === 'open') {
-            console.log('[handleAddAccount] Bağlantı açıldı (alternatif kontrol), hesap adı kaydediliyor...');
-            
             // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
             // Ref kullanarak güncel değeri al (closure sorunu için)
             const currentAccountName = newAccountNameRef.current;
@@ -478,12 +445,10 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
             if (currentAccountName && currentAccountName.trim()) {
               // Kullanıcı hesap adı girmişse onu kullan
               accountName = currentAccountName.trim();
-              console.log('[handleAddAccount] Kullanıcı hesap adı girdi (alternatif):', accountName);
             } else {
               // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
               const existingCount = Object.keys(accountNames).length;
               accountName = `Hesap ${existingCount + 1}`;
-              console.log('[handleAddAccount] Otomatik hesap adı atandı (alternatif):', accountName);
             }
             
             // Timeout'u iptal et (bağlantı kuruldu)
@@ -495,7 +460,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
             // Hesap adını kaydet
             accountNames[currentAccountId] = accountName;
             localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
-            console.log('[handleAddAccount] Hesap adı kaydedildi (alternatif):', accountName, 'Session ID:', currentAccountId);
             
             clearInterval(checkQRInterval);
             setQrCode(null);
@@ -555,8 +519,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
     accountNames[pendingAccountId] = accountName;
     localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
     
-    console.log('[createAccount] Hesap adı kaydedildi:', accountName, 'Session ID:', pendingAccountId);
-    
     // Hesap listesini güncelle (eğer hesap zaten listede varsa)
     setAccounts(prevAccounts => {
       const existingAccount = prevAccounts.find(acc => acc.id === pendingAccountId);
@@ -601,8 +563,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
             });
         }
         if (data.status === 'open') {
-          console.log('[generateQR] Bağlantı açıldı, hesap adı kaydediliyor...');
-          
           // Hesap adını belirle: doluysa kullan, boşsa otomatik ata
           // Ref kullanarak güncel değeri al (closure sorunu için)
           const currentAccountName = newAccountNameRef.current;
@@ -612,18 +572,15 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           if (currentAccountName && currentAccountName.trim()) {
             // Kullanıcı hesap adı girmişse onu kullan
             accountName = currentAccountName.trim();
-            console.log('[generateQR] Kullanıcı hesap adı girdi:', accountName);
           } else {
             // Boşsa otomatik isim ata (mevcut hesap sayısına göre)
             const existingCount = Object.keys(accountNames).length;
             accountName = `Hesap ${existingCount + 1}`;
-            console.log('[generateQR] Otomatik hesap adı atandı:', accountName);
           }
           
           // Hesap adını kaydet
           accountNames[pendingAccountId] = accountName;
           localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
-          console.log('[generateQR] Hesap adı kaydedildi:', accountName, 'Session ID:', pendingAccountId);
           
           if (sseRef.current) {
             sseRef.current();
@@ -698,10 +655,8 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
         
         // Bağlantı kurulmamışsa (open değilse) session'ı sil
         if (status.status !== 'open') {
-          console.log(`[Modal Kapatıldı] QR kod okutulmadan vazgeçildi, session siliniyor: ${accountIdToDelete}`);
           try {
             await api.deleteSession(accountIdToDelete);
-            console.log(`[Modal Kapatıldı] ✅ Session başarıyla silindi: ${accountIdToDelete}`);
           } catch (deleteError) {
             console.error('[Modal Kapatıldı] ❌ Session silme hatası:', deleteError);
           }
@@ -713,8 +668,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           
           // State'ten kaldır
           setAccounts(prevAccounts => prevAccounts.filter(acc => acc.id !== accountIdToDelete));
-        } else {
-          console.log(`[Modal Kapatıldı] Session zaten bağlanmış (status: ${status.status}), silinmedi: ${accountIdToDelete}`);
         }
       } catch (error) {
         // Status kontrolü başarısız oldu, yine de silmeyi dene
@@ -725,7 +678,6 @@ export function useAccounts({ onAccountCreated, onLoadContacts, onLoadChats, sen
           delete accountNames[accountIdToDelete];
           localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
           setAccounts(prevAccounts => prevAccounts.filter(acc => acc.id !== accountIdToDelete));
-          console.log(`[Modal Kapatıldı] ✅ Session silindi (hata durumunda): ${accountIdToDelete}`);
         } catch (deleteError) {
           console.error('[Modal Kapatıldı] ❌ Session silme hatası:', deleteError);
         }

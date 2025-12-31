@@ -139,15 +139,12 @@ export function useWebSocket({
       
       // State değişikliklerini izle
       onStateChange: (state) => {
-        console.log('[ConnectionManager] State değişti:', state);
         setConnectionState(state);
       },
       
       // Mesajları işle
       onMessage: (data) => {
         try {
-          console.log('[WebSocket] 📨 Mesaj alındı:', data);
-
           // Context'i güncelle (ref'ler her zaman güncel)
           context.chats = chats;
           context.selectedChat = selectedChat;
@@ -157,21 +154,10 @@ export function useWebSocket({
           if (data.type === 'response') {
             // Reaction response'unu kontrol et
             if (data.success && data.data?.status === 'reacted' && data.data?.messageId && data.data?.emoji) {
-              console.log('[WebSocket] 🎭 Reaction response alındı:', data.data);
-              
               // İlgili mesajı bul ve güncelle
               setMessages(prevMessages => {
                 const messageId = data.data.messageId;
                 const emoji = data.data.emoji;
-                
-                // Debug: Mevcut mesajların ID'lerini logla
-                console.log('[WebSocket] 🔍 Mesaj arama - Aranan messageId:', messageId);
-                console.log('[WebSocket] 🔍 Mevcut mesajların ID\'leri:', prevMessages.map((msg, idx) => ({
-                  index: idx,
-                  id: msg.id,
-                  keyId: msg.key?.id,
-                  matches: (msg.id === messageId) || (msg.key?.id === messageId)
-                })).slice(0, 5));
                 
                 // Mesajı bul - daha kapsamlı arama
                 const messageIndex = prevMessages.findIndex(msg => {
@@ -196,21 +182,8 @@ export function useWebSocket({
                 });
                 
                 if (messageIndex === -1) {
-                  console.warn('[WebSocket] ⚠️ Reaction için mesaj bulunamadı:', {
-                    searchedMessageId: messageId,
-                    availableIds: prevMessages.slice(0, 10).map(m => ({
-                      id: m.id,
-                      keyId: m.key?.id
-                    }))
-                  });
                   return prevMessages;
                 }
-                
-                console.log('[WebSocket] ✅ Mesaj bulundu:', {
-                  index: messageIndex,
-                  messageId: messageId,
-                  foundMessageId: prevMessages[messageIndex].id || prevMessages[messageIndex].key?.id
-                });
                 
                 const updatedMessages = [...prevMessages];
                 const message = updatedMessages[messageIndex];
@@ -262,12 +235,6 @@ export function useWebSocket({
                     reactions: reactions
                   } : undefined
                 };
-                
-                console.log('[WebSocket] ✅ Reaction eklendi, güncellenmiş mesaj:', {
-                  messageId: messageId,
-                  emoji: emoji,
-                  reactions: reactions
-                });
                 
                 return updatedMessages;
               });
@@ -334,13 +301,14 @@ export function useWebSocket({
               handleStatusUpdate(data, context);
               break;
             case 'connected':
-              console.log('[WebSocket] ✅ Bağlantı onayı alındı:', data.message);
+              // Bağlantı onayı alındı
               break;
             case 'ping':
               // Heartbeat - ignore
               break;
             default:
-              console.warn('[WebSocket] ⚠️ Bilinmeyen event tipi:', data.type);
+              // Bilinmeyen event tipi
+              break;
           }
         } catch (error) {
           console.error('[WebSocket] ❌ Mesaj işleme hatası:', error);
@@ -369,11 +337,6 @@ export function useWebSocket({
         // Request handler'ı oluştur
         const requestHandler = new WebSocketRequestHandler(ws);
         requestHandlerRef.current = requestHandler;
-        
-        const currentActiveAccount = activeAccountRef.current;
-        if (currentActiveAccount) {
-          console.log('[WebSocket] Aktif hesap:', currentActiveAccount.id);
-        }
       }
     }).catch((error) => {
       console.error('[WebSocket] Bağlantı başlatma hatası:', error);

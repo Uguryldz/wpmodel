@@ -21,13 +21,11 @@ export function useMessages() {
   const loadMessages = async (sessionId: string, chatId: string, limit: number = 50, append: boolean = false) => {
     try {
       const messagesKey = `${sessionId}-${chatId}`;
-      console.log('[useMessages] === Mesajlar yükleniyor ===', { sessionId, chatId, limit, append, messagesKey });
       
       // Cache'den mesajları yükle (eğer varsa ve append değilse)
       if (!append) {
         const cachedMessages = messagesCacheRef.current.get(messagesKey);
         if (cachedMessages && cachedMessages.length > 0) {
-          console.log('[useMessages] ✅ Cache\'den mesajlar yüklendi:', cachedMessages.length);
           setMessages(cachedMessages);
           currentChatKeyRef.current = messagesKey;
           // Cache'den yüklendi, WebSocket'ten gelen mesajlar cache'e eklenecek
@@ -41,8 +39,6 @@ export function useMessages() {
       // İlk yükleme için WebSocket Request kullan (önce WebSocket, fallback API)
       const hasInitialLoad = messagesInitialLoadRef.current.get(messagesKey);
       if (!append && !hasInitialLoad) {
-        console.log('[useMessages] ⏳ İlk mesaj yükleme - WebSocket request gönderiliyor...');
-        
         // Önce WebSocket request dene
         if (sendRequestRef.current) {
           try {
@@ -58,7 +54,6 @@ export function useMessages() {
               limit,
               cursor 
             });
-            console.log('[useMessages] ✅ Mesajlar WebSocket\'ten alındı:', data?.length || 0, 'cursor:', cursor ? 'var' : 'yok');
             
             if (data && Array.isArray(data) && data.length > 0) {
               const mapped: Message[] = (data || [])
@@ -97,15 +92,6 @@ export function useMessages() {
 
                   // Reaction'ları al - backend'den gelen reaction verilerini koru
                   const reactions = msg.reactions || msg.message?.reactions;
-                  
-                  // Debug: Reaction'ları logla (sadece varsa)
-                  if (reactions) {
-                    console.log('[useMessages] 🔍 Backend\'den reaction bulundu:', {
-                      messageId: msgId,
-                      reactions: reactions,
-                      reactionsType: Array.isArray(reactions) ? 'array' : typeof reactions
-                    });
-                  }
 
                   return {
                     ...msg,
@@ -131,11 +117,10 @@ export function useMessages() {
               currentChatKeyRef.current = messagesKey;
               messagesInitialLoadRef.current.set(messagesKey, true);
               setMessages(mapped);
-              console.log('[useMessages] ✅ Mesajlar WebSocket\'ten yüklendi ve cache\'e kaydedildi:', mapped.length);
               return;
             }
           } catch (wsError) {
-            console.warn('[useMessages] ⚠️ WebSocket request başarısız, API fallback kullanılıyor:', wsError);
+            // WebSocket request başarısız, API fallback kullanılıyor
           }
         }
         
@@ -242,16 +227,6 @@ export function useMessages() {
     // Tüm chat'ler için cache'i güncelle (sadece seçili chat için değil)
     // Reaction'ların korunması için önemli
     messagesCacheRef.current.set(messagesKey, newMessages);
-    
-    // Debug: Reaction'ların cache'e kaydedildiğini logla
-    const messagesWithReactions = newMessages.filter(m => m.reactions || m.message?.reactions);
-    if (messagesWithReactions.length > 0) {
-      console.log('[useMessages] ✅ Cache güncellendi (reaction\'lar ile):', {
-        chatId,
-        totalMessages: newMessages.length,
-        messagesWithReactions: messagesWithReactions.length
-      });
-    }
   };
 
   return {

@@ -44,7 +44,6 @@ export function useChats({
       if (chat.id && chat.id.includes('@lid') && chatAny.lidJid) {
         // Gerçek JID'yi lidJid'den al
         chatId = chatAny.lidJid;
-        console.log(`[removeDuplicateChats] @lid formatı düzeltildi: ${chat.id} -> ${chatId}`);
       }
       
       // Grup chat'leri için duplicate kontrolü yapma (grup chat'lerde telefon numarası yok)
@@ -118,12 +117,10 @@ export function useChats({
               messagesCacheRef.current.set(newMessagesKey, mergedMessages);
               // Eski JID'yi temizle
               messagesCacheRef.current.delete(oldMessagesKey);
-              console.log('[useChats] ✅ Mesajlar birleştirildi:', { eski: oldMessages.length, yeni: newMessages.length, birleşik: mergedMessages.length });
             } else {
               // Sadece eski chat'te mesaj var, yeni chat'e aktar
               messagesCacheRef.current.set(newMessagesKey, oldMessages);
               messagesCacheRef.current.delete(oldMessagesKey);
-              console.log('[useChats] ✅ Mesajlar aktarıldı:', { eski: oldMessages.length });
             }
           }
           
@@ -181,11 +178,6 @@ export function useChats({
     
     // Kişi listesi yüklendiğinde mevcut sohbetleri yeniden formatla
     if (newSize > 0 && newSize !== prevSize && chats.length > 0) {
-      console.log('Kişi listesi güncellendi, sohbetler yeniden formatlanıyor...', { 
-        contactsMapSize: newSize, 
-        chatsCount: chats.length 
-      });
-      
       setChats(prevChats => prevChats.map(chat => {
         // Grup sohbetlerini atla
         if (chat.id.includes('@g.us')) {
@@ -224,7 +216,6 @@ export function useChats({
     try {
       // Temp session'lar için API çağrısı yapma (geçersiz session'lar)
       if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
-        console.log('[useChats] ⚠️ Temp session için loadChats çağrıldı, atlanıyor:', sessionId);
         return;
       }
       
@@ -234,14 +225,12 @@ export function useChats({
       
       // Eğer zaten yüklendiyse, WebSocket'ten gelen güncellemeleri kullan
       if (!force && isLoaded && hasInitialLoad) {
-        console.log('[useChats] ✅ Sohbetler WebSocket\'ten yüklendi, API çağrısı yapılmıyor');
         return;
       }
       
       // WebSocket'ten chats.set event'i gelecek
       // İlk yükleme için WebSocket event'ini bekliyoruz
       if (!hasInitialLoad) {
-        console.log('[useChats] ⏳ WebSocket\'ten chats.set event\'i bekleniyor...');
         // WebSocket handler (chatHandlers.ts) chats.set event'ini işleyecek
         return;
       }
@@ -249,7 +238,6 @@ export function useChats({
       // Force reload durumunda da API kullanmıyoruz, WebSocket'ten gelen güncellemeleri bekliyoruz
       // Eğer force reload gerekiyorsa, backend'e WebSocket üzerinden request gönderilebilir
       if (force) {
-        console.log('[useChats] ⚠️ Force reload istenmiş, ancak WebSocket event\'leri kullanılıyor');
         // WebSocket handler'dan chats.set event'i bekleniyor
         return;
       }

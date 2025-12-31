@@ -221,7 +221,6 @@ export default function ChatList({
                   <div className="py-1">
                     {/* <button
                       onClick={() => {
-                        console.log('Sessize al:', activeAccount.id);
                         onShowAccountMenu(false);
                         alert('Sessize al özelliği yakında eklenecek');
                       }}

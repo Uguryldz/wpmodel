@@ -135,7 +135,6 @@ export default function WhatsAppMultiAccount() {
 
   // Hesap listesini yükle
   useEffect(() => {
-    console.log('=== Component mount - loadAccounts çağrılıyor ===');
     accountsHook.loadAccounts();
   }, []);
 
@@ -151,7 +150,6 @@ export default function WhatsAppMultiAccount() {
     
     // Eğer aktif hesap değiştiyse medya cache'ini temizle
     if (prevAccountId && currentAccountId && prevAccountId !== currentAccountId) {
-      console.log('[MediaCache] Aktif hesap değişti, medya cache temizleniyor:', prevAccountId, '->', currentAccountId);
       clearAllMediaCache();
     }
     
@@ -164,13 +162,11 @@ export default function WhatsAppMultiAccount() {
   }, [chatsHook.selectedChat]);
 
   useEffect(() => {
-    console.log('=== activeAccount değişti ===', activeAccount);
     if (activeAccount) {
       const sessionId = activeAccount.id;
       
       // Temp session'lar için chat yükleme işlemini atla
       if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
-        console.log('[whatsapp_multi_account] ⚠️ Temp session için chat yükleme atlanıyor:', sessionId);
         return;
       }
       
@@ -180,18 +176,14 @@ export default function WhatsAppMultiAccount() {
       if (!sessionId.startsWith('temp-') && !sessionId.startsWith('account-')) {
         const cachedContacts = contactsHook.contactsCacheRef.current.get(sessionId);
         if (!cachedContacts || cachedContacts.data.size === 0) {
-          console.log('Contact\'lar yüklenmemiş, yükleniyor...', sessionId);
-          contactsHook.loadContacts(sessionId, false).then(() => {
-            console.log('Contact\'lar yüklendi');
-          }).catch((error) => {
-            console.warn('Contact\'lar yüklenemedi:', error);
+          contactsHook.loadContacts(sessionId, false).catch(() => {
+            // Hata durumunda sessizce devam et
           });
         }
       }
       
       // Sadece ilk bağlantıda veya bağlantı durumu değiştiğinde yükle
       if (activeAccount.status === 'open' && !hasInitialLoad) {
-        console.log('İlk bağlantı - sohbetler yükleniyor, sessionId:', sessionId);
         chatsHook.chatsInitialLoadRef.current.set(sessionId, true);
         chatsHook.chatsLoadedRef.current.set(sessionId, false);
         
@@ -206,16 +198,12 @@ export default function WhatsAppMultiAccount() {
         }
       } else if (activeAccount.status !== 'open' && chatsHook.chats.length === 0 && !hasInitialLoad) {
         // Bağlı değilse de DB'den yükle (uygulama yeniden başladığında sohbetler görünsün)
-        console.log('Hesap bağlı değil ama sohbetler yok - DB\'den yükleniyor');
         chatsHook.chatsInitialLoadRef.current.set(sessionId, true);
         chatsHook.loadChats(sessionId, 50, true);
       } else if (hasInitialLoad && chatsHook.chats.length === 0) {
         // DB'den tekrar yükle (senkronizasyon için)
-        console.log('DB\'den sohbetler tekrar yükleniyor (senkronizasyon)...');
         chatsHook.loadChats(sessionId, 50, true);
       }
-    } else {
-      console.log('activeAccount yok, loadChats çağrılmıyor');
     }
   }, [activeAccount?.id, activeAccount?.status]);
 
@@ -267,14 +255,12 @@ export default function WhatsAppMultiAccount() {
       
       if (existingChat) {
         // Mevcut chat'i aç
-        console.log('Mevcut chat açılıyor:', existingChat.id);
         chatsHook.setSelectedChat(existingChat);
         
         // Mesajları yükle
         await messagesHook.loadMessages(activeAccount.id, chatId);
       } else {
         // Yeni bir chat oluştur
-        console.log('Yeni chat oluşturuluyor:', chatId);
         const contactFromMap = contactsMap.get(chatId);
         const displayName = contactFromMap?.verifiedName || contactFromMap?.name || contactFromMap?.notify || contact.name || contact.notify || contact.verifiedName || contact.id;
         
@@ -306,7 +292,6 @@ export default function WhatsAppMultiAccount() {
       setShowContactsModal(false);
       contactsHook.setContactSearchTerm('');
     } catch (error) {
-      console.error('Kişi seçilemedi:', error);
       alert('Kişi seçilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -363,7 +348,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error) {
-      console.error('Ses mesajı gönderilemedi:', error);
       alert('Ses mesajı gönderilemedi');
     }
   };
@@ -400,7 +384,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error: any) {
-      console.error('Mesaj gönderilemedi:', error);
       // Kullanıcıya bilgi ver
       alert(`Mesaj gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
     } finally {
@@ -439,7 +422,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error: any) {
-      console.error('Medya mesajı gönderilemedi:', error);
       alert(`Medya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
     } finally {
       setIsSending(false);
@@ -468,7 +450,6 @@ export default function WhatsAppMultiAccount() {
     
     const messageId = messageKey.id || msg.id || '';
     if (!messageId) {
-      console.error('Yanıtlanacak mesaj ID\'si bulunamadı:', msg);
       setToast({ 
         message: 'Yanıtlanacak mesaj ID\'si bulunamadı', 
         type: 'error' 
@@ -496,7 +477,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket varsa WebSocket kullan, yoksa API fallback
       if (sendRequest) {
-        console.log('[handleReplyMessage] WebSocket üzerinden gönderiliyor...');
         // WebSocket üzerinden sendMessage request'i gönder
         response = await sendRequest('sendMessage', {
           sessionId: activeAccount.id,
@@ -505,7 +485,6 @@ export default function WhatsAppMultiAccount() {
           options: { quoted: quotedMessage },
         });
       } else {
-        console.log('[handleReplyMessage] WebSocket yok, API fallback kullanılıyor...');
         // API fallback
         response = await api.sendMessage(
           activeAccount.id,
@@ -537,8 +516,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket'ten gerçek mesaj geldiğinde otomatik olarak eklenecek
     } catch (error) {
-      console.error('Mesaj yanıtlanamadı:', error);
-      
       setToast({ 
         message: 'Mesaj yanıtlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -567,7 +544,6 @@ export default function WhatsAppMultiAccount() {
       
       // WebSocket varsa WebSocket kullan, yoksa API fallback
       if (sendRequest) {
-        console.log('[handleForwardMessage] WebSocket üzerinden iletileniyor...');
         try {
           response = await sendRequest('forwardMessage', {
             sessionId: activeAccount.id,
@@ -575,26 +551,20 @@ export default function WhatsAppMultiAccount() {
             toJid: toJid,
             messageId: messageId,
           });
-          console.log('[handleForwardMessage] WebSocket response:', response);
         } catch (wsError) {
-          console.error('[handleForwardMessage] WebSocket hatası:', wsError);
           throw wsError;
         }
       } else {
-        console.log('[handleForwardMessage] WebSocket yok, API fallback kullanılıyor...');
         response = await api.forwardMessage(activeAccount.id, fromJid, toJid, messageId);
-        console.log('[handleForwardMessage] API response:', response);
       }
       
       // Response başarılı (hata fırlatılmadıysa), toast göster
-      console.log('[handleForwardMessage] İşlem başarılı, toast gösteriliyor...');
       setShowForwardSelector(false);
       setForwardingMessage(null);
       
       // Toast'u setTimeout ile göster (state güncellemesi için)
       setTimeout(() => {
         setToast({ message: 'Mesaj iletildi', type: 'success' });
-        console.log('[handleForwardMessage] ✅ Toast gösterildi: Mesaj iletildi');
       }, 100);
       
       if (chatsHook.selectedChat) {
@@ -603,7 +573,6 @@ export default function WhatsAppMultiAccount() {
         }, 500);
       }
     } catch (error) {
-      console.error('[handleForwardMessage] ❌ Hata:', error);
       setShowForwardSelector(false);
       setForwardingMessage(null);
       
@@ -613,7 +582,6 @@ export default function WhatsAppMultiAccount() {
           message: 'Mesaj iletilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
           type: 'error' 
         });
-        console.log('[handleForwardMessage] ❌ Hata toast gösterildi');
       }, 100);
     }
   };
@@ -628,10 +596,7 @@ export default function WhatsAppMultiAccount() {
     }
     
     try {
-      console.log('[handleEditMessage] Mesaj düzenleniyor:', { messageId, newText, jid: chatsHook.selectedChat.id });
-      
       const result = await api.editMessage(activeAccount.id, chatsHook.selectedChat.id, messageId, newText);
-      console.log('[handleEditMessage] API response:', result);
       
       // Backend'den başarılı response geldi, mesajı optimistic olarak güncelle
       // WebSocket'ten messages.update event'i gelecek ve gerçek güncellemeyi yapacak
@@ -641,13 +606,6 @@ export default function WhatsAppMultiAccount() {
           const mId = m.id || m.key?.id;
           // Hem tam eşleşme hem de string karşılaştırması
           if (String(mId) === String(messageId)) {
-            console.log('[handleEditMessage] Optimistic update:', { 
-              mId, 
-              messageId, 
-              newText,
-              oldText: m.text?.substring(0, 30),
-              oldBody: m.body?.substring(0, 30)
-            });
             updated = true;
             return {
               ...m,
@@ -660,36 +618,18 @@ export default function WhatsAppMultiAccount() {
           return m;
         });
         
-        if (!updated) {
-          console.warn('[handleEditMessage] ⚠️ Mesaj bulunamadı, optimistic update yapılamadı:', {
-            messageId,
-            availableIds: prevMessages.slice(0, 5).map(m => m.id || m.key?.id)
-          });
-        }
-        
         return newMessages;
       });
       
       setEditingMessage(null);
       setEditingText('');
-      
-      console.log('[handleEditMessage] ✅ Mesaj başarıyla güncellendi (optimistic)');
     } catch (error: any) {
-      console.error('[handleEditMessage] ❌ Mesaj düzenlenemedi:', error);
-      console.error('[handleEditMessage] Hata detayları:', {
-        message: error?.message,
-        stack: error?.stack,
-        response: error?.response,
-        status: error?.status
-      });
-      
       // Hata mesajını daha detaylı göster
       const errorMessage = error?.message || error?.toString() || 'Bilinmeyen hata';
       
       // Eğer hata mesajı "Baileys edit API'si çalışmıyor" içeriyorsa, 
       // bu sadece bir uyarı olabilir - edit işlemi başarılı olmuş olabilir
       if (errorMessage.includes("Baileys edit API'si çalışmıyor")) {
-        console.warn('[handleEditMessage] ⚠️ Baileys edit API uyarısı, ancak edit başarılı olabilir');
         // Optimistic update yap ve WebSocket'ten gelen güncellemeyi bekle
         messagesHook.setMessages(prevMessages => 
           prevMessages.map(m => {
@@ -744,7 +684,6 @@ export default function WhatsAppMultiAccount() {
         messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat!.id);
       }, 500);
     } catch (error) {
-      console.error('Mesaj silinemedi:', error);
       setToast({ 
         message: 'Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -768,7 +707,6 @@ export default function WhatsAppMultiAccount() {
       setToast({ message: star ? 'Mesaj yıldızlandı' : 'Yıldız kaldırıldı', type: 'success' });
       messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     } catch (error) {
-      console.error('Mesaj yıldızlanamadı:', error);
       setToast({ 
         message: 'Mesaj yıldızlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -784,7 +722,6 @@ export default function WhatsAppMultiAccount() {
       messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
-      console.error('Mesajlar okundu olarak işaretlenemedi:', error);
       alert('Mesajlar okundu olarak işaretlenemedi');
     }
   };
@@ -803,7 +740,6 @@ export default function WhatsAppMultiAccount() {
       setToast({ message: type === 1 ? 'Mesaj sabitlendi' : 'Mesaj sabitlemesi kaldırıldı', type: 'success' });
       messagesHook.loadMessages(activeAccount.id, chatsHook.selectedChat.id);
     } catch (error) {
-      console.error('Mesaj pinlenemedi:', error);
       setToast({ 
         message: 'Mesaj pinlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -818,7 +754,6 @@ export default function WhatsAppMultiAccount() {
       await api.rejectCall(activeAccount.id, callId, callFrom);
       alert('Arama reddedildi');
     } catch (error) {
-      console.error('Arama reddedilemedi:', error);
       alert('Arama reddedilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -830,7 +765,6 @@ export default function WhatsAppMultiAccount() {
       await api.pinChat(activeAccount.id, chat.id, pin);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
-      console.error('Chat pinlenemedi:', error);
       alert('Chat pinlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -842,7 +776,6 @@ export default function WhatsAppMultiAccount() {
       await api.muteChat(activeAccount.id, chat.id, durationMs);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
-      console.error('Chat sessize alınamadı:', error);
       alert('Chat sessize alınamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -857,7 +790,6 @@ export default function WhatsAppMultiAccount() {
         chatsHook.setSelectedChat(null);
       }
     } catch (error) {
-      console.error('Sohbet arşivlenemedi:', error);
       alert('Sohbet arşivlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -896,7 +828,6 @@ export default function WhatsAppMultiAccount() {
         chatsHook.loadChats(activeAccount.id, 50);
       }, 300);
     } catch (error) {
-      console.error('Sohbet silinemedi:', error);
       setToast({ 
         message: 'Sohbet silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -913,7 +844,6 @@ export default function WhatsAppMultiAccount() {
       await api.markChatRead(activeAccount.id, chat.id, markRead);
       chatsHook.loadChats(activeAccount.id, 50);
     } catch (error) {
-      console.error('Sohbet okundu olarak işaretlenemedi:', error);
       alert('Sohbet okundu olarak işaretlenemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
     }
   };
@@ -931,7 +861,6 @@ export default function WhatsAppMultiAccount() {
         type: 'success' 
       });
     } catch (error) {
-      console.error('Geçici mesajlar ayarlanamadı:', error);
       setToast({ 
         message: 'Geçici mesajlar ayarlanamadı: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -971,7 +900,6 @@ export default function WhatsAppMultiAccount() {
         }
       }, 500);
     } catch (error) {
-      console.error('Mesaj silinemedi:', error);
       setToast({ 
         message: 'Mesaj silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -996,7 +924,6 @@ export default function WhatsAppMultiAccount() {
       });
       setToast({ message: 'Reaksiyon gönderildi', type: 'success' });
     } catch (error) {
-      console.error('Reaksiyon gönderilemedi:', error);
       setToast({ 
         message: 'Reaksiyon gönderilemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'), 
         type: 'error' 
@@ -1066,7 +993,6 @@ export default function WhatsAppMultiAccount() {
           alert('Konum gönderme özelliği henüz desteklenmiyor');
           return;
         default:
-          console.warn('Bilinmeyen attachment tipi:', type);
           return;
       }
 
@@ -1132,7 +1058,6 @@ export default function WhatsAppMultiAccount() {
             });
           }
         } catch (error: any) {
-          console.error('Dosya gönderilemedi:', error);
           alert(`Dosya gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
         } finally {
           document.body.removeChild(input);
@@ -1143,7 +1068,6 @@ export default function WhatsAppMultiAccount() {
       document.body.appendChild(input);
       input.click();
     } catch (error: any) {
-      console.error('Attachment hatası:', error);
       alert(`Hata: ${error.message || 'Bilinmeyen hata'}`);
     }
   };
@@ -1354,7 +1278,6 @@ export default function WhatsAppMultiAccount() {
           <div className="space-x-2">
             <button
               onClick={() => {
-                console.log('Manuel yükleme başlatılıyor...');
                 accountsHook.loadAccounts();
               }}
               className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition-colors"
@@ -1447,7 +1370,6 @@ export default function WhatsAppMultiAccount() {
               chatsHook.setSelectedChat(null);
             }
           } catch (error) {
-            console.error('Hesap silinemedi:', error);
             alert('Hesap silinemedi: ' + (error instanceof Error ? error.message : 'Bilinmeyen hata'));
           }
         }}
@@ -1480,7 +1402,6 @@ export default function WhatsAppMultiAccount() {
               setShowAccountMenu(false);
               accountsHook.loadAccounts();
             } catch (error) {
-              console.error('Çıkış yapılamadı:', error);
               alert('Çıkış yapılamadı');
             }
           }}
@@ -1540,7 +1461,6 @@ export default function WhatsAppMultiAccount() {
                   })
                 );
               } catch (error: any) {
-                console.error('Mesaj tekrar gönderilemedi:', error);
                 alert(`Mesaj tekrar gönderilemedi: ${error.message || 'Bilinmeyen hata'}`);
               }
             }}

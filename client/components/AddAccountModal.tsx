@@ -24,13 +24,6 @@ export default function AddAccountModal({
 }: AddAccountModalProps) {
   if (!isOpen) return null;
 
-  // Debug: QR kod durumunu logla
-  console.log('[AddAccountModal] Render:', {
-    qrCode: qrCode ? `QR kod var (${qrCode.length} karakter)` : 'QR kod yok',
-    isLoadingQR,
-    pendingAccountId
-  });
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 w-96 max-w-full mx-4">
@@ -66,7 +59,6 @@ export default function AddAccountModal({
                   src={qrCode} 
                   alt="QR Code" 
                   className="w-64 h-64 mx-auto"
-                  onLoad={() => console.log('[AddAccountModal] QR kod görseli yüklendi')}
                   onError={(e) => {
                     console.error('[AddAccountModal] QR kod görseli yüklenemedi:', e);
                     console.error('[AddAccountModal] QR kod URL:', qrCode.substring(0, 100));
