@@ -1,6 +1,6 @@
 // Message search functions
 import { getAccountId, normalizeJid } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 
 /**
@@ -18,8 +18,14 @@ export const searchMessages = async (
   }
 
   const sessionId = getAccountId(accountId);
+  const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+  if (!phoneMapId) {
+    logger.warn({ sessionId }, "searchMessages: phoneMapId bulunamadı");
+    return { data: [], cursor: null, query };
+  }
+  
   const where = {
-    sessionId,
+    phoneMapId: phoneMapId,
     message: {
       contains: query,
       mode: "insensitive",
@@ -35,7 +41,7 @@ export const searchMessages = async (
       where,
       take: Number(limit),
       skip: cursor ? 1 : 0,
-      cursor: cursor ? { sessionId_remoteJid_id: { sessionId, remoteJid: jid || "", id: cursor } } : undefined,
+      cursor: cursor ? { phoneMapId_remoteJid_id: { phoneMapId: phoneMapId, remoteJid: jid || "", id: cursor } } : undefined,
       orderBy: { messageTimestamp: "desc" },
     });
 

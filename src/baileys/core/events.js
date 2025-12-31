@@ -4,7 +4,7 @@ import { DisconnectReason, isJidBroadcast, jidNormalizedUser } from "baileys";
 import { DataStore } from "../datastore.js";
 import Boom from "@hapi/boom";
 import NodeCache from "node-cache";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 import { findSessionByWhatsAppJid, migrateSessionData, findActiveSessionByWhatsAppJid } from "../../sessionMapper.js";
 import {
@@ -109,6 +109,12 @@ export const bindSocketEvents = (instance) => {
   const chatsSetListener = async ({ chats }) => {
     console.log(`[${sessionId}] chats.set event geldi: ${chats.length} chat`);
     
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "chatsSetListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     for (const chat of chats) {
       // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
       const normalizedChatId = jidNormalizedUser(chat.id);
@@ -116,13 +122,13 @@ export const bindSocketEvents = (instance) => {
       try {
         await prisma.chat.upsert({
           where: {
-            sessionId_id: {
-              sessionId,
+            phoneMapId_id: {
+              phoneMapId: phoneMapId,
               id: normalizedChatId,
             },
           },
           create: {
-            sessionId,
+            phoneMapId: phoneMapId,
             id: normalizedChatId,
             name: chat.name || null,
             displayName: chat.displayName || null,
@@ -155,13 +161,13 @@ export const bindSocketEvents = (instance) => {
           try {
             await prisma.contact.upsert({
               where: {
-                sessionId_id: {
-                  sessionId,
+                phoneMapId_id: {
+                  phoneMapId: phoneMapId,
                   id: chat.id,
                 },
               },
               create: {
-                sessionId,
+                phoneMapId: phoneMapId,
                 id: chat.id,
                 name: chat.name || chat.displayName || null,
                 notify: chat.name || null,
@@ -204,6 +210,12 @@ export const bindSocketEvents = (instance) => {
         const totalChats = instance.chatsStore.size;
         console.log(`[${sessionId}] Toplam ${totalChats} chat toplandı (chats.set: ${initialChatCount} + chats.upsert: ${totalChats - initialChatCount})`);
         
+        const phoneMapIdForTimer = await getPhoneMapIdFromSessionId(sessionId);
+        if (!phoneMapIdForTimer) {
+          logger.warn({ sessionId }, "chatsUpsertTimer: phoneMapId bulunamadı");
+          return;
+        }
+        
         // Eğer hala az sohbet varsa (özellikle sadece 1 chat varsa), daha fazla bekle
         if (totalChats <= 1 && initialChatCount <= 1) {
           console.log(`[${sessionId}] ⚠️ Sadece ${totalChats} chat var, daha fazla chat bekleniyor (30 saniye daha)...`);
@@ -214,13 +226,13 @@ export const bindSocketEvents = (instance) => {
             console.log(`[${sessionId}] Uzun bekleme sonrası: ${finalChatCount} chat`);
             
             // Eğer hala az sohbet varsa, DB'den kontrol et ve eksikleri yükle
-            const dbChatCount = await prisma.chat.count({ where: { sessionId } });
+            const dbChatCount = await prisma.chat.count({ where: { phoneMapId: phoneMapIdForTimer } });
             if (dbChatCount > finalChatCount) {
               console.log(`[${sessionId}] ⚠️ Veritabanında ${dbChatCount} chat var ama memory store'da ${finalChatCount} chat var. Eksik sohbetler yükleniyor...`);
               
               // DB'den tüm sohbetleri yükle
               const dbChats = await prisma.chat.findMany({
-                where: { sessionId },
+                where: { phoneMapId: phoneMapIdForTimer },
                 orderBy: { conversationTimestamp: "desc" },
               });
               
@@ -271,13 +283,13 @@ export const bindSocketEvents = (instance) => {
         } else {
           // Normal durum: yeterli chat var
           // Eğer hala az sohbet varsa, DB'den kontrol et ve eksikleri yükle
-          const dbChatCount = await prisma.chat.count({ where: { sessionId } });
+          const dbChatCount = await prisma.chat.count({ where: { phoneMapId: phoneMapIdForTimer } });
           if (dbChatCount > totalChats) {
             console.log(`[${sessionId}] ⚠️ Veritabanında ${dbChatCount} chat var ama memory store'da ${totalChats} chat var. Eksik sohbetler yükleniyor...`);
             
             // DB'den tüm sohbetleri yükle
             const dbChats = await prisma.chat.findMany({
-              where: { sessionId },
+              where: { phoneMapId: phoneMapIdForTimer },
               orderBy: { conversationTimestamp: "desc" },
             });
             
@@ -344,6 +356,12 @@ export const bindSocketEvents = (instance) => {
   const messagingHistorySetListener = async (history) => {
     console.log(`[${sessionId}] messaging-history.set event geldi`);
     
+    const phoneMapIdForHistory = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapIdForHistory) {
+      logger.warn({ sessionId }, "messagingHistorySetListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     if (history && history.chats && Array.isArray(history.chats)) {
       console.log(`[${sessionId}] messaging-history.set: ${history.chats.length} chat alındı (WhatsApp Web'in varsayılan sohbet geçmişi)`);
       
@@ -356,13 +374,13 @@ export const bindSocketEvents = (instance) => {
           
           await prisma.chat.upsert({
             where: {
-              sessionId_id: {
-                sessionId,
+              phoneMapId_id: {
+                phoneMapId: phoneMapIdForHistory,
                 id: normalizedChatId,
               },
             },
             create: {
-              sessionId,
+              phoneMapId: phoneMapIdForHistory,
               id: normalizedChatId,
               name: chat.name || null,
               displayName: chat.displayName || null,
@@ -417,13 +435,13 @@ export const bindSocketEvents = (instance) => {
         try {
           await prisma.contact.upsert({
             where: {
-              sessionId_id: {
-                sessionId,
+              phoneMapId_id: {
+                phoneMapId: phoneMapIdForHistory,
                 id: contact.id,
               },
             },
             create: {
-              sessionId,
+              phoneMapId: phoneMapIdForHistory,
               id: contact.id,
               name: contact.name || null,
               notify: contact.notify || null,
@@ -529,6 +547,12 @@ export const bindSocketEvents = (instance) => {
     }
     console.log(`[${sessionId}] chats.upsert event: ${chats.length} chat alındı`);
     
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "chatsUpsertListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     for (const chat of chats) {
       // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
       const normalizedChatId = jidNormalizedUser(chat.id);
@@ -537,13 +561,13 @@ export const bindSocketEvents = (instance) => {
         
         await prisma.chat.upsert({
           where: {
-            sessionId_id: {
-              sessionId,
+            phoneMapId_id: {
+              phoneMapId: phoneMapId,
               id: normalizedChatId,
             },
           },
           create: {
-            sessionId,
+            phoneMapId: phoneMapId,
             id: normalizedChatId,
             name: chat.name || null,
             displayName: chat.displayName || null,
@@ -615,6 +639,12 @@ export const bindSocketEvents = (instance) => {
   instance.eventListeners.set("chats.upsert", chatsUpsertListener);
 
   const chatsUpdateListener = async (updates) => {
+    const phoneMapIdForUpdates = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapIdForUpdates) {
+      logger.warn({ sessionId }, "chatsUpdateListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     for (const update of updates) {
       // JID'i normalize et (aynı numara farklı formatlarda kaydedilmesin)
       const normalizedUpdateId = jidNormalizedUser(update.id);
@@ -625,7 +655,7 @@ export const bindSocketEvents = (instance) => {
       try {
         await prisma.chat.updateMany({
           where: {
-            sessionId,
+            phoneMapId: phoneMapIdForUpdates,
             id: normalizedUpdateId,
           },
           data: {
@@ -661,19 +691,26 @@ export const bindSocketEvents = (instance) => {
   const contactsSetListener = async ({ contacts }) => {
     console.log(`[${sessionId}] contacts.set event: ${contacts?.length || 0} contact alındı`);
     contactsCache.delete(sessionId);
+    
+    const phoneMapIdForContacts = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapIdForContacts) {
+      logger.warn({ sessionId }, "contactsSetListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     if (contacts && Array.isArray(contacts)) {
       for (const contact of contacts) {
         instance.contactsStore.set(contact.id, contact);
         try {
           await prisma.contact.upsert({
             where: {
-              sessionId_id: {
-                sessionId,
+              phoneMapId_id: {
+                phoneMapId: phoneMapIdForContacts,
                 id: contact.id,
               },
             },
             create: {
-              sessionId,
+              phoneMapId: phoneMapIdForContacts,
               id: contact.id,
               name: contact.name || null,
               notify: contact.notify || null,
@@ -699,7 +736,7 @@ export const bindSocketEvents = (instance) => {
       const contactCheckTimer = setTimeout(async () => {
         try {
           const memoryContactCount = instance.contactsStore.size;
-          const dbContactCount = await prisma.contact.count({ where: { sessionId } });
+          const dbContactCount = await prisma.contact.count({ where: { phoneMapId: phoneMapIdForContacts } });
           console.log(`[${sessionId}] Contact kontrolü: Memory store: ${memoryContactCount}, DB: ${dbContactCount}`);
           
           // Eğer DB'de daha fazla contact varsa, memory store'a yükle
@@ -707,7 +744,7 @@ export const bindSocketEvents = (instance) => {
             console.log(`[${sessionId}] ⚠️ Veritabanında ${dbContactCount} contact var ama memory store'da ${memoryContactCount} contact var. Eksik contact'lar yükleniyor...`);
             
             const dbContacts = await prisma.contact.findMany({
-              where: { sessionId },
+              where: { phoneMapId: phoneMapIdForContacts },
             });
             
             let addedCount = 0;
@@ -1514,18 +1551,24 @@ export const bindSocketEvents = (instance) => {
   const groupsUpdateListener = async (updates) => {
     const formattedGroups = [];
     
+    const phoneMapIdForGroups = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapIdForGroups) {
+      logger.warn({ sessionId }, "groupsUpdateListener: phoneMapId bulunamadı");
+      return;
+    }
+    
     for (const update of updates) {
       try {
         const metadata = await sock.groupMetadata(update.id);
         await prisma.groupMetadata.upsert({
           where: {
-            sessionId_id: {
-              sessionId,
+            phoneMapId_id: {
+              phoneMapId: phoneMapIdForGroups,
               id: metadata.id,
             },
           },
           create: {
-            sessionId,
+            phoneMapId: phoneMapIdForGroups,
             id: metadata.id,
             subject: metadata.subject || "",
             owner: metadata.owner || null,
@@ -1938,9 +1981,17 @@ export const bindSocketEvents = (instance) => {
               try {
                 console.log(`[${sessionId}] WhatsApp'tan varsayılan sohbet geçmişi bekleniyor...`);
                 
+                // phoneMapId'yi al (sessionId değişmiş olabilir)
+                const currentSessionIdForChats = instance.id;
+                const phoneMapIdForChatLoad = await getPhoneMapIdFromSessionId(currentSessionIdForChats);
+                if (!phoneMapIdForChatLoad) {
+                  logger.warn({ sessionId: currentSessionIdForChats }, "Chat yükleme: phoneMapId bulunamadı");
+                  return;
+                }
+                
                 // Önce DB'den mevcut sohbetleri yükle (hızlı erişim için)
                 const dbChats = await prisma.chat.findMany({
-                  where: { sessionId },
+                  where: { phoneMapId: phoneMapIdForChatLoad },
                   orderBy: { conversationTimestamp: "desc" },
                 });
                 
@@ -2009,7 +2060,7 @@ export const bindSocketEvents = (instance) => {
                       // Her chat için son 200 mesajı çek (performans için batch işlem)
                       const allMessages = await prisma.message.findMany({
                         where: {
-                          sessionId,
+                          phoneMapId: phoneMapIdForChatLoad,
                           remoteJid: { in: chatIds },
                         },
                         orderBy: { messageTimestamp: "desc" },
@@ -2094,11 +2145,19 @@ export const bindSocketEvents = (instance) => {
             // Bağlantı açıldığında grupları senkronize et
             const groupSyncTimer = setTimeout(async () => {
               try {
-                const groupCount = await prisma.groupMetadata.count({ where: { sessionId } });
-                console.log(`[${sessionId}] Veritabanında ${groupCount} grup var`);
+                // sessionId değişmiş olabilir, yeni phoneMapId'yi al
+                const currentSessionId = instance.id;
+                const phoneMapIdForGroupSync = await getPhoneMapIdFromSessionId(currentSessionId);
+                if (!phoneMapIdForGroupSync) {
+                  logger.warn({ sessionId: currentSessionId }, "groupSyncTimer: phoneMapId bulunamadı");
+                  return;
+                }
+                
+                const groupCount = await prisma.groupMetadata.count({ where: { phoneMapId: phoneMapIdForGroupSync } });
+                console.log(`[${currentSessionId}] Veritabanında ${groupCount} grup var`);
                 
                 if (groupCount === 0) {
-                  console.log(`[${sessionId}] Grup bulunamadı, Baileys API'den çekiliyor...`);
+                  console.log(`[${currentSessionId}] Grup bulunamadı, Baileys API'den çekiliyor...`);
                   try {
                     const groups = await sock.groupFetchAllParticipating();
                     const all = Object.values(groups || {});
@@ -2108,13 +2167,13 @@ export const bindSocketEvents = (instance) => {
                         try {
                           await prisma.groupMetadata.upsert({
                             where: {
-                              sessionId_id: {
-                                sessionId,
+                              phoneMapId_id: {
+                                phoneMapId: phoneMapIdForGroupSync,
                                 id: group.id,
                               },
                             },
                             create: {
-                              sessionId,
+                              phoneMapId: phoneMapIdForGroupSync,
                               id: group.id,
                               subject: group.subject || "",
                               owner: group.owner || null,

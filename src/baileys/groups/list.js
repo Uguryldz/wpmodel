@@ -1,6 +1,6 @@
 // Group listing functions
 import { getAccountId, getOrCreateInstance, ensureSocket, normalizeJid } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 
 /**
  * Grup listesi
@@ -34,17 +34,23 @@ export const listGroups = async (accountId, cursor, limit = 50) => {
     }
 
     // Tüm grupları veritabanına kaydet (cache için)
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "listGroups: phoneMapId bulunamadı");
+      return { data: [], cursor: null };
+    }
+    
     for (const group of all) {
       try {
         await prisma.groupMetadata.upsert({
           where: {
-            sessionId_id: {
-              sessionId,
+            phoneMapId_id: {
+              phoneMapId: phoneMapId,
               id: group.id,
             },
           },
           create: {
-            sessionId,
+            phoneMapId: phoneMapId,
             id: group.id,
             subject: group.subject || "",
             owner: group.owner || null,
@@ -120,10 +126,16 @@ export const getGroupMetadata = async (accountId, groupJid) => {
   const normalizedJid = normalizeJid(groupJid);
   
   try {
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "getGroupMetadata: phoneMapId bulunamadı");
+      throw new Error("phoneMapId bulunamadı");
+    }
+    
     // Önce database'den kontrol et
     const dbGroup = await prisma.groupMetadata.findFirst({
       where: {
-        sessionId,
+        phoneMapId: phoneMapId,
         id: normalizedJid,
       },
     });
@@ -167,13 +179,13 @@ export const getGroupMetadata = async (accountId, groupJid) => {
     try {
       await prisma.groupMetadata.upsert({
         where: {
-          sessionId_id: {
-            sessionId,
+          phoneMapId_id: {
+            phoneMapId: phoneMapId,
             id: metadata.id,
           },
         },
         create: {
-          sessionId,
+          phoneMapId: phoneMapId,
           id: metadata.id,
           subject: metadata.subject || "",
           owner: metadata.owner || null,

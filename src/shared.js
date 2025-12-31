@@ -20,6 +20,28 @@ if (!dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('postgres://')) {
 export const prisma = new PrismaClient();
 export const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
+/**
+ * SessionId'den phoneMapId'yi bulur
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<number|null>} phoneMapId veya null
+ */
+export async function getPhoneMapIdFromSessionId(sessionId) {
+  if (!sessionId) return null;
+  
+  try {
+    // Session tablosundan phoneMapId'yi bul
+    const session = await prisma.session.findFirst({
+      where: { sessionId },
+      select: { phoneMapId: true },
+    });
+    
+    return session?.phoneMapId || null;
+  } catch (error) {
+    logger.error({ error, sessionId }, "getPhoneMapIdFromSessionId hatası");
+    return null;
+  }
+}
+
 // Graceful shutdown
 const gracefulShutdown = async () => {
   console.log("[shutdown] Prisma bağlantısı kapatılıyor...");

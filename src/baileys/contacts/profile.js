@@ -1,6 +1,6 @@
 // Contact profile functions
 import { ensureSocket, normalizeJid, getAccountId, getOrCreateInstance } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 
 /**
  * Numara kontrolü (WhatsApp'ta var mı)
@@ -24,16 +24,19 @@ export const getProfilePicture = async (accountId, jid) => {
   // ÖNCE DB'den kontrol et
   try {
     if (!isGroup) {
-      const contact = await prisma.contact.findUnique({
-        where: {
-          sessionId_id: {
-            sessionId,
-            id: normalized,
+      const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+      if (phoneMapId) {
+        const contact = await prisma.contact.findUnique({
+          where: {
+            phoneMapId_id: {
+              phoneMapId: phoneMapId,
+              id: normalized,
+            },
           },
-        },
-      });
-      if (contact?.imgUrl) {
-        return contact.imgUrl;
+        });
+        if (contact?.imgUrl) {
+          return contact.imgUrl;
+        }
       }
     }
   } catch (dbError) {
@@ -52,22 +55,25 @@ export const getProfilePicture = async (accountId, jid) => {
       // API'den alınan profil resmini DB'ye kaydet (bireysel sohbet için)
       if (!isGroup) {
         try {
-          await prisma.contact.upsert({
-            where: {
-              sessionId_id: {
-                sessionId,
-                id: normalized,
+          const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+          if (phoneMapId) {
+            await prisma.contact.upsert({
+              where: {
+                phoneMapId_id: {
+                  phoneMapId: phoneMapId,
+                  id: normalized,
+                },
               },
-            },
-            create: {
-              sessionId,
-              id: normalized,
-              imgUrl: url,
-            },
-            update: {
-              imgUrl: url,
-            },
-          });
+              create: {
+                phoneMapId: phoneMapId,
+                id: normalized,
+                imgUrl: url,
+              },
+              update: {
+                imgUrl: url,
+              },
+            });
+          }
         } catch (updateError) {
           logger.debug({ error: updateError, accountId, jid }, "Profil fotoğrafı DB'ye kaydedilemedi");
         }
@@ -101,7 +107,10 @@ export const refreshContacts = async (accountId, { clearDb = true } = {}) => {
   // İstenirse DB de temizle
   if (clearDb) {
     try {
-      await prisma.contact.deleteMany({ where: { sessionId } });
+      const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+      if (phoneMapId) {
+        await prisma.contact.deleteMany({ where: { phoneMapId: phoneMapId } });
+      }
     } catch (error) {
       logger.error({ error, sessionId }, "Contact tablosu temizlenemedi");
     }

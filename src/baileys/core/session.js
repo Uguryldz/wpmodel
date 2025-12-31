@@ -407,13 +407,20 @@ export const deleteSession = async (accountId) => {
 
   // Prisma'dan verileri sil
   try {
-    await Promise.all([
-      prisma.chat.deleteMany({ where: { sessionId } }),
-      prisma.contact.deleteMany({ where: { sessionId } }),
-      prisma.message.deleteMany({ where: { sessionId } }),
-      prisma.groupMetadata.deleteMany({ where: { sessionId } }),
-      prisma.session.deleteMany({ where: { sessionId } }),
-    ]);
+    const { getPhoneMapIdFromSessionId } = await import("../../shared.js");
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (phoneMapId) {
+      await Promise.all([
+        prisma.chat.deleteMany({ where: { phoneMapId: phoneMapId } }),
+        prisma.contact.deleteMany({ where: { phoneMapId: phoneMapId } }),
+        prisma.message.deleteMany({ where: { phoneMapId: phoneMapId } }),
+        prisma.groupMetadata.deleteMany({ where: { phoneMapId: phoneMapId } }),
+        prisma.session.deleteMany({ where: { sessionId } }),
+      ]);
+    } else {
+      // phoneMapId bulunamazsa sadece session'ı sil
+      await prisma.session.deleteMany({ where: { sessionId } });
+    }
   } catch (error) {
     logger.error({ error, sessionId }, "Session verileri silinemedi");
   }

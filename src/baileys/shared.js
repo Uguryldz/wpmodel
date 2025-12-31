@@ -1,6 +1,6 @@
 // Shared constants and helper functions for Baileys modules
 import { jidNormalizedUser, isJidBroadcast } from "baileys";
-import { prisma, logger } from "../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../shared.js";
 import { serializePrisma } from "../utils.js";
 import { MessageQueue, RateLimiter } from "./utils/queue.js";
 
@@ -639,6 +639,12 @@ export const formatChat = (chat, sessionId = null) => {
 export const saveMessagesToPrisma = async (sessionId, messages = []) => {
   if (!messages.length) return;
 
+  const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+  if (!phoneMapId) {
+    logger.warn({ sessionId }, "saveMessagesToPrisma: phoneMapId bulunamadı");
+    return;
+  }
+
   // Batch processing için mesajları grupla (her batch'te max 100 mesaj)
   const BATCH_SIZE = 100;
   const batches = [];
@@ -661,14 +667,14 @@ export const saveMessagesToPrisma = async (sessionId, messages = []) => {
           try {
             await tx.message.upsert({
               where: {
-                sessionId_remoteJid_id: {
-                  sessionId,
+                phoneMapId_remoteJid_id: {
+                  phoneMapId: phoneMapId,
                   remoteJid: msg.key.remoteJid,
                   id: msg.key.id,
                 },
               },
               create: {
-                sessionId,
+                phoneMapId: phoneMapId,
                 remoteJid: msg.key.remoteJid,
                 id: msg.key.id,
                 key: JSON.stringify(msg.key),
@@ -876,6 +882,12 @@ export const getMessageFromStore = async (key, sessionId) => {
 
   // Memory store'da yoksa Prisma'dan ara (SLOW PATH - Database query)
   try {
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "getMessageFromStore: phoneMapId bulunamadı");
+      return null;
+    }
+    
     logger.debug({ 
       sessionId, 
       messageId: key.id,
@@ -884,7 +896,7 @@ export const getMessageFromStore = async (key, sessionId) => {
     
     const dbMessage = await prisma.message.findFirst({
       where: {
-        sessionId,
+        phoneMapId: phoneMapId,
         remoteJid: normalized,
         id: key.id,
       },

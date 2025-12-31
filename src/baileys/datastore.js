@@ -1,6 +1,6 @@
 // Datastore modülü - PostgreSQL ile tüm veri işlemleri
 // Baileys'in makeInMemoryStore yerine kullanılacak
-import { prisma, logger } from "../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../shared.js";
 import { jidNormalizedUser } from "baileys";
 import {
   normalizeJid,
@@ -18,6 +18,7 @@ import {
 export class DataStore {
   constructor(sessionId) {
     this.sessionId = sessionId;
+    this.phoneMapId = null; // Lazy load edilecek
     
     // Non-blocking DB write queue'ları
     this.chatQueue = [];
@@ -81,6 +82,21 @@ export class DataStore {
   }
   
   /**
+   * phoneMapId'yi lazy load et ve cache'le
+   * @returns {Promise<number|null>}
+   */
+  async getPhoneMapId() {
+    if (this.phoneMapId !== null) {
+      return this.phoneMapId;
+    }
+    this.phoneMapId = await getPhoneMapIdFromSessionId(this.sessionId);
+    if (!this.phoneMapId) {
+      logger.warn({ sessionId: this.sessionId }, "phoneMapId bulunamadı");
+    }
+    return this.phoneMapId;
+  }
+  
+  /**
    * Chat'i queue'ya ekle (non-blocking)
    */
   queueChat(chat) {
@@ -109,6 +125,12 @@ export class DataStore {
    */
   async loadMessage(remoteJid, messageId) {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "loadMessage: phoneMapId bulunamadı");
+        return null;
+      }
+      
       // @lid formatını normalize et
       const normalizedJid = normalizeJid(remoteJid);
       const normalizedJidForQuery = jidNormalizedUser(normalizedJid);
@@ -117,7 +139,7 @@ export class DataStore {
       // @lid formatındaysa, hem normalize edilmiş hem de phoneRaw ile ara
       const dbMessage = await prisma.message.findFirst({
         where: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           id: messageId,
           OR: [
             { remoteJid: normalizedJidForQuery },
@@ -213,6 +235,12 @@ export class DataStore {
    */
   async saveChat(chat) {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveChat: phoneMapId bulunamadı");
+        return;
+      }
+      
       // @lid formatını kontrol et ve düzenle
       const isLidFormat = chat.id && chat.id.includes('@lid');
       let chatId = chat.id;
@@ -231,7 +259,7 @@ export class DataStore {
       // Önce normalize edilmiş ID ile ara
       let existingChat = await prisma.chat.findFirst({
         where: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           OR: [
             { id: normalizedChatId },
             // @lid formatı kontrolü
@@ -256,8 +284,8 @@ export class DataStore {
         // Mevcut chat'i lidJid ile güncelle (ayrı bir update gerekebilir)
         await prisma.chat.update({
           where: {
-            sessionId_id: {
-              sessionId: this.sessionId,
+            phoneMapId_id: {
+              phoneMapId: phoneMapId,
               id: finalChatId,
             },
           },
@@ -269,13 +297,13 @@ export class DataStore {
       
       await prisma.chat.upsert({
         where: {
-          sessionId_id: {
-            sessionId: this.sessionId,
+          phoneMapId_id: {
+            phoneMapId: phoneMapId,
             id: finalChatId,
           },
         },
         create: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           id: finalChatId,
           name: chat.name || null,
           displayName: chat.displayName || null,
@@ -384,6 +412,12 @@ export class DataStore {
    */
   async saveContact(contact) {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveContact: phoneMapId bulunamadı");
+        return;
+      }
+      
       // @lid formatını kontrol et ve düzenle
       const isLidFormat = contact.id && contact.id.includes('@lid');
       let contactId = contact.id;
@@ -399,7 +433,7 @@ export class DataStore {
       // Duplicate kontrolü: @lid ve @s.whatsapp.net formatlarını kontrol et
       let existingContact = await prisma.contact.findFirst({
         where: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           OR: [
             { id: normalizedContactId },
             // phoneRaw ile de ara (aynı numara farklı formatlarda olabilir)
@@ -416,13 +450,13 @@ export class DataStore {
       
       await prisma.contact.upsert({
         where: {
-          sessionId_id: {
-            sessionId: this.sessionId,
+          phoneMapId_id: {
+            phoneMapId: phoneMapId,
             id: finalContactId,
           },
         },
         create: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           id: finalContactId,
           name: contact.name || null,
           notify: contact.notify || null,
@@ -461,6 +495,12 @@ export class DataStore {
    */
   async saveMessage(msg) {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveMessage: phoneMapId bulunamadı");
+        return;
+      }
+      
       const remoteJid = jidNormalizedUser(msg.key.remoteJid);
       const messageId = msg.key.id;
       
@@ -489,14 +529,14 @@ export class DataStore {
       
       await prisma.message.upsert({
         where: {
-          sessionId_remoteJid_id: {
-            sessionId: this.sessionId,
+          phoneMapId_remoteJid_id: {
+            phoneMapId: phoneMapId,
             remoteJid,
             id: messageId,
           },
         },
         create: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           remoteJid,
           id: messageId,
           key: msg.key,
@@ -564,8 +604,14 @@ export class DataStore {
    */
   async getAllChats() {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "getAllChats: phoneMapId bulunamadı");
+        return [];
+      }
+      
       const chats = await prisma.chat.findMany({
-        where: { sessionId: this.sessionId },
+        where: { phoneMapId: phoneMapId },
         orderBy: { conversationTimestamp: 'desc' },
       });
 
@@ -622,8 +668,14 @@ export class DataStore {
    */
   async getAllContacts() {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "getAllContacts: phoneMapId bulunamadı");
+        return [];
+      }
+      
       const contacts = await prisma.contact.findMany({
-        where: { sessionId: this.sessionId },
+        where: { phoneMapId: phoneMapId },
       });
 
       return contacts.map(contact => ({
@@ -651,6 +703,12 @@ export class DataStore {
    */
   async getMessages(remoteJid, limit = 100) {
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "getMessages: phoneMapId bulunamadı");
+        return [];
+      }
+      
       // @lid formatını normalize et
       const normalizedJid = normalizeJid(remoteJid);
       const normalizedJidForQuery = jidNormalizedUser(normalizedJid);
@@ -660,7 +718,7 @@ export class DataStore {
       
       const messages = await prisma.message.findMany({
         where: {
-          sessionId: this.sessionId,
+          phoneMapId: phoneMapId,
           OR: [
             { remoteJid: normalizedJidForQuery },
             // @lid formatındaysa, lidJid ile de ara
@@ -712,6 +770,12 @@ export class DataStore {
     if (chats.length === 0) return;
     
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveChatsBatch: phoneMapId bulunamadı");
+        return;
+      }
+      
       await prisma.$transaction(
         chats.map(chat => {
           // @lid formatını kontrol et ve düzenle
@@ -728,13 +792,13 @@ export class DataStore {
           
           return prisma.chat.upsert({
             where: {
-              sessionId_id: {
-                sessionId: this.sessionId,
+              phoneMapId_id: {
+                phoneMapId: phoneMapId,
                 id: normalizedChatId,
               },
             },
             create: {
-              sessionId: this.sessionId,
+              phoneMapId: phoneMapId,
               id: normalizedChatId,
               name: chat.name || null,
               displayName: chat.displayName || null,
@@ -805,18 +869,24 @@ export class DataStore {
     if (contacts.length === 0) return;
     
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveContactsBatch: phoneMapId bulunamadı");
+        return;
+      }
+      
       await prisma.$transaction(
         contacts.map(contact => {
           const normalizedContactId = jidNormalizedUser(contact.id);
           return prisma.contact.upsert({
             where: {
-              sessionId_id: {
-                sessionId: this.sessionId,
+              phoneMapId_id: {
+                phoneMapId: phoneMapId,
                 id: normalizedContactId,
               },
             },
             create: {
-              sessionId: this.sessionId,
+              phoneMapId: phoneMapId,
               id: normalizedContactId,
               name: contact.name || null,
               notify: contact.notify || null,
@@ -852,6 +922,12 @@ export class DataStore {
     if (messages.length === 0) return;
     
     try {
+      const phoneMapId = await this.getPhoneMapId();
+      if (!phoneMapId) {
+        logger.warn({ sessionId: this.sessionId }, "saveMessagesBatch: phoneMapId bulunamadı");
+        return;
+      }
+      
       await prisma.$transaction(
         messages.map(msg => {
           const remoteJid = jidNormalizedUser(msg.key.remoteJid);
@@ -869,14 +945,14 @@ export class DataStore {
           
           return prisma.message.upsert({
             where: {
-              sessionId_remoteJid_id: {
-                sessionId: this.sessionId,
+              phoneMapId_remoteJid_id: {
+                phoneMapId: phoneMapId,
                 remoteJid,
                 id: messageId,
               },
             },
             create: {
-              sessionId: this.sessionId,
+              phoneMapId: phoneMapId,
               remoteJid,
               id: messageId,
               key: msg.key,

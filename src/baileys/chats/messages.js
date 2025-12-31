@@ -1,7 +1,7 @@
 // Message listing functions
 import { getAccountId, getOrCreateInstance, normalizeJid, formatMessage } from "../shared.js";
 import { jidNormalizedUser } from "baileys";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 
 /**
@@ -67,6 +67,12 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     }
 
     // Memory store'da yoksa veritabanından çek
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "listMessages: phoneMapId bulunamadı");
+      return { data: [], cursor: null };
+    }
+    
     // Bugünün başlangıç timestamp'ini hesapla (UTC gece yarısı)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -75,7 +81,7 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     // Limit yüksekse (tüm mesajlar isteniyorsa) bugünün mesajlarını da dahil et
     // Limit düşükse (sayfalama varsa) sadece en yeni mesajları çek
     const whereClause = {
-      sessionId,
+      phoneMapId: phoneMapId,
       remoteJid: normalizedJid,
       // Eğer cursor yoksa (ilk sayfa), bugünün mesajlarını da dahil et
       ...(cursor ? {} : {
@@ -87,7 +93,7 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     };
     
     const messages = await prisma.message.findMany({
-      cursor: cursor ? { sessionId_remoteJid_id: { sessionId, remoteJid: normalizedJid, id: cursor } } : undefined,
+      cursor: cursor ? { phoneMapId_remoteJid_id: { phoneMapId: phoneMapId, remoteJid: normalizedJid, id: cursor } } : undefined,
       take: Number(limit),
       skip: cursor ? 1 : 0,
       where: whereClause,

@@ -1,6 +1,6 @@
 // Chat listing functions
 import { getAccountId, getOrCreateInstance, formatChat, instances } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 
 /**
@@ -15,11 +15,17 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     if (instance.connectionState.status !== "open") {
       // Bağlantı açık değilse veritabanından çek (fallback)
       try {
+        const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+        if (!phoneMapId) {
+          logger.warn({ sessionId }, "listChats: phoneMapId bulunamadı");
+          return { data: [], cursor: null };
+        }
+        
         const chats = await prisma.chat.findMany({
           cursor: cursor ? { pkId: Number(cursor) } : undefined,
           take: Number(limit),
           skip: cursor ? 1 : 0,
-          where: { sessionId },
+          where: { phoneMapId: phoneMapId },
           orderBy: { conversationTimestamp: "desc" },
         });
         const serialized = chats.map((c) => serializePrisma(c));
@@ -34,7 +40,7 @@ export const listChats = async (accountId, cursor, limit = 25) => {
           const contactIds = nonGroupChats.map(c => c.id);
           const contacts = await prisma.contact.findMany({
             where: {
-              sessionId,
+              phoneMapId: phoneMapId,
               id: { in: contactIds },
             },
           });

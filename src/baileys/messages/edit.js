@@ -1,6 +1,6 @@
 // Message editing functions (reply, forward, edit)
 import { ensureSocket, normalizeJid, getAccountId, getOrCreateInstance, getMessageFromStore } from "../shared.js";
-import { logger } from "../../shared.js";
+import { logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 
 /**
  * Mesaj yanıtla (reply)
@@ -298,9 +298,15 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
   // getMessageFromStore'da yoksa DB'den kontrol et
   if (!fullMessage) {
     const { prisma } = await import("../../shared.js");
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "forwardMessage: phoneMapId bulunamadı");
+      throw new Error("phoneMapId bulunamadı");
+    }
+    
     let message = await prisma.message.findFirst({
       where: {
-        sessionId,
+        phoneMapId: phoneMapId,
         remoteJid: normalizedFromJid,
         id: messageId,
       },
@@ -310,7 +316,7 @@ export const forwardMessage = async (accountId, fromJid, toJid, messageId) => {
     if (!message) {
       const allMessages = await prisma.message.findMany({
         where: {
-          sessionId,
+          phoneMapId: phoneMapId,
           remoteJid: normalizedFromJid,
         },
         take: 100,
@@ -572,10 +578,16 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
     // Gerçek mesaj ID'sini bulmak için son gönderilen mesajları kontrol et
     const isTempId = String(messageId).startsWith('temp-');
     
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "editMessage: phoneMapId bulunamadı");
+      throw new Error("phoneMapId bulunamadı");
+    }
+    
     // Önce tam eşleşme dene
     let message = await prisma.message.findFirst({
       where: {
-        sessionId,
+        phoneMapId: phoneMapId,
         remoteJid: normalizedJid,
         id: messageId,
       },
@@ -585,7 +597,7 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
     if (!message && !isNaN(messageId) && !isTempId) {
       message = await prisma.message.findFirst({
         where: {
-          sessionId,
+          phoneMapId: phoneMapId,
           remoteJid: normalizedJid,
           OR: [
             { id: messageId },
@@ -600,7 +612,7 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
     if (!message) {
       const allMessages = await prisma.message.findMany({
         where: {
-          sessionId,
+          phoneMapId: phoneMapId,
           remoteJid: normalizedJid,
         },
         take: 100, // Son 100 mesajı kontrol et
@@ -639,7 +651,7 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
       // Son 20 mesajı kontrol et (en son gönderilen mesajı bul)
       const recentMessages = await prisma.message.findMany({
         where: {
-          sessionId,
+          phoneMapId: phoneMapId,
           remoteJid: normalizedJid,
         },
         take: 20,
@@ -707,7 +719,7 @@ export const editMessage = async (accountId, jid, messageId, newMessage) => {
         sessionId, 
         normalizedJid,
         memoryMessagesCount: memoryMessages.length,
-        dbMessageCount: await prisma.message.count({ where: { sessionId, remoteJid: normalizedJid } })
+        dbMessageCount: await prisma.message.count({ where: { phoneMapId: phoneMapId, remoteJid: normalizedJid } })
       }, "❌ Düzenlenecek mesaj bulunamadı");
       throw new Error(`Düzenlenecek mesaj bulunamadı (ID: ${messageId})`);
     }

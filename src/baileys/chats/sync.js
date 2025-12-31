@@ -1,6 +1,6 @@
 // Chat synchronization functions
 import { getAccountId, getOrCreateInstance, formatChat, getWebSocketBroadcast } from "../shared.js";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 
 /**
  * Cihazdaki tüm chat'leri eşitle (sync)
@@ -42,18 +42,25 @@ export const syncChats = async (accountId) => {
           const totalChats = instance.chatsStore.size;
           console.log(`[syncChats] ✅ Toplam ${totalChats} chat eşitlendi (başlangıç: ${initialChatCount}, yeni: ${totalChats - initialChatCount})`);
           
+          const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+          if (!phoneMapId) {
+            logger.warn({ sessionId }, "syncChats: phoneMapId bulunamadı");
+            resolve({ status: "error", error: "phoneMapId bulunamadı" });
+            return;
+          }
+          
           let savedCount = 0;
           for (const chat of instance.chatsStore.values()) {
             try {
               await prisma.chat.upsert({
                 where: {
-                  sessionId_id: {
-                    sessionId,
+                  phoneMapId_id: {
+                    phoneMapId: phoneMapId,
                     id: chat.id,
                   },
                 },
                 create: {
-                  sessionId,
+                  phoneMapId: phoneMapId,
                   id: chat.id,
                   name: chat.name || null,
                   displayName: chat.displayName || null,

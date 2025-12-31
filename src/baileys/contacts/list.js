@@ -1,7 +1,7 @@
 // Contact listing functions
 import { getAccountId, getOrCreateInstance, formatContactName, instances, contactsCache, CONTACT_CACHE_TTL_MS, ensureSocket } from "../shared.js";
 import { isJidBroadcast } from "baileys";
-import { prisma, logger } from "../../shared.js";
+import { prisma, logger, getPhoneMapIdFromSessionId } from "../../shared.js";
 import { serializePrisma } from "../../utils.js";
 
 /**
@@ -44,9 +44,15 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
       // Eğer cursor yoksa (ilk sayfa), database'den de veri çekip birleştir
       if (!cursor) {
         try {
-          // Sadece bu sessionId'ye ait contact'ları çek
+          const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+          if (!phoneMapId) {
+            logger.warn({ sessionId }, "listContacts: phoneMapId bulunamadı");
+            return { data: formatted, cursor: null };
+          }
+          
+          // Sadece bu phoneMapId'ye ait contact'ları çek
           const dbContacts = await prisma.contact.findMany({
-            where: { sessionId },
+            where: { phoneMapId: phoneMapId },
             orderBy: { pkId: "desc" },
           });
 
@@ -115,12 +121,18 @@ export const listContacts = async (accountId, cursor, limit = 50) => {
 
   // Database fallback (oturum kapalı olsa da)
   try {
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (!phoneMapId) {
+      logger.warn({ sessionId }, "listContacts (fallback): phoneMapId bulunamadı");
+      return { data: [], cursor: null };
+    }
+    
     const takeLimit = limit && limit < 100000 ? Number(limit) : undefined;
     const contacts = await prisma.contact.findMany({
       cursor: cursor ? { pkId: Number(cursor) } : undefined,
       take: takeLimit,
       skip: cursor ? 1 : 0,
-      where: { sessionId },
+      where: { phoneMapId: phoneMapId },
       orderBy: { pkId: "desc" },
     });
 

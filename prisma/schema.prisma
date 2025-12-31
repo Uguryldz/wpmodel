@@ -16,7 +16,7 @@ datasource db {
 // ============================================
 model Chat {
   pkId                      Int      @id @default(autoincrement())
-  sessionId                 String
+  phoneMapId                Int      // SessionPhoneMap foreign key
   
   // Temel Bilgiler (Baileys store'dan)
   id                        String   // JID: "905335989539@s.whatsapp.net" veya "120363123456789012@g.us" (orijinal/raw)
@@ -94,8 +94,10 @@ model Chat {
   wallpaper                 Json?    // Duvar kağıdı (JSON object)
   lastMessageRecvTimestamp  BigInt?  // Son mesaj alma zamanı
 
-  @@unique([sessionId, id])
-  @@index([sessionId])
+  phoneMap                  SessionPhoneMap @relation("ChatPhoneMap", fields: [phoneMapId], references: [pkId])
+
+  @@unique([phoneMapId, id])
+  @@index([phoneMapId])
   @@index([jidNormalized]) // Normalize edilmiş JID için index (arama performansı)
   @@index([jidStandardized]) // Standart JID için index
   @@index([phoneRaw]) // Telefon numarası için index (arama performansı)
@@ -103,7 +105,7 @@ model Chat {
   @@index([conversationTimestamp])
   @@index([archived])
   @@index([pinned])
-  @@index([sessionId, conversationTimestamp]) // Composite index - chat listesi için
+  @@index([phoneMapId, conversationTimestamp]) // Composite index - chat listesi için
   @@map("chats")
 }
 
@@ -112,7 +114,7 @@ model Chat {
 // ============================================
 model Contact {
   pkId         Int     @id @default(autoincrement())
-  sessionId    String
+  phoneMapId   Int     // SessionPhoneMap foreign key
   id           String  // JID: "905335989539@s.whatsapp.net" (orijinal/raw)
   
   // JID Format Alanları (jidConverter.ts için - arama ve eşleştirme için)
@@ -137,8 +139,10 @@ model Contact {
   businessProfile Json? // İş profili (JSON object)
   labels       Json?   // Etiketler (JSON array)
 
-  @@unique([sessionId, id])
-  @@index([sessionId])
+  phoneMap     SessionPhoneMap @relation("ContactPhoneMap", fields: [phoneMapId], references: [pkId])
+
+  @@unique([phoneMapId, id])
+  @@index([phoneMapId])
   @@index([jidNormalized]) // Normalize edilmiş JID için index (arama performansı)
   @@index([jidStandardized]) // Standart JID için index
   @@index([phoneRaw]) // Telefon numarası için index (arama performansı)
@@ -152,7 +156,7 @@ model Contact {
 // ============================================
 model Message {
   pkId                            Int      @id @default(autoincrement())
-  sessionId                       String
+  phoneMapId                      Int      // SessionPhoneMap foreign key
   remoteJid                       String   // Chat JID: "905335989539@s.whatsapp.net" (orijinal/raw)
   id                              String   // Mesaj ID
   
@@ -232,13 +236,15 @@ model Message {
   verifiedBizName                 String?
   finalLiveLocation               Json?    // Final live location (JSON object)
 
-  @@unique([sessionId, remoteJid, id])
-  @@index([sessionId])
+  phoneMap                        SessionPhoneMap @relation("MessagePhoneMap", fields: [phoneMapId], references: [pkId])
+
+  @@unique([phoneMapId, remoteJid, id])
+  @@index([phoneMapId])
   @@index([remoteJid])
   @@index([remoteJidNormalized]) // Normalize edilmiş JID için index (arama performansı)
   @@index([remoteJidPhoneRaw]) // Telefon numarası için index (arama performansı)
   @@index([remoteJidPhoneNormalized]) // Normalize edilmiş telefon için index
-  @@index([sessionId, remoteJid]) // Composite index - chat bazında mesaj sorguları için
+  @@index([phoneMapId, remoteJid]) // Composite index - chat bazında mesaj sorguları için
   @@index([messageTimestamp])
   @@index([status])
   @@index([starred])
@@ -255,7 +261,7 @@ model Message {
 // ============================================
 model GroupMetadata {
   pkId              Int     @id @default(autoincrement())
-  sessionId         String
+  phoneMapId        Int     // SessionPhoneMap foreign key
   id                String  // Grup JID
   
   owner             String? // Grup sahibi JID
@@ -276,8 +282,10 @@ model GroupMetadata {
   ephemeralDuration Int?     // Geçici mesaj süresi
   inviteCode        String?  // Davet kodu
 
-  @@unique([sessionId, id])
-  @@index([sessionId])
+  phoneMap          SessionPhoneMap @relation("GroupMetadataPhoneMap", fields: [phoneMapId], references: [pkId])
+
+  @@unique([phoneMapId, id])
+  @@index([phoneMapId])
   @@index([subject])
   @@map("group_metadata")
 }
@@ -315,6 +323,11 @@ model SessionPhoneMap {
   deletionDate DateTime?
 
   sessions    Session[] @relation("SessionPhoneMap")
+  chats       Chat[] @relation("ChatPhoneMap")
+  contacts    Contact[] @relation("ContactPhoneMap")
+  messages    Message[] @relation("MessagePhoneMap")
+  groupMetadata GroupMetadata[] @relation("GroupMetadataPhoneMap")
+  messageTemplates MessageTemplate[] @relation("MessageTemplatePhoneMap")
 
   @@index([phoneNum])
   @@index([isDeleted])
@@ -326,7 +339,7 @@ model SessionPhoneMap {
 // ============================================
 model MessageTemplate {
   pkId        Int      @id @default(autoincrement())
-  sessionId   String   // Hangi session'a ait (opsiyonel, tüm hesaplar için kullanılabilir)
+  phoneMapId  Int?     // SessionPhoneMap foreign key (opsiyonel, tüm hesaplar için kullanılabilir)
   id          String   @unique // Unique template ID
   name        String   // Şablon adı
   type        String   // 'button' | 'list' | 'template' | 'product'
@@ -334,7 +347,9 @@ model MessageTemplate {
   createdAt   BigInt   // Timestamp (milliseconds)
   updatedAt   BigInt?  // Timestamp (milliseconds)
 
-  @@index([sessionId])
+  phoneMap    SessionPhoneMap? @relation("MessageTemplatePhoneMap", fields: [phoneMapId], references: [pkId])
+
+  @@index([phoneMapId])
   @@index([type])
   @@map("message_templates")
 }
