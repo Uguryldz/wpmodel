@@ -293,11 +293,32 @@ model Session {
   createdDate DateTime? @default(now())
   isDeleted   Int       @default(0) // 0: aktif, 1: silinmiş
   deletedDate DateTime?
+  phoneMapId  Int?      // SessionPhoneMap foreign key
+
+  phoneMap    SessionPhoneMap? @relation("SessionPhoneMap", fields: [phoneMapId], references: [pkId])
 
   @@unique([sessionId, id])
   @@index([sessionId])
   @@index([isDeleted])
+  @@index([phoneMapId])
   @@map("sessions")
+}
+
+// ============================================
+// SESSION PHONE MAP MODEL
+// ============================================
+model SessionPhoneMap {
+  pkId        Int       @id @default(autoincrement())
+  phoneNum    String    @unique // Telefon numarası (unique)
+  createdDate DateTime? @default(now())
+  isDeleted   Int       @default(0) // 0: aktif, 1: silinmiş
+  deletionDate DateTime?
+
+  sessions    Session[] @relation("SessionPhoneMap")
+
+  @@index([phoneNum])
+  @@index([isDeleted])
+  @@map("session_phone_map")
 }
 
 // ============================================
