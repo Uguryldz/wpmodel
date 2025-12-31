@@ -593,6 +593,8 @@ export const formatChat = (chat, sessionId = null) => {
   let imgUrl = null;
   let chatName = chat.name || chat.displayName || chat.subject || chat.id;
   let verifiedName = null;
+  let contactName = null;
+  let notify = null;
   
   // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
   // Örnek: chat.id = "52523188617453@lid", chat.lidJid = "905538781507@s.whatsapp.net"
@@ -616,7 +618,13 @@ export const formatChat = (chat, sessionId = null) => {
             imgUrl = contact.imgUrl;
           }
           verifiedName = contact.verifiedName || null;
+          contactName = contact.name || null;
+          notify = contact.notify || null;
+          // Öncelik sırası: verifiedName > name > notify > chat.name > chat.displayName > chatId
           chatName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chatId;
+        } else {
+          // Contact bulunamadı - debug için log
+          console.log(`[formatChat] ⚠️ Contact bulunamadı: ${chatId} (sessionId: ${sessionId})`);
         }
       }
     }
@@ -626,6 +634,8 @@ export const formatChat = (chat, sessionId = null) => {
     id: chatId, // Gerçek JID'yi kullan
     name: chatName,
     verifiedName: verifiedName,
+    contactName: contactName, // Cihaz rehberindeki isim (name alanı)
+    notify: notify, // WhatsApp'ta kayıtlı isim
     unreadCount: chat.unreadCount ?? 0,
     conversationTimestamp: chat.conversationTimestamp ?? null,
     isMuted: Boolean(chat.isMuted),

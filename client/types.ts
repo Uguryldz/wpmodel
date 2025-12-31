@@ -45,6 +45,8 @@ export interface Chat {
   pinned?: Date | null;
   presence?: 'available' | 'unavailable' | 'composing' | 'recording' | null;
   lastSeen?: number | null;
+  notify?: string | null; // WhatsApp'ta kayıtlı isim
+  contactName?: string | null; // Cihaz rehberindeki isim (name alanı)
 }
 
 export interface Contact {

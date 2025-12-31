@@ -195,14 +195,18 @@ export function useChats({
         const contact = contactsMap.get(chat.id);
         if (contact) {
           const verifiedName = contact.verifiedName || chat.verifiedName;
+          const contactName = contact.name || null;
+          const notify = contact.notify || null;
           const displayName = verifiedName || contact.verifiedName || contact.name || contact.notify || chat.name || chat.id;
           
-          // Sadece isim değiştiyse güncelle
-          if (displayName !== chat.name || verifiedName !== chat.verifiedName) {
+          // İsim veya contact bilgileri değiştiyse güncelle
+          if (displayName !== chat.name || verifiedName !== chat.verifiedName || contactName !== chat.contactName || notify !== chat.notify) {
             return {
               ...chat,
               name: displayName,
               verifiedName: verifiedName,
+              contactName: contactName,
+              notify: notify,
             };
           }
         }

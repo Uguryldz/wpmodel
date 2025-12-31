@@ -27,6 +27,18 @@ export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) 
   console.log('[WebSocket] chats.set: Tüm sohbetler set ediliyor...', rawChats?.length || 0);
 
   if (!rawChats || !Array.isArray(rawChats)) return;
+  
+  // Debug: Backend'den gelen ilk birkaç chat'in contactName ve notify alanlarını kontrol et
+  if (rawChats.length > 0) {
+    const sampleChats = rawChats.slice(0, 3).filter((c: any) => !c.id?.includes('@g.us'));
+    console.log('[WebSocket] Backend\'den gelen chat örnekleri (contactName/notify):', sampleChats.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      contactName: c.contactName,
+      notify: c.notify,
+      verifiedName: c.verifiedName
+    })));
+  }
 
   // @lid formatındaki chat'ler için gerçek JID'yi lidJid'den al
   const normalizedChats = rawChats.map((chat: any) => {
@@ -68,13 +80,33 @@ export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) 
       let displayName = chat.name || chat.displayName || chat.id;
       let verifiedName = chat.verifiedName;
       
-      if (!chat.id.includes('@g.us') && contact) {
-        verifiedName = contact.verifiedName || chat.verifiedName;
-        displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
-      } else if (!chat.id.includes('@g.us')) {
-        const phoneMatch = chat.id.match(/^(\d+)@/);
-        if (phoneMatch) {
-          displayName = phoneMatch[1];
+      // Backend'den gelen contactName ve notify alanlarını öncelikli kullan
+      let contactName = chat.contactName || null;
+      let notify = chat.notify || null;
+      
+      // Eğer backend'den gelmemişse, contactsMap'ten al
+      if (!chat.id.includes('@g.us')) {
+        if (contact) {
+          // Backend'den gelen veri yoksa contactsMap'ten al
+          if (!contactName) contactName = contact.name || null;
+          if (!notify) notify = contact.notify || null;
+          if (!verifiedName) verifiedName = contact.verifiedName || chat.verifiedName;
+          
+          // Display name'i belirle: contactName varsa contactName, yoksa notify, o da yoksa telefon numarası
+          displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || chat.id;
+        } else {
+          // Contact yoksa, backend'den gelen contactName veya notify'ı kullan
+          if (chat.contactName) {
+            displayName = chat.contactName;
+          } else if (chat.notify) {
+            displayName = chat.notify;
+          } else {
+            // Hiçbiri yoksa telefon numarasını göster
+            const phoneMatch = chat.id.match(/^(\d+)@/);
+            if (phoneMatch) {
+              displayName = phoneMatch[1];
+            }
+          }
         }
       }
       
@@ -82,6 +114,8 @@ export const handleChatsSet = (data: WebSocketEvent, context: WebSocketContext) 
         id: chat.id,
         name: displayName,
         verifiedName: verifiedName,
+        contactName: contactName,
+        notify: notify,
         profilePicture: chat.imgUrl || chatProfilePictures.get(chat.id) || existingChat?.profilePicture,
         unreadCount: chat.unreadCount ?? existingChat?.unreadCount ?? 0,
         conversationTimestamp: chat.conversationTimestamp || existingChat?.conversationTimestamp || 0,
@@ -167,14 +201,33 @@ export const handleChatsUpsert = (data: WebSocketEvent, context: WebSocketContex
           const newUnreadCount = chat.unreadCount ?? oldChat.unreadCount;
           const newTimestamp = chat.conversationTimestamp || oldChat.conversationTimestamp;
           
-          if (newUnreadCount !== oldChat.unreadCount || newTimestamp !== oldChat.conversationTimestamp) {
+          // Backend'den gelen contactName ve notify alanlarını da kontrol et
+          const newContactName = chat.contactName !== undefined ? chat.contactName : oldChat.contactName;
+          const newNotify = chat.notify !== undefined ? chat.notify : oldChat.notify;
+          const newVerifiedName = chat.verifiedName !== undefined ? chat.verifiedName : oldChat.verifiedName;
+          
+          // Display name'i güncelle: contactName varsa contactName, yoksa notify, o da yoksa eski name
+          let newDisplayName = oldChat.name;
+          if (newContactName) {
+            newDisplayName = newContactName;
+          } else if (newNotify) {
+            newDisplayName = newNotify;
+          } else if (chat.name) {
+            newDisplayName = chat.name;
+          }
+          
+          if (newUnreadCount !== oldChat.unreadCount || newTimestamp !== oldChat.conversationTimestamp || 
+              newContactName !== oldChat.contactName || newNotify !== oldChat.notify || 
+              newDisplayName !== oldChat.name) {
             updatedChats[index] = {
               ...oldChat,
               id: normalizedChatId,
               unreadCount: newUnreadCount,
               conversationTimestamp: newTimestamp,
-              name: chat.name || oldChat.name,
-              verifiedName: chat.verifiedName || oldChat.verifiedName,
+              name: newDisplayName,
+              verifiedName: newVerifiedName,
+              contactName: newContactName,
+              notify: newNotify,
               profilePicture: chat.imgUrl || oldChat.profilePicture,
               archived: chat.archived ?? oldChat.archived,
             };
@@ -185,16 +238,35 @@ export const handleChatsUpsert = (data: WebSocketEvent, context: WebSocketContex
           const contactsMap = cached ? cached.data : new Map<string, any>();
           const contact = contactsMap.get(normalizedChatId);
           
-          let displayName = chat.name || chat.displayName || normalizedChatId;
+          // Backend'den gelen contactName ve notify alanlarını öncelikli kullan
+          let contactName = chat.contactName || null;
+          let notify = chat.notify || null;
           let verifiedName = chat.verifiedName;
+          let displayName = chat.name || chat.displayName || normalizedChatId;
           
-          if (!normalizedChatId.includes('@g.us') && contact) {
-            verifiedName = contact.verifiedName || chat.verifiedName;
-            displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || normalizedChatId;
-          } else if (!normalizedChatId.includes('@g.us')) {
-            const phoneMatch = normalizedChatId.match(/^(\d+)@/);
-            if (phoneMatch) {
-              displayName = phoneMatch[1];
+          // Eğer backend'den gelmemişse, contactsMap'ten al
+          if (!normalizedChatId.includes('@g.us')) {
+            if (contact) {
+              // Backend'den gelen veri yoksa contactsMap'ten al
+              if (!contactName) contactName = contact.name || null;
+              if (!notify) notify = contact.notify || null;
+              if (!verifiedName) verifiedName = contact.verifiedName || chat.verifiedName;
+              
+              // Display name'i belirle: contactName varsa contactName, yoksa notify, o da yoksa telefon numarası
+              displayName = contact.verifiedName || contact.name || contact.notify || chat.name || chat.displayName || normalizedChatId;
+            } else {
+              // Contact yoksa, backend'den gelen contactName veya notify'ı kullan
+              if (chat.contactName) {
+                displayName = chat.contactName;
+              } else if (chat.notify) {
+                displayName = chat.notify;
+              } else {
+                // Hiçbiri yoksa telefon numarasını göster
+                const phoneMatch = normalizedChatId.match(/^(\d+)@/);
+                if (phoneMatch) {
+                  displayName = phoneMatch[1];
+                }
+              }
             }
           }
           
@@ -202,6 +274,8 @@ export const handleChatsUpsert = (data: WebSocketEvent, context: WebSocketContex
             id: normalizedChatId,
             name: displayName,
             verifiedName: verifiedName,
+            contactName: contactName,
+            notify: notify,
             profilePicture: chat.imgUrl,
             unreadCount: chat.unreadCount || 0,
             conversationTimestamp: chat.conversationTimestamp || 0,

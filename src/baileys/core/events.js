@@ -321,6 +321,37 @@ export const bindSocketEvents = (instance) => {
           if (wsBroadcastFn) {
             const allChats = Array.from(instance.chatsStore.values())
               .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
+            
+            // formatChat çağrılmadan önce, tüm chat'ler için contact bilgilerini veritabanından çek
+            const nonGroupChats = allChats.filter(c => !c.id.includes('@g.us'));
+            if (nonGroupChats.length > 0) {
+              const contactIds = nonGroupChats.map(c => c.id);
+              try {
+                const dbContacts = await prisma.contact.findMany({
+                  where: {
+                    phoneMapId: phoneMapIdForTimer,
+                    id: { in: contactIds },
+                  },
+                });
+                
+                // Contact bilgilerini contactsStore'a ekle
+                for (const dbContact of dbContacts) {
+                  const serializedContact = serializePrisma(dbContact);
+                  instance.contactsStore.set(serializedContact.id, {
+                    id: serializedContact.id,
+                    name: serializedContact.name,
+                    notify: serializedContact.notify,
+                    verifiedName: serializedContact.verifiedName,
+                    imgUrl: serializedContact.imgUrl,
+                    status: serializedContact.status,
+                  });
+                }
+                console.log(`[${sessionId}] ✅ ${dbContacts.length} contact bilgisi veritabanından contactsStore'a yüklendi`);
+              } catch (error) {
+                logger.error({ error, sessionId }, "chats.set timer: Contact bilgileri yüklenemedi");
+              }
+            }
+            
             wsBroadcastFn({
               type: "chats.set",
               sessionId,
@@ -338,8 +369,40 @@ export const bindSocketEvents = (instance) => {
     // WebSocket'e bildir - TÜM chat'leri gönder (sadece yeni gelenleri değil)
     // Bu sayede proje yeniden başlatıldığında tüm chat'ler görünür
     if (wsBroadcastFn) {
+      // formatChat çağrılmadan önce, tüm chat'ler için contact bilgilerini veritabanından çek
       const allChats = Array.from(instance.chatsStore.values())
         .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
+      
+      // Grup olmayan chat'ler için contact bilgilerini veritabanından çek
+      const nonGroupChats = allChats.filter(c => !c.id.includes('@g.us'));
+      if (nonGroupChats.length > 0) {
+        const contactIds = nonGroupChats.map(c => c.id);
+        try {
+          const dbContacts = await prisma.contact.findMany({
+            where: {
+              phoneMapId: phoneMapId,
+              id: { in: contactIds },
+            },
+          });
+          
+          // Contact bilgilerini contactsStore'a ekle
+          for (const dbContact of dbContacts) {
+            const serializedContact = serializePrisma(dbContact);
+            instance.contactsStore.set(serializedContact.id, {
+              id: serializedContact.id,
+              name: serializedContact.name,
+              notify: serializedContact.notify,
+              verifiedName: serializedContact.verifiedName,
+              imgUrl: serializedContact.imgUrl,
+              status: serializedContact.status,
+            });
+          }
+          console.log(`[${sessionId}] ✅ ${dbContacts.length} contact bilgisi veritabanından contactsStore'a yüklendi`);
+        } catch (error) {
+          logger.error({ error, sessionId }, "chats.set: Contact bilgileri yüklenemedi");
+        }
+      }
+      
       wsBroadcastFn({
         type: "chats.set",
         sessionId,
@@ -628,6 +691,41 @@ export const bindSocketEvents = (instance) => {
     }
     // WebSocket'e bildir
     if (wsBroadcastFn) {
+      // formatChat çağrılmadan önce, chat'ler için contact bilgilerini veritabanından çek
+      const nonGroupChats = chats.filter(c => !c.id.includes('@g.us'));
+      if (nonGroupChats.length > 0) {
+        const contactIds = nonGroupChats.map(c => {
+          const normalizedChatId = jidNormalizedUser(c.id);
+          return normalizedChatId;
+        });
+        try {
+          const dbContacts = await prisma.contact.findMany({
+            where: {
+              phoneMapId: phoneMapId,
+              id: { in: contactIds },
+            },
+          });
+          
+          // Contact bilgilerini contactsStore'a ekle
+          for (const dbContact of dbContacts) {
+            const serializedContact = serializePrisma(dbContact);
+            instance.contactsStore.set(serializedContact.id, {
+              id: serializedContact.id,
+              name: serializedContact.name,
+              notify: serializedContact.notify,
+              verifiedName: serializedContact.verifiedName,
+              imgUrl: serializedContact.imgUrl,
+              status: serializedContact.status,
+            });
+          }
+          if (dbContacts.length > 0) {
+            console.log(`[${sessionId}] ✅ chats.upsert: ${dbContacts.length} contact bilgisi veritabanından contactsStore'a yüklendi`);
+          }
+        } catch (error) {
+          logger.error({ error, sessionId }, "chats.upsert: Contact bilgileri yüklenemedi");
+        }
+      }
+      
       wsBroadcastFn({
         type: "chats.upsert",
         sessionId,
@@ -2008,6 +2106,36 @@ export const bindSocketEvents = (instance) => {
                     });
                   }
                   console.log(`[${sessionId}] ✅ ${dbChats.length} chat veritabanından memory store'a yüklendi`);
+                  
+                  // formatChat çağrılmadan önce, tüm chat'ler için contact bilgilerini veritabanından çek
+                  const nonGroupChats = dbChats.filter(c => !c.id.includes('@g.us'));
+                  if (nonGroupChats.length > 0) {
+                    const contactIds = nonGroupChats.map(c => c.id);
+                    try {
+                      const dbContacts = await prisma.contact.findMany({
+                        where: {
+                          phoneMapId: phoneMapIdForChatLoad,
+                          id: { in: contactIds },
+                        },
+                      });
+                      
+                      // Contact bilgilerini contactsStore'a ekle
+                      for (const dbContact of dbContacts) {
+                        const serializedContact = serializePrisma(dbContact);
+                        instance.contactsStore.set(serializedContact.id, {
+                          id: serializedContact.id,
+                          name: serializedContact.name,
+                          notify: serializedContact.notify,
+                          verifiedName: serializedContact.verifiedName,
+                          imgUrl: serializedContact.imgUrl,
+                          status: serializedContact.status,
+                        });
+                      }
+                      console.log(`[${sessionId}] ✅ ${dbContacts.length} contact bilgisi veritabanından contactsStore'a yüklendi (bağlantı açıldığında)`);
+                    } catch (error) {
+                      logger.error({ error, sessionId }, "Bağlantı açıldığında: Contact bilgileri yüklenemedi");
+                    }
+                  }
                   
                   // WebSocket'e bildir (frontend'e sohbetlerin yüklendiğini bildir)
                   if (wsBroadcastFn) {

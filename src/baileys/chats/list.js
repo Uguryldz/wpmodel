@@ -73,6 +73,41 @@ export const listChats = async (accountId, cursor, limit = 25) => {
     const allChats = Array.from(instance.chatsStore.values())
       .sort((a, b) => (b.conversationTimestamp || 0) - (a.conversationTimestamp || 0));
 
+    // formatChat çağrılmadan önce, tüm chat'ler için contact bilgilerini veritabanından çek
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    if (phoneMapId) {
+      const nonGroupChats = allChats.filter(c => !c.id.includes('@g.us'));
+      if (nonGroupChats.length > 0) {
+        const contactIds = nonGroupChats.map(c => c.id);
+        try {
+          const contacts = await prisma.contact.findMany({
+            where: {
+              phoneMapId: phoneMapId,
+              id: { in: contactIds },
+            },
+          });
+          
+          // Contact bilgilerini contactsStore'a ekle
+          for (const contact of contacts) {
+            const serializedContact = serializePrisma(contact);
+            instance.contactsStore.set(serializedContact.id, {
+              id: serializedContact.id,
+              name: serializedContact.name,
+              notify: serializedContact.notify,
+              verifiedName: serializedContact.verifiedName,
+              imgUrl: serializedContact.imgUrl,
+              status: serializedContact.status,
+            });
+          }
+          if (contacts.length > 0) {
+            console.log(`[listChats] ✅ ${contacts.length} contact bilgisi veritabanından contactsStore'a yüklendi (bağlantı açık)`);
+          }
+        } catch (error) {
+          logger.error({ error, sessionId }, "listChats: Contact bilgileri yüklenemedi (bağlantı açık)");
+        }
+      }
+    }
+
     // Cursor ile sayfalama
     let startIndex = 0;
     if (cursor) {

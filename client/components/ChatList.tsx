@@ -23,6 +23,8 @@ interface Chat {
   verifiedName?: string | null;
   archived?: boolean;
   pinned?: Date | null;
+  notify?: string | null; // WhatsApp'ta kayıtlı isim
+  contactName?: string | null; // Cihaz rehberindeki isim (name alanı)
 }
 
 interface ChatListProps {
@@ -390,11 +392,19 @@ export default function ChatList({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center space-x-1">
                       <div className="font-semibold text-sm truncate">
-                        {chat.name}
+                        {(() => {
+                          // Grup sohbetleri için normal name'i göster
+                          if (chat.id.includes('@g.us')) {
+                            return chat.name;
+                          }
+                          // Bireysel sohbetler için: contactName varsa contactName, yoksa notify, o da yoksa telefon numarası
+                          const displayName = chat.contactName || chat.notify || extractPhoneFromJid(chat.id);
+                          return displayName;
+                        })()}
                       </div>
                       {chat.isMuted && <VolumeX size={14} className="text-gray-400 flex-shrink-0" />}
                     </div>
-                    {!chat.id.includes('@g.us') && (
+                    {!chat.id.includes('@g.us') && (chat.contactName || chat.notify) && (
                       <div className="text-xs text-gray-400 truncate">
                         {extractPhoneFromJid(chat.id)}
                       </div>
