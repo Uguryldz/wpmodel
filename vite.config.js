@@ -95,8 +95,18 @@ export default defineConfig({
           proxy.on('proxyReqWs', (proxyReq, req, socket) => {
             socket.on('error', (err) => {
               // Socket hatalarını sessizce handle et
+              // "This socket has been ended by the other party" - Normal durum (bağlantı kapanırken)
               const ignoredCodes = ['EPIPE', 'ECONNRESET', 'ECONNREFUSED'];
-              if (!ignoredCodes.includes(err.code)) {
+              const ignoredMessages = [
+                'This socket has been ended by the other party',
+                'socket has been ended',
+                'writeAfterFIN'
+              ];
+              
+              const shouldIgnore = ignoredCodes.includes(err.code) || 
+                                   ignoredMessages.some(msg => err.message?.includes(msg));
+              
+              if (!shouldIgnore) {
                 console.log('[Vite Proxy] WebSocket socket error:', err.message, err.code);
               }
             });
