@@ -1731,22 +1731,56 @@ export const bindSocketEvents = (instance) => {
             
             const phoneNumber = extractPhoneNumber(whatsappJid);
             
-            await prisma.session.upsert({
-              where: {
-                sessionId_id: {
-                  sessionId,
-                  id: phoneNumber,
-                },
-              },
-              create: {
-                sessionId,
-                id: phoneNumber,
-                data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
-              },
-              update: {
-                data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
-              },
-            });
+            // phoneNumber kontrolü
+            if (!phoneNumber) {
+              logger.warn({ sessionId, whatsappJid }, "Phone number çıkarılamadı, SessionPhoneMap kaydı oluşturulamadı");
+            } else {
+              try {
+                // SessionPhoneMap kaydını oluştur veya bul (phoneNum unique olduğu için upsert kullanıyoruz)
+                const phoneMap = await prisma.sessionPhoneMap.upsert({
+                  where: {
+                    phoneNum: phoneNumber,
+                  },
+                  create: {
+                    phoneNum: phoneNumber,
+                    createdDate: new Date(),
+                    isDeleted: 0,
+                  },
+                  update: {
+                    // Mevcut kayıt varsa, isDeleted=0 ise güncelleme yapma (aktif kalması için)
+                    // isDeleted=1 ise tekrar aktif yap
+                    isDeleted: 0,
+                    deletionDate: null,
+                  },
+                });
+                
+                logger.info({ sessionId, phoneNumber, phoneMapId: phoneMap.pkId }, "SessionPhoneMap kaydı oluşturuldu/bulundu");
+                
+                // Session'ı oluştur veya güncelle (phoneMapId ile)
+                await prisma.session.upsert({
+                  where: {
+                    sessionId_id: {
+                      sessionId,
+                      id: phoneNumber,
+                    },
+                  },
+                  create: {
+                    sessionId,
+                    id: phoneNumber,
+                    data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
+                    phoneMapId: phoneMap.pkId,
+                  },
+                  update: {
+                    data: JSON.stringify({ whatsappJid, mappedAt: new Date().toISOString() }),
+                    phoneMapId: phoneMap.pkId, // Her zaman phoneMapId'yi güncelle
+                  },
+                });
+                
+                logger.info({ sessionId, phoneNumber, phoneMapId: phoneMap.pkId }, "Session kaydı phoneMapId ile güncellendi");
+              } catch (error) {
+                logger.error({ error, sessionId, phoneNumber, whatsappJid }, "SessionPhoneMap/Session kaydı oluşturulurken hata");
+              }
+            }
 
             // Bağlantı açıldığında cihazdan contact'ları çek (Baileys API)
             // contacts.set event'i WhatsApp'taki TÜM rehberi getirir (sohbet geçmişi olmasa bile)
