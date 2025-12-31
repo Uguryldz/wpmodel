@@ -1282,18 +1282,14 @@ export const bindSocketEvents = (instance) => {
           messageStubParameters: msgUpdate.messageStubParameters,
         };
         
-        // Prisma'dan mesajı sil
-        try {
-          await prisma.message.deleteMany({
-            where: {
-              sessionId,
-              remoteJid: normalizedJid,
-              id: key.id,
-            },
-          });
-        } catch (error) {
-          logger.error({ error, sessionId, messageId: key.id }, "Mesaj silme işlemi başarısız");
-        }
+        // KVKK uyumlu: Mesaj veritabanından silinmez, sadece loglama yapılır
+        // WhatsApp'tan mesaj silme event'i geldi, ancak veri KVKK gereği saklanıyor
+        logger.info({ 
+          sessionId, 
+          messageId: key.id, 
+          remoteJid: normalizedJid,
+          messageStubType: msgUpdate.messageStubType 
+        }, "Mesaj silme event'i alındı (KVKK uyumlu - veri silinmedi)");
       }
 
       // Reaksiyonlar - tüm olası formatları kontrol et

@@ -461,13 +461,12 @@ export const clearChat = async (accountId, jid) => {
     normalizedJid
   );
 
-  // Prisma'dan mesajları sil
-  await prisma.message.deleteMany({
-    where: {
-      sessionId,
-      remoteJid: normalizedJid,
-    },
-  });
+  // KVKK uyumlu: Veritabanından veri silinmez, sadece WhatsApp'tan silinir
+  logger.info({ 
+    sessionId, 
+    jid: normalizedJid, 
+    messageCount: messages.length 
+  }, "Chat temizlendi (WhatsApp'tan) - KVKK uyumlu (veri silinmedi)");
 
   return { status: "cleared", jid: normalizedJid, messageCount: messages.length };
 };
@@ -550,21 +549,11 @@ export const deleteChat = async (accountId, jid, lastMessage = null) => {
     normalizedJid
   );
 
-  // Prisma'dan chat ve mesajları sil
-  await Promise.all([
-    prisma.chat.deleteMany({
-      where: {
-        sessionId,
-        id: normalizedJid,
-      },
-    }),
-    prisma.message.deleteMany({
-      where: {
-        sessionId,
-        remoteJid: normalizedJid,
-      },
-    }),
-  ]);
+  // KVKK uyumlu: Veritabanından veri silinmez, sadece WhatsApp'tan silinir
+  logger.info({ 
+    sessionId, 
+    jid: normalizedJid 
+  }, "Chat silindi (WhatsApp'tan) - KVKK uyumlu (veri silinmedi)");
 
   return { status: "deleted", jid: normalizedJid };
 };

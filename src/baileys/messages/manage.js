@@ -228,42 +228,13 @@ export const deleteMessage = async (accountId, jid, messageId, deleteForEveryone
     });
   }
 
-  // Prisma'dan sil (bulunan mesajın id'sini kullan)
-  if (message.id) {
-    await prisma.message.deleteMany({
-      where: {
-        sessionId,
-        remoteJid: normalizedJid,
-        id: message.id,
-      },
-    });
-  } else {
-    // Eğer message.id yoksa, key.id ile mesajı bul ve sil
-    const messagesToDelete = await prisma.message.findMany({
-      where: {
-        sessionId,
-        remoteJid: normalizedJid,
-      },
-    });
-
-    for (const msg of messagesToDelete) {
-      try {
-        const msgKey = typeof msg.key === "string" ? JSON.parse(msg.key) : msg.key;
-        if (msgKey && msgKey.id === key.id) {
-          await prisma.message.deleteMany({
-            where: {
-              sessionId,
-              remoteJid: normalizedJid,
-              id: msg.id,
-            },
-          });
-          break;
-        }
-      } catch {
-        continue;
-      }
-    }
-  }
+  // KVKK uyumlu: Veritabanından veri silinmez, sadece WhatsApp'tan silinir
+  logger.info({ 
+    sessionId, 
+    jid: normalizedJid, 
+    messageId: key.id || messageId,
+    deleteForEveryone 
+  }, "Mesaj silindi (WhatsApp'tan) - KVKK uyumlu (veri silinmedi)");
 
   return { status: "deleted", messageId: key.id || messageId, deleteForEveryone };
 };

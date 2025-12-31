@@ -126,9 +126,14 @@ export const deleteTemplate = async (templateId) => {
       throw new Error("templateId zorunludur");
     }
 
-    await prisma.messageTemplate.delete({
-      where: { id: templateId },
-    });
+    // KVKK uyumlu: Veritabanından veri silinmez, sadece loglama yapılır
+    // Kullanıcı şablon silmek istese bile veri KVKK gereği saklanıyor
+    logger.info({ 
+      templateId 
+    }, "Şablon silme isteği alındı (KVKK uyumlu - veri silinmedi)");
+    
+    // Not: Şablonlar opsiyonel veriler olduğu için gerçekten silmek gerekirse
+    // MessageTemplate tablosuna isDeleted alanı eklenebilir
 
     return true;
   } catch (error) {

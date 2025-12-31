@@ -226,20 +226,20 @@ export const restoreSessions = async () => {
 
     console.log(`[restoreSessions] ${sessionIds.length} session klasörü bulundu:`, sessionIds);
 
-    // Temp- ile başlayan session'ları temizle (bunlar kesinlikle geçici session'lardır)
+    // Temp- ile başlayan session'ları işaretle (KVKK uyumlu - veri silmez)
     const tempSessionsToCleanup = sessionIds.filter(sessionId => 
       sessionId.startsWith('temp-')
     );
 
-    // Temp session'ları temizle
+    // Temp session'ları işaretle (isDeleted=1) - KVKK uyumlu
     for (const tempSessionId of tempSessionsToCleanup) {
       try {
-        console.log(`[restoreSessions] 🗑️ Temp session temizleniyor: ${tempSessionId}`);
+        console.log(`[restoreSessions] 🗑️ Temp session işaretleniyor (isDeleted=1): ${tempSessionId}`);
         await deleteSession(tempSessionId);
-        console.log(`[restoreSessions] ✅ Temp session temizlendi: ${tempSessionId}`);
+        console.log(`[restoreSessions] ✅ Temp session işaretlendi: ${tempSessionId}`);
       } catch (error) {
-        console.error(`[restoreSessions] ❌ Temp session temizlenemedi (${tempSessionId}):`, error);
-        logger.error({ error, sessionId: tempSessionId }, "Temp session temizlenemedi");
+        console.error(`[restoreSessions] ❌ Temp session işaretlenemedi (${tempSessionId}):`, error);
+        logger.error({ error, sessionId: tempSessionId }, "Temp session işaretlenemedi");
       }
     }
 
@@ -257,37 +257,38 @@ export const restoreSessions = async () => {
         // Kısa bir süre bekle ve bağlantı durumunu kontrol et
         await new Promise(resolve => setTimeout(resolve, 2000));
         
-        // Eğer WhatsApp JID yoksa (bağlantı kurulmamışsa), temizle
+        // Eğer WhatsApp JID yoksa (bağlantı kurulmamışsa), işaretle
         if (!instance.whatsappJid && instance.connectionState?.status !== 'open') {
           accountSessionsToCleanup.push(accountSessionId);
-          console.log(`[restoreSessions] 🗑️ Account session bağlantı kurulmamış, temizlenecek: ${accountSessionId}`);
+          console.log(`[restoreSessions] 🗑️ Account session bağlantı kurulmamış, işaretlenecek: ${accountSessionId}`);
         } else {
           console.log(`[restoreSessions] ✅ Account session bağlantı kurulmuş, restore edilecek: ${accountSessionId}`);
         }
       } catch (error) {
-        // Hata varsa da temizle (muhtemelen geçersiz session)
+        // Hata varsa da işaretle (muhtemelen geçersiz session) - KVKK uyumlu
         accountSessionsToCleanup.push(accountSessionId);
-        console.log(`[restoreSessions] 🗑️ Account session hata nedeniyle temizlenecek: ${accountSessionId}`);
+        console.log(`[restoreSessions] 🗑️ Account session hata nedeniyle işaretlenecek: ${accountSessionId}`);
       }
     }
 
-    // Account session'ları temizle
+    // Account session'ları işaretle (isDeleted=1) - KVKK uyumlu
     for (const accountSessionId of accountSessionsToCleanup) {
       try {
         await deleteSession(accountSessionId);
-        console.log(`[restoreSessions] ✅ Account session temizlendi: ${accountSessionId}`);
+        console.log(`[restoreSessions] ✅ Account session işaretlendi: ${accountSessionId}`);
       } catch (error) {
-        console.error(`[restoreSessions] ❌ Account session temizlenemedi (${accountSessionId}):`, error);
-        logger.error({ error, sessionId: accountSessionId }, "Account session temizlenemedi");
+        console.error(`[restoreSessions] ❌ Account session işaretlenemedi (${accountSessionId}):`, error);
+        logger.error({ error, sessionId: accountSessionId }, "Account session işaretlenemedi");
       }
     }
 
     // Tüm geçerli session'ları restore et (temp ve bağlantı kurulmamış account session'lar hariç)
+    // Not: isDeleted=1 olan session'lar da filtrelenmeli
     const validSessionIds = sessionIds.filter(sessionId => 
       !tempSessionsToCleanup.includes(sessionId) && !accountSessionsToCleanup.includes(sessionId)
     );
 
-    console.log(`[restoreSessions] ${validSessionIds.length} geçerli session restore edilecek (${tempSessionsToCleanup.length} temp + ${accountSessionsToCleanup.length} account session temizlendi)`);
+    console.log(`[restoreSessions] ${validSessionIds.length} geçerli session restore edilecek (${tempSessionsToCleanup.length} temp + ${accountSessionsToCleanup.length} account session işaretlendi - KVKK uyumlu)`);
 
     // Session'ları restore et ve WhatsApp JID'lerini topla
     const sessionsByJid = new Map(); // whatsappJid -> [sessionIds]
@@ -391,7 +392,7 @@ export const restoreSessions = async () => {
 };
 
 /**
- * Session'ı sil
+ * Session'ı sil (KVKK uyumlu - veri silmez, sadece isDeleted=1 yapar)
  */
 export const deleteSession = async (accountId) => {
   const instance = getOrCreateInstance(accountId);
@@ -405,24 +406,18 @@ export const deleteSession = async (accountId) => {
     }
   }
 
-  // Prisma'dan verileri sil
+  // KVKK uyumlu: Veritabanından veri silme, sadece session tablosunda isDeleted=1 yap
   try {
-    const { getPhoneMapIdFromSessionId } = await import("../../shared.js");
-    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
-    if (phoneMapId) {
-      await Promise.all([
-        prisma.chat.deleteMany({ where: { phoneMapId: phoneMapId } }),
-        prisma.contact.deleteMany({ where: { phoneMapId: phoneMapId } }),
-        prisma.message.deleteMany({ where: { phoneMapId: phoneMapId } }),
-        prisma.groupMetadata.deleteMany({ where: { phoneMapId: phoneMapId } }),
-        prisma.session.deleteMany({ where: { sessionId } }),
-      ]);
-    } else {
-      // phoneMapId bulunamazsa sadece session'ı sil
-      await prisma.session.deleteMany({ where: { sessionId } });
-    }
+    await prisma.session.updateMany({
+      where: { sessionId },
+      data: {
+        isDeleted: 1,
+        deletedDate: new Date(),
+      },
+    });
+    logger.info({ sessionId }, "Session tablosu güncellendi (isDeleted=1, deletedDate) - KVKK uyumlu");
   } catch (error) {
-    logger.error({ error, sessionId }, "Session verileri silinemedi");
+    logger.error({ error, sessionId }, "Session tablosu güncellenemedi");
   }
 
   // auth_info klasöründeki session dosyalarını sil

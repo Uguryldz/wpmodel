@@ -104,17 +104,9 @@ export const refreshContacts = async (accountId, { clearDb = true } = {}) => {
   contactsCache.delete(sessionId);
   instance.contactsStore.clear();
 
-  // İstenirse DB de temizle
-  if (clearDb) {
-    try {
-      const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
-      if (phoneMapId) {
-        await prisma.contact.deleteMany({ where: { phoneMapId: phoneMapId } });
-      }
-    } catch (error) {
-      logger.error({ error, sessionId }, "Contact tablosu temizlenemedi");
-    }
-  }
+  // KVKK uyumlu: DB'den veri silme - clearDb parametresi artık kullanılmıyor
+  // Veriler veritabanında kalmalı, sadece memory store temizleniyor
+  logger.info({ sessionId }, "Contact memory store temizlendi (KVKK uyumlu - DB'den veri silinmedi)");
 
   // Soketi yeniden senkrona zorla
   if (instance.sock) {
