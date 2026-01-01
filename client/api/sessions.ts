@@ -87,7 +87,9 @@ export const createSession = async (sessionId: string): Promise<SessionStatus> =
     
     // Network hatası ise daha açıklayıcı mesaj ver
     if (error.message?.includes('Failed to fetch') || error.message?.includes('ECONNREFUSED') || error.name === 'TypeError') {
-      throw new Error('Backend bağlantı hatası. Backend çalışıyor mu kontrol edin. (http://localhost:3000)');
+      // VITE_BACKEND_URL varsa onu kullan, yoksa window.location.host kullan (proxy üzerinden)
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || `http://${window.location.host}`;
+      throw new Error(`Backend bağlantı hatası. Backend çalışıyor mu kontrol edin. (${backendUrl})`);
     }
     
     // Eğer error.message yoksa, error'ın kendisini string'e çevir

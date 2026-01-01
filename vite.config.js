@@ -1,7 +1,18 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
+
+// Environment variables - Vite'ın loadEnv fonksiyonunu kullan
+// mode: development veya production
+// process.cwd(): proje kök dizini
+const env = loadEnv(process.env.MODE || 'development', process.cwd(), '');
+
+// Environment variables
+const FRONTEND_PORT = Number(env.VITE_PORT || process.env.VITE_PORT || 5173);
+const BACKEND_PORT = Number(env.PORT || process.env.PORT || 3000);
+// Backend URL - eğer VITE_BACKEND_URL tanımlıysa onu kullan, yoksa localhost:PORT kullan
+const BACKEND_URL = env.VITE_BACKEND_URL || process.env.VITE_BACKEND_URL || `http://localhost:${BACKEND_PORT}`;
 
 // EPIPE ve ECONNRESET hatalarını filtrele
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
@@ -47,12 +58,12 @@ export default defineConfig({
   },
   logLevel: 'warn', // EPIPE gibi normal hataları gizle
   server: {
-    port: 5173,
+    port: FRONTEND_PORT,
     host: true,
     https: httpsConfig, // HTTPS desteği ekle (mikrofon/kamera erişimi için gerekli)
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: BACKEND_URL,
         changeOrigin: true,
         secure: false,
         timeout: 10000,
@@ -63,7 +74,7 @@ export default defineConfig({
         },
       },
       '/sessions': {
-        target: 'http://localhost:3000',
+        target: BACKEND_URL,
         changeOrigin: true,
         ws: true,
         secure: false,
@@ -78,7 +89,7 @@ export default defineConfig({
         },
       },
       '/ws': {
-        target: 'http://localhost:3000',
+        target: BACKEND_URL,
         changeOrigin: true,
         ws: true,
         secure: false,
@@ -114,14 +125,14 @@ export default defineConfig({
         },
       },
       '/health': {
-        target: 'http://localhost:3000',
+        target: BACKEND_URL,
         changeOrigin: true,
         secure: false,
         timeout: 10000,
       },
       // SessionId ile başlayan route'lar (örn: /default/chats, /test/chats, /temp-xxx/templates)
       '^/([a-zA-Z0-9_-]+)/(chats|contacts|groups|messages|templates)': {
-        target: 'http://localhost:3000',
+        target: BACKEND_URL,
         changeOrigin: true,
         secure: false,
         timeout: 10000,
