@@ -1086,7 +1086,7 @@ export default function WhatsAppMultiAccount() {
   // EMOJIS ve ATTACHMENT_OPTIONS artık constants'tan import ediliyor
 
   // WebSocket bağlantısı artık useWebSocket hook'unda yönetiliyor
-  const { sendRequest } = useWebSocket({
+  const { sendRequest, connectionState } = useWebSocket({
     activeAccountRef,
     selectedChatRef: chatsHook.selectedChatRef,
     contactsCacheRef: contactsHook.contactsCacheRef,
@@ -1121,6 +1121,51 @@ export default function WhatsAppMultiAccount() {
       accountsHook.setSendRequest(sendRequest);
     }
   }, [sendRequest]);
+
+  // WebSocket bağlantısı kurulduğunda chat'leri yükle (sayfa yenileme sonrası için)
+  // Backend'in sendInitialData'sı chat'leri göndermiş olabilir, ama Ubuntu'da timing farklı olabilir
+  // Bu durumda bir timeout ile bekleyip, hala yüklenmemişse getChats request'i gönder
+  useEffect(() => {
+    if (connectionState.status === 'connected' && sendRequest && activeAccount) {
+      const sessionId = activeAccount.id;
+      
+      // Temp session'lar için chat yükleme işlemini atla
+      if (sessionId.startsWith('temp-') || sessionId.startsWith('account-')) {
+        return;
+      }
+      
+      const hasInitialLoad = chatsHook.chatsInitialLoadRef.current.get(sessionId);
+      const isLoaded = chatsHook.chatsLoadedRef.current.get(sessionId);
+      
+      // Eğer chat'ler yüklenmemişse, bir timeout ile bekleyip sonra yükle
+      if (!hasInitialLoad || !isLoaded) {
+        const timeoutId = setTimeout(async () => {
+          // Hala yüklenmemişse, WebSocket üzerinden getChats request'i gönder
+          // Backend'den chats.set event'i gelecek (backend'de getChats request'i aldığında chats.set event'i de gönderiyoruz)
+          const stillNotLoaded = !chatsHook.chatsLoadedRef.current.get(sessionId);
+          const stillNoInitialLoad = !chatsHook.chatsInitialLoadRef.current.get(sessionId);
+          
+          if (stillNotLoaded || stillNoInitialLoad) {
+            try {
+              console.log(`[WebSocket] Bağlantı kuruldu ama chat'ler yüklenmemiş, getChats request'i gönderiliyor... (sessionId: ${sessionId})`);
+              
+              // Backend'den chats.set event'i gelecek (handleChatsSet otomatik olarak çalışacak)
+              await sendRequest('getChats', {
+                sessionId: sessionId,
+                limit: 50,
+              });
+              
+              console.log(`[WebSocket] ✅ getChats request'i gönderildi, chats.set event'i bekleniyor...`);
+            } catch (error) {
+              console.error('[WebSocket] ❌ getChats request hatası:', error);
+            }
+          }
+        }, 2000); // 2 saniye bekle (backend'in sendInitialData'sının çalışması için)
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
+  }, [connectionState.status, sendRequest, activeAccount?.id]);
 
   // Cleanup - useAccounts ve useWebSocket hook'ları kendi cleanup'larını yapıyor
   useEffect(() => {

@@ -285,6 +285,16 @@ wss.on("connection", (ws, req) => {
               if (chatSessionId) {
                 const chatsResult = await listChats(chatSessionId, null, chatLimit);
                 responseData = chatsResult.data || [];
+                
+                // Frontend'in chats.set event'i ile de alabilmesi için event de gönder
+                // (sayfa yenileme sonrası chat'lerin yüklenmesi için)
+                if (chatsResult.data && chatsResult.data.length > 0) {
+                  ws.send(safeStringify({
+                    type: "chats.set",
+                    sessionId: chatSessionId,
+                    chats: chatsResult.data,
+                  }));
+                }
               } else {
                 throw new Error('sessionId gerekli');
               }
