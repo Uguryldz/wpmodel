@@ -1,3 +1,4 @@
+import "dotenv/config"; // .env dosyasını yükle
 import express from "express";
 import swaggerUi from "swagger-ui-express";
 import { WebSocketServer } from "ws";
@@ -551,8 +552,16 @@ app.get("/health", (_req, res) => {
 app.get(
   "/sessions",
   asyncHandler((_req, res) => {
-    const sessions = listSessions();
-    res.json(sessions);
+    try {
+      const sessions = listSessions();
+      res.json(sessions);
+    } catch (error) {
+      console.error('[GET /sessions] Hata:', error);
+      res.status(500).json({ 
+        error: error.message || 'Sessions alınamadı',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
   })
 );
 

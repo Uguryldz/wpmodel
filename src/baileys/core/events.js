@@ -1015,6 +1015,17 @@ export const bindSocketEvents = (instance) => {
       return;
     }
     
+    logger.info({ 
+      sessionId, 
+      type, 
+      messageCount: messages.length,
+      firstMessageKey: messages[0]?.key,
+      firstMessageFromMe: messages[0]?.key?.fromMe
+    }, "messages.upsert event alındı");
+    
+    // WebSocket broadcast fonksiyonunu al (her seferinde güncel olması için)
+    const wsBroadcastFn = getWebSocketBroadcast();
+    
     // Reaction mesajlarını tespit et ve orijinal mesaja ekle
     const reactionMessages = [];
     const nonReactionMessages = [];
@@ -1217,6 +1228,58 @@ export const bindSocketEvents = (instance) => {
     
     if (type === "notify") {
       logger.info({ sessionId, count: nonReactionMessages.length }, "Yeni mesajlar alındı");
+      
+      // Webhook gönder - sadece yeni gelen mesajlar için (notify type ve fromMe = false)
+      if (nonReactionMessages.length > 0) {
+        logger.info({ 
+          sessionId, 
+          nonReactionCount: nonReactionMessages.length,
+          firstMessageKey: nonReactionMessages[0]?.key,
+          firstMessageFromMe: nonReactionMessages[0]?.key?.fromMe,
+          firstMessageHasKey: !!nonReactionMessages[0]?.key
+        }, "Webhook kontrolü başlatılıyor");
+        
+        const { sendWebhook } = await import("../../utils/webhook.js");
+        for (const msg of nonReactionMessages) {
+          // Sadece gelen mesajları webhook'a gönder (fromMe = false)
+          // msg.key?.fromMe kontrolü - Baileys'ten gelen ham mesaj formatı
+          const isFromMe = msg.key?.fromMe === true || msg.key?.fromMe === 1;
+          
+          logger.info({ 
+            sessionId, 
+            messageId: msg.key?.id, 
+            fromMe: msg.key?.fromMe,
+            isFromMe: isFromMe,
+            remoteJid: msg.key?.remoteJid,
+            hasMessage: !!msg.message,
+            keyStructure: Object.keys(msg.key || {})
+          }, "Webhook kontrolü - mesaj analizi");
+          
+          if (!isFromMe) {
+            logger.info({ 
+              sessionId, 
+              messageId: msg.key?.id, 
+              fromMe: false,
+              remoteJid: msg.key?.remoteJid,
+              hasMessage: !!msg.message
+            }, "Webhook gönderiliyor (gelen mesaj)");
+            // Ham mesajı webhook'a gönder (frontend'e giden formatMessage formatı değil, ham Baileys mesajı)
+            sendWebhook(msg, sessionId, instance).catch((error) => {
+              logger.error({ error, sessionId, messageId: msg.key?.id }, "Webhook gönderme hatası (async)");
+            });
+          } else {
+            logger.info({ 
+              sessionId, 
+              messageId: msg.key?.id, 
+              fromMe: msg.key?.fromMe,
+              isFromMe: true,
+              remoteJid: msg.key?.remoteJid
+            }, "Webhook atlandı (gönderilen mesaj)");
+          }
+        }
+      } else {
+        logger.debug({ sessionId }, "Webhook atlandı (nonReactionMessages boş)");
+      }
     }
   };
   sock.ev.on("messages.upsert", messagesUpsertListener);
