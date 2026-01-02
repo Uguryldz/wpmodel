@@ -501,7 +501,45 @@ export class DataStore {
         return;
       }
       
-      const remoteJid = jidNormalizedUser(msg.key.remoteJid);
+      // ÖNEMLİ: remoteJidAlt varsa ve farklı bir format ise, normalize et
+      // Bu sayede hem normal JID hem de LID JID formatındaki mesajlar aynı chat'te görünür
+      let remoteJidToUse = msg.key.remoteJid;
+      if (msg.key.remoteJidAlt && msg.key.remoteJidAlt !== msg.key.remoteJid) {
+        // remoteJidAlt varsa, telefon numarasına göre normalize et
+        // Örnek: remoteJid = "64347233583201@lid", remoteJidAlt = "905550705787@s.whatsapp.net"
+        // Her ikisi de aynı telefon numarasına ait, normalize edilmiş formata çevir
+        const normalizedAlt = normalizeJid(msg.key.remoteJidAlt);
+        const normalizedMain = normalizeJid(msg.key.remoteJid);
+        
+        // Telefon numaralarını karşılaştır
+        const phoneAlt = extractPhoneFromJid(normalizedAlt);
+        const phoneMain = extractPhoneFromJid(normalizedMain);
+        
+        // Eğer telefon numaraları eşleşiyorsa, normalize edilmiş formata çevir
+        if (phoneAlt && phoneMain && phoneAlt === phoneMain) {
+          remoteJidToUse = normalizedAlt; // Normalize edilmiş formata çevir (@s.whatsapp.net formatına)
+        } else {
+          remoteJidToUse = normalizedMain;
+        }
+      } else {
+        // LID formatını @s.whatsapp.net formatına çevir
+        remoteJidToUse = normalizeJid(msg.key.remoteJid);
+      }
+      
+      // ÖNEMLİ: jidNormalizedUser LID formatını normalize etmiyor! (test edildi: "64347233583201@lid" -> "64347233583201@lid")
+      // normalizeJid zaten LID'i @s.whatsapp.net formatına çeviriyor
+      // O yüzden normalize edilmiş JID'i direkt kullanıyoruz
+      // remoteJidToUse zaten normalizeJid ile normalize edilmiş, o yüzden @s.whatsapp.net formatında olmalı
+      // Ama yine de kontrol edip, eğer LID formatındaysa tekrar normalize ediyoruz
+      // Sonra jidNormalizedUser ile format standardizasyonu yapıyoruz (grup JID'leri için gerekli olabilir)
+      let finalRemoteJid = remoteJidToUse;
+      if (finalRemoteJid.includes('@lid')) {
+        // Eğer hala LID formatındaysa (ki olmamalı), normalize et
+        finalRemoteJid = normalizeJid(finalRemoteJid);
+      }
+      // normalizeJid ile normalize edilmiş JID zaten @s.whatsapp.net formatında
+      // jidNormalizedUser sadece format standardizasyonu için kullanılıyor (LID'i normalize etmiyor ama @s.whatsapp.net formatını kabul ediyor)
+      const remoteJid = jidNormalizedUser(finalRemoteJid);
       const messageId = msg.key.id;
       
       // RemoteJid için JID format alanları

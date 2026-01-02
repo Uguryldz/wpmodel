@@ -675,17 +675,48 @@ export const saveMessagesToPrisma = async (sessionId, messages = []) => {
           if (isJidBroadcast(msg.key.remoteJid)) continue;
 
           try {
+            // ÖNEMLİ: remoteJidAlt varsa ve farklı bir format ise, normalize et
+            // Bu sayede hem normal JID hem de LID JID formatındaki mesajlar aynı chat'te görünür
+            let remoteJidToUse = msg.key.remoteJid;
+            if (msg.key.remoteJidAlt && msg.key.remoteJidAlt !== msg.key.remoteJid) {
+              // remoteJidAlt varsa, telefon numarasına göre normalize et
+              const normalizedAlt = normalizeJidFromConverter(msg.key.remoteJidAlt);
+              const normalizedMain = normalizeJidFromConverter(msg.key.remoteJid);
+              
+              // Telefon numaralarını karşılaştır
+              const phoneAlt = extractPhoneFromJid(normalizedAlt);
+              const phoneMain = extractPhoneFromJid(normalizedMain);
+              
+              // Eğer telefon numaraları eşleşiyorsa, normalize edilmiş formata çevir
+              if (phoneAlt && phoneMain && phoneAlt === phoneMain) {
+                remoteJidToUse = normalizedAlt; // Normalize edilmiş formata çevir (@s.whatsapp.net formatına)
+              } else {
+                remoteJidToUse = normalizedMain;
+              }
+            } else {
+              // LID formatını @s.whatsapp.net formatına çevir
+              remoteJidToUse = normalizeJidFromConverter(msg.key.remoteJid);
+            }
+            
+            // ÖNEMLİ: jidNormalizedUser LID formatını normalize etmiyor! (test edildi)
+            // normalizeJid zaten LID'i @s.whatsapp.net formatına çeviriyor
+            // O yüzden normalize edilmiş JID'i direkt kullanıyoruz
+            // Eğer hala LID formatındaysa (ki olmamalı), normalizeJid ile normalize et
+            const normalizedRemoteJid = remoteJidToUse.includes('@lid')
+              ? normalizeJidFromConverter(remoteJidToUse) // LID formatındaysa normalize et
+              : jidNormalizedUser(remoteJidToUse); // Normalize edilmiş JID için jidNormalizedUser kullan
+            
             await tx.message.upsert({
               where: {
                 phoneMapId_remoteJid_id: {
                   phoneMapId: phoneMapId,
-                  remoteJid: msg.key.remoteJid,
+                  remoteJid: normalizedRemoteJid,
                   id: msg.key.id,
                 },
               },
               create: {
                 phoneMapId: phoneMapId,
-                remoteJid: msg.key.remoteJid,
+                remoteJid: normalizedRemoteJid,
                 id: msg.key.id,
                 key: JSON.stringify(msg.key),
                 message: msg.message ? JSON.stringify(msg.message) : null,

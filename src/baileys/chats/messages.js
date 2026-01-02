@@ -78,19 +78,41 @@ export const listMessages = async (accountId, jid, cursor, limit = 25) => {
     today.setHours(0, 0, 0, 0);
     const todayStartTimestamp = Math.floor(today.getTime() / 1000);
     
+    // Telefon numarasını çıkar (LID ve normal JID'leri birleştirmek için)
+    const { extractPhoneFromJid } = await import("../../utils/jidConverter.js");
+    const phoneRaw = extractPhoneFromJid(normalizedJid);
+    
     // Limit yüksekse (tüm mesajlar isteniyorsa) bugünün mesajlarını da dahil et
     // Limit düşükse (sayfalama varsa) sadece en yeni mesajları çek
+    // ÖNEMLİ: Hem normal JID hem de LID JID formatındaki mesajları getirmek için
+    // telefon numarasına göre eşleştirme yapıyoruz
+    const jidConditions = [
+      { remoteJid: normalizedJid }, // Normal JID formatı
+    ];
+    
+    // Telefon numarası varsa, LID JID formatındaki mesajları da dahil et
+    if (phoneRaw) {
+      jidConditions.push({ remoteJidPhoneRaw: phoneRaw });
+    }
+    
     const whereClause = {
       phoneMapId: phoneMapId,
-      remoteJid: normalizedJid,
       isDeleted: false, // Silinen mesajları filtrele
-      // Eğer cursor yoksa (ilk sayfa), bugünün mesajlarını da dahil et
-      ...(cursor ? {} : {
-        OR: [
-          { messageTimestamp: { gte: BigInt(todayStartTimestamp) } }, // Bugünün mesajları
-          { messageTimestamp: { lt: BigInt(todayStartTimestamp) } },   // Eski mesajlar
-        ],
-      }),
+      AND: [
+        // JID eşleştirme koşulları
+        {
+          OR: jidConditions,
+        },
+        // Eğer cursor yoksa (ilk sayfa), bugünün mesajlarını da dahil et
+        ...(cursor ? [] : [
+          {
+            OR: [
+              { messageTimestamp: { gte: BigInt(todayStartTimestamp) } }, // Bugünün mesajları
+              { messageTimestamp: { lt: BigInt(todayStartTimestamp) } },   // Eski mesajlar
+            ],
+          },
+        ]),
+      ],
     };
     
     const messages = await prisma.message.findMany({
