@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import fs from 'fs';
 import { config } from 'dotenv';
 
 // .env dosyasını yükle (tüm değişkenler için)
@@ -13,7 +12,7 @@ config();
 const viteEnv = loadEnv(process.env.MODE || 'development', process.cwd(), '');
 
 // Environment variables - .env dosyasından oku (her zaman güncel)
-const FRONTEND_PORT = Number(process.env.VITE_PORT || viteEnv.VITE_PORT || 5173);
+const FRONTEND_PORT = Number(process.env.VITE_PORT || viteEnv.VITE_PORT || 5177);
 const BACKEND_PORT = Number(process.env.PORT || 3000);
 // Backend URL - eğer VITE_BACKEND_URL tanımlıysa onu kullan, yoksa localhost:PORT kullan
 const BACKEND_URL = process.env.VITE_BACKEND_URL || viteEnv.VITE_BACKEND_URL || `http://localhost:${BACKEND_PORT}`;
@@ -28,25 +27,6 @@ process.stderr.write = (chunk, encoding, fd) => {
   }
   return originalStderrWrite(chunk, encoding, fd);
 };
-
-// HTTPS sertifikalarını yükle
-let httpsConfig = false;
-try {
-  const keyPath = path.resolve(__dirname, '.cert/key.pem');
-  const certPath = path.resolve(__dirname, '.cert/cert.pem');
-  
-  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-    httpsConfig = {
-      key: fs.readFileSync(keyPath),
-      cert: fs.readFileSync(certPath),
-    };
-    console.log('[Vite] HTTPS sertifikaları yüklendi');
-  } else {
-    console.warn('[Vite] HTTPS sertifikaları bulunamadı, HTTPS devre dışı');
-  }
-} catch (error) {
-  console.warn('[Vite] HTTPS sertifikaları yüklenemedi:', error.message);
-}
 
 export default defineConfig({
   plugins: [react()],
@@ -64,7 +44,7 @@ export default defineConfig({
   server: {
     port: FRONTEND_PORT,
     host: true,
-    https: httpsConfig, // HTTPS desteği ekle (mikrofon/kamera erişimi için gerekli)
+    allowedHosts: ['bhwp.sailead.com.tr'],
     proxy: {
       '/api': {
         target: BACKEND_URL,

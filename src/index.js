@@ -801,6 +801,15 @@ app.get(
     const sendUpdate = () => {
       const state = getConnectionState(sessionId);
       const qr = getLastQr(sessionId);
+      
+      // state null kontrolü
+      if (!state) {
+        console.log(`[SSE] State bulunamadı: ${sessionId}, bağlantı kapatılıyor`);
+        clearInterval(interval);
+        res.end();
+        return;
+      }
+      
       const payload = { 
         ...state, 
         qr: qr || state.lastQr || null  // Hem qr hem de lastQr field'larını gönder

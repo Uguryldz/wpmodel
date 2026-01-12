@@ -5,8 +5,9 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "start": "concurrently --kill-others-on-fail=false --handle-input=false --default-input-target=0 \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "concurrently --kill-others-on-fail=false --handle-input=false --default-input-target=0 \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "start:prod": "nohup sh -c 'npm run dev:backend > backend.log 2>&1 & npm run dev:frontend > frontend.log 2>&1 & wait'",
     "dev:backend": "node src/index.js",
     "dev:frontend": "vite",
     "build": "vite build",

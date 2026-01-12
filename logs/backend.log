@@ -1,0 +1,55 @@
+[start] Mevcut session'lar restore ediliyor...
+[restoreSessions] 1 session klasörü bulundu: [ 'account-1767981795282' ]
+{"level":30,"time":1768181493533,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1767981795282","authDir":"./auth_info/account-1767981795282","msg":"Auth state yükleniyor..."}
+{"level":30,"time":1768181493538,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1767981795282","msg":"Auth state başarıyla yüklendi (cacheable signal key store ile)"}
+{"level":30,"time":1768181493538,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1767981795282","msg":"Baileys version bilgisi alınıyor..."}
+{"level":30,"time":1768181493806,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1767981795282","version":"2.3000.1027934701","isLatest":true,"msg":"WhatsApp version bilgisi alındı"}
+{"level":30,"time":1768181493806,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1767981795282","version":"2.3000.1027934701","msg":"initBaileys tamamlandı"}
+[restoreSessions] 🗑️ Account session bağlantı kurulmamış, işaretlenecek: account-1767981795282
+{"level":30,"time":1768181495925,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1767981795282","msg":"Session tablosu güncellendi (isDeleted=1, deletedDate) - KVKK uyumlu"}
+[deleteSession] Auth klasörü silindi: ./auth_info/account-1767981795282
+[restoreSessions] ✅ Account session işaretlendi: account-1767981795282
+[restoreSessions] 0 geçerli session restore edilecek (0 temp + 1 account session işaretlendi - KVKK uyumlu)
+[restoreSessions] Tüm session'lar restore edildi
+API hazır: http://localhost:3007
+Swagger dokümanı: http://localhost:3007/docs
+WebSocket hazır: ws://localhost:3007/ws
+[POST /sessions/add] İstek alındı: {
+  sessionId: 'account-1768181505708',
+  body: { sessionId: 'account-1768181505708' }
+}
+[POST /sessions/add] Session oluşturuluyor: account-1768181505708
+{"level":30,"time":1768181505887,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","authDir":"./auth_info/account-1768181505708","msg":"Auth state yükleniyor..."}
+{"level":30,"time":1768181505933,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","msg":"Auth state başarıyla yüklendi (cacheable signal key store ile)"}
+{"level":30,"time":1768181505933,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","msg":"Baileys version bilgisi alınıyor..."}
+{"level":30,"time":1768181505964,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","version":"2.3000.1027934701","isLatest":true,"msg":"WhatsApp version bilgisi alındı"}
+[POST /sessions/add] initBaileys tamamlandı: account-1768181505708
+[account-1768181505708] ✅ Datastore oluşturuldu (PostgreSQL)
+[account-1768181505708] ✅ Datastore event listener'ları kuruldu
+[POST /sessions/add] startConnection tamamlandı: account-1768181505708
+{"level":30,"time":1768181505964,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","version":"2.3000.1027934701","msg":"initBaileys tamamlandı"}
+{"level":30,"time":1768181505964,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","version":"2.3000.1027934701","hasAuthState":true,"msg":"Socket başlatılıyor"}
+{"level":20,"time":1768181505981,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","msg":"messaging-history.set event listener'ları kuruldu"}
+{"level":30,"time":1768181505981,"pid":1312049,"hostname":"srw-sailead-creqit","accountId":"account-1768181505708","msg":"Socket başarıyla oluşturuldu"}
+{"level":30,"time":1768181506060,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","browser":["Mac OS","Desktop","14.4.1"],"helloMsg":{"clientHello":{"ephemeral":"JYIboudjYg65KzoQpA0aui+xN5Y5+KrxbWPQ6fVkNWM="}},"msg":"connected to WA"}
+{"level":30,"time":1768181506099,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","node":{"passive":false,"userAgent":{"platform":"WEB","appVersion":{"primary":2,"secondary":3000,"tertiary":1027934701},"mcc":"000","mnc":"000","osVersion":"0.1","device":"Desktop","osBuildNumber":"0.1","releaseChannel":"RELEASE","localeLanguageIso6391":"en","localeCountryIso31661Alpha2":"US"},"webInfo":{"webSubPlatform":"DARWIN"},"connectType":"WIFI_UNKNOWN","connectReason":"USER_ACTIVATED","devicePairingData":{"eRegid":"AAAAgQ==","eKeytype":"BQ==","eIdent":"3SH4eK6HCwyzMOR3KJ8N5ISfvHOH+SijyhlAhfxLM0c=","eSkeyId":"AAAB","eSkeyVal":"SbyEdJM7hqKVFAfRss6e4tAkU8qD2biSG/+0UEWF9mE=","eSkeySig":"rMto7pPkVXXYwBSVQHFOCd0ph8w9OFSY4xiMD457AirK7YD6EfJCnNeVBkOcvBqjn+TyokZss1gtyQzWTRb4AQ==","buildHash":"VLsNToSifLU6uyYzJzwXCA==","deviceProps":"CgZNYWMgT1MSBggKEA8YBxgHIAEqFxiAUCABMAA4AUABSAFQAVgBYAFwAXgA"},"pull":false},"msg":"not logged in, attempting registration..."}
+[account-1768181505708] QR kodu üretildi (frontend'e gönderiliyor)
+[POST /sessions/add] QR kod oluşturuldu: account-1768181505708
+[SSE] QR kod gönderiliyor: account-1768181505708, QR uzunluğu: 237, updateCount: 0
+[SSE] QR kod gönderiliyor: account-1768181505708, QR uzunluğu: 237, updateCount: 1
+[SSE] QR kod gönderiliyor: account-1768181505708, QR uzunluğu: 237, updateCount: 2
+[SSE] QR kod gönderiliyor: account-1768181505708, QR uzunluğu: 237, updateCount: 3
+[SSE] QR kod gönderiliyor: account-1768181505708, QR uzunluğu: 237, updateCount: 4
+{"level":30,"time":1768181508759,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","trace":"Error: Intentional Logout\n    at Object.logout (file:///home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/baileys/lib/Socket/socket.js:583:13)\n    at deleteSession (file:///home/ugur_yildiz/uwp/bolgehastahanesi/src/baileys/core/session.js:403:27)\n    at file:///home/ugur_yildiz/uwp/bolgehastahanesi/src/index.js:885:11\n    at file:///home/ugur_yildiz/uwp/bolgehastahanesi/src/index.js:510:13\n    at Layer.handle [as handle_request] (/home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/layer.js:95:5)\n    at next (/home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/route.js:149:13)\n    at Route.dispatch (/home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/route.js:119:3)\n    at Layer.handle [as handle_request] (/home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/layer.js:95:5)\n    at /home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/index.js:284:15\n    at param (/home/ugur_yildiz/uwp/bolgehastahanesi/node_modules/express/lib/router/index.js:365:14)","msg":"connection errored"}
+[account-1768181505708] Bağlantı kapandı {
+  statusCode: 401,
+  disconnectReason: 'logged_out',
+  shouldReconnect: false,
+  error: 'Intentional Logout'
+}
+[account-1768181505708] Oturum kapandı (sebep: logged_out). Tekrar bağlanmak için auth klasörünü temizleyin veya yeni QR kod alın.
+{"level":30,"time":1768181508761,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","msg":"Kullanıcı logout yaptı"}
+{"level":30,"time":1768181508762,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","msg":"Session otomatik olarak temizleniyor"}
+{"level":30,"time":1768181508764,"pid":1312049,"hostname":"srw-sailead-creqit","sessionId":"account-1768181505708","msg":"Session tablosu güncellendi (isDeleted=1, deletedDate) - KVKK uyumlu"}
+[deleteSession] Auth klasörü silindi: ./auth_info/account-1768181505708
+[SSE] State bulunamadı: account-1768181505708, bağlantı kapatılıyor

@@ -1,8 +1,8 @@
 // Webhook utility - Lead webhook gönderme fonksiyonu
-import { logger } from '../shared.js';
+import { logger, prisma, getPhoneMapIdFromSessionId } from '../shared.js';
 import { formatContactName } from '../baileys/shared.js';
 import { jidNormalizedUser } from 'baileys';
-import { extractPhoneFromJid } from './jidConverter.js';
+import { extractPhoneFromJid, convertInternationalToTurkish, normalizePhoneNumber } from './jidConverter.js';
 import https from 'https';
 import http from 'http';
 import { URL } from 'url';
@@ -124,6 +124,99 @@ const generateUniqueLeadId = (message, sessionId) => {
 };
 
 /**
+ * Hesap sahibinin telefon numarasını al (Türkiye formatında)
+ * Veritabanından SessionPhoneMap'ten telefon numarasını alır ve normalize eder
+ */
+const getAccountPhoneNumber = async (instance, sessionId) => {
+  try {
+    // Önce veritabanından SessionPhoneMap'ten telefon numarasını al
+    const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+    
+    if (phoneMapId) {
+      const phoneMap = await prisma.sessionPhoneMap.findUnique({
+        where: { pkId: phoneMapId },
+        select: { phoneNum: true },
+      });
+      
+      if (phoneMap?.phoneNum) {
+        const rawPhone = phoneMap.phoneNum;
+        
+        // Telefon numarasını Türkiye formatına çevir
+        // Önce normalize et (0 ile başlıyorsa 90 ekle)
+        let normalizedPhone = normalizePhoneNumber(rawPhone);
+        
+        // Eğer zaten Türkiye formatında ise (90 ile başlıyorsa ve 12 haneli), olduğu gibi döndür
+        if (normalizedPhone.startsWith('90') && normalizedPhone.length === 12) {
+          return normalizedPhone;
+        }
+        
+        // Uluslararası formatı (1 ile başlar) Türkiye formatına çevir
+        if (normalizedPhone.startsWith('1') && normalizedPhone.length >= 10) {
+          const turkishPhone = convertInternationalToTurkish(normalizedPhone);
+          // Tekrar normalize et (gerekirse)
+          normalizedPhone = normalizePhoneNumber(turkishPhone);
+          
+          // Eğer hala 12 haneli değilse, tekrar kontrol et
+          if (normalizedPhone.startsWith('90') && normalizedPhone.length === 12) {
+            return normalizedPhone;
+          }
+        }
+        
+        // Eğer hala normalize edilemediyse, raw phone'u döndür
+        return normalizedPhone;
+      }
+    }
+    
+    // Veritabanından alınamadıysa, instance'dan sock.user?.id'yi kontrol et
+    if (instance?.sock?.user?.id) {
+      const rawPhone = extractPhoneFromJid(instance.sock.user.id);
+      if (rawPhone) {
+        // Normalize et ve Türkiye formatına çevir
+        let normalizedPhone = normalizePhoneNumber(rawPhone);
+        
+        if (normalizedPhone.startsWith('90') && normalizedPhone.length === 12) {
+          return normalizedPhone;
+        }
+        
+        if (normalizedPhone.startsWith('1') && normalizedPhone.length >= 10) {
+          const turkishPhone = convertInternationalToTurkish(normalizedPhone);
+          return normalizePhoneNumber(turkishPhone);
+        }
+        
+        return normalizedPhone;
+      }
+    }
+    
+    // Son çare: SessionId'den telefon numarasını çıkarmayı dene
+    if (sessionId) {
+      // account- prefix'ini kaldır
+      const sessionIdWithoutPrefix = sessionId.replace(/^account-/, '');
+      
+      // Eğer sadece rakamlardan oluşuyorsa ve geçerli bir telefon numarası gibi görünüyorsa
+      if (/^\d+$/.test(sessionIdWithoutPrefix) && sessionIdWithoutPrefix.length >= 10) {
+        let normalizedPhone = normalizePhoneNumber(sessionIdWithoutPrefix);
+        
+        if (normalizedPhone.startsWith('90') && normalizedPhone.length === 12) {
+          return normalizedPhone;
+        }
+        
+        if (normalizedPhone.startsWith('1') && normalizedPhone.length >= 10) {
+          const turkishPhone = convertInternationalToTurkish(normalizedPhone);
+          return normalizePhoneNumber(turkishPhone);
+        }
+        
+        return normalizedPhone;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    logger.error({ error, sessionId }, "getAccountPhoneNumber hatası");
+    return null;
+  }
+};
+
+/**
  * Webhook'a POST isteği gönder
  */
 export const sendWebhook = async (message, sessionId, instance) => {
@@ -164,12 +257,20 @@ export const sendWebhook = async (message, sessionId, instance) => {
     const telno = extractPhoneNumber(message);
     const mesaj = extractMessageText(message);
     const uniqueLeadId = generateUniqueLeadId(message, sessionId);
+    const accountPhoneNumber = await getAccountPhoneNumber(instance, sessionId);
     
     // Raw data: Sadece mesaj objesinin JSON string'i (basit ve güvenli)
     let rawDataString = '';
     try {
       // Mesaj objesini güvenli bir şekilde serialize et
-      rawDataString = JSON.stringify(message, (key, value) => {
+      const rawDataObject = {
+        ...message,
+        // Hesap sahibinin telefon numarasını ekle
+        account_phone_number: accountPhoneNumber || null,
+        session_id: sessionId
+      };
+      
+      rawDataString = JSON.stringify(rawDataObject, (key, value) => {
         // Circular reference'ları ve fonksiyonları filtrele
         if (typeof value === 'function') return undefined;
         if (value instanceof Error) return { message: value.message, name: value.name };
@@ -193,7 +294,9 @@ export const sendWebhook = async (message, sessionId, instance) => {
         key: message.key,
         message: message.message,
         messageTimestamp: message.messageTimestamp,
-        pushName: message.pushName
+        pushName: message.pushName,
+        account_phone_number: accountPhoneNumber || null,
+        session_id: sessionId
       }, null, 2);
     }
     
@@ -203,6 +306,7 @@ export const sendWebhook = async (message, sessionId, instance) => {
       telno: telno,
       mesaj: mesaj,
       unique_lead_id: uniqueLeadId,
+      account_phone_number: accountPhoneNumber || null, // Hesap sahibinin telefon numarası
       raw_data: rawDataString, // WhatsApp'ın ham mesaj objesi (parse edilmez)
     };
     
