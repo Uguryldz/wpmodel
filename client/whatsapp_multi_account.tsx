@@ -166,17 +166,27 @@ export default function WhatsAppMultiAccount() {
     const prevAccountId = prevActiveAccountIdRef.current;
     const currentAccountId = activeAccount?.id;
     
-    // Aktif hesap değiştiğinde chat'leri temizle ve yeni hesap için yükle
+    // Aktif hesap değiştiğinde chat'leri, contact'ları ve mesajları temizle ve yeni hesap için yükle
     if (prevAccountId && currentAccountId && prevAccountId !== currentAccountId) {
-      console.log(`[Hesap Değişti] ${prevAccountId} -> ${currentAccountId}, chat'ler temizleniyor...`);
+      console.log(`[Hesap Değişti] ${prevAccountId} -> ${currentAccountId}, tüm listeler temizleniyor...`);
       
       // Chat'leri temizle
       chatsHook.setChats([]);
       chatsHook.setSelectedChat(null);
       
+      // Contact'ları temizle (cache'i koru ama state'i temizle)
+      contactsHook.setContacts([]);
+      contactsHook.setFilteredContacts([]);
+      
+      // Mesajları temizle
+      messagesHook.setMessages([]);
+      
       // Flag'leri sıfırla (yeni hesap için chat'lerin yüklenmesini sağla)
       chatsHook.chatsInitialLoadRef.current.delete(prevAccountId);
       chatsHook.chatsLoadedRef.current.delete(prevAccountId);
+      
+      // Contact cache'i temizle (yeni hesap için)
+      contactsHook.contactsCacheRef.current.delete(prevAccountId);
     }
     
     // Ref'i güncelle (sonraki render için)
@@ -202,6 +212,21 @@ export default function WhatsAppMultiAccount() {
       if (!sessionId.startsWith('temp-') && !sessionId.startsWith('account-')) {
         const cachedContacts = contactsHook.contactsCacheRef.current.get(sessionId);
         if (!cachedContacts || cachedContacts.data.size === 0) {
+          // Önce WebSocket'ten getContacts request'i gönder
+          if (sendRequestRef.current) {
+            setTimeout(async () => {
+              try {
+                await sendRequestRef.current!('getContacts', {
+                  sessionId: sessionId,
+                });
+                console.log(`[Hesap Değişti] ✅ getContacts request'i gönderildi (sessionId: ${sessionId})`);
+              } catch (error) {
+                console.error('[Hesap Değişti] ❌ getContacts request hatası:', error);
+              }
+            }, 300);
+          }
+          
+          // Fallback: API'den yükle
           contactsHook.loadContacts(sessionId, false).catch(() => {
             // Hata durumunda sessizce devam et
           });
@@ -238,13 +263,14 @@ export default function WhatsAppMultiAccount() {
             // Hata durumunda da chat'leri yüklemeyi dene
             chatsHook.loadChats(sessionId, 50, true);
             
-            if (sendRequest) {
+            if (sendRequestRef.current) {
               setTimeout(async () => {
                 try {
-                  await sendRequest('getChats', {
+                  await sendRequestRef.current!('getChats', {
                     sessionId: sessionId,
                     limit: 50,
                   });
+                  console.log(`[Hesap Değişti] ✅ getChats request'i gönderildi (sessionId: ${sessionId})`);
                 } catch (error) {
                   console.error('[Hesap Değişti] ❌ getChats request hatası:', error);
                 }
@@ -255,13 +281,14 @@ export default function WhatsAppMultiAccount() {
           // Contact yükleme gerekmiyorsa direkt chat'leri yükle
           chatsHook.loadChats(sessionId, 50, true);
           
-          if (sendRequest) {
+          if (sendRequestRef.current) {
             setTimeout(async () => {
               try {
-                await sendRequest('getChats', {
+                await sendRequestRef.current!('getChats', {
                   sessionId: sessionId,
                   limit: 50,
                 });
+                console.log(`[Hesap Değişti] ✅ getChats request'i gönderildi (sessionId: ${sessionId})`);
               } catch (error) {
                 console.error('[Hesap Değişti] ❌ getChats request hatası:', error);
               }
@@ -275,6 +302,20 @@ export default function WhatsAppMultiAccount() {
         
         // İlk bağlantıda contact'ları da yükle (eğer yüklenmemişse) - temp session'lar hariç
         if (!sessionId.startsWith('temp-') && !sessionId.startsWith('account-')) {
+          // Önce WebSocket'ten getContacts request'i gönder
+          if (sendRequestRef.current) {
+            setTimeout(async () => {
+              try {
+                await sendRequestRef.current!('getContacts', {
+                  sessionId: sessionId,
+                });
+                console.log(`[İlk Bağlantı] ✅ getContacts request'i gönderildi (sessionId: ${sessionId})`);
+              } catch (error) {
+                console.error('[İlk Bağlantı] ❌ getContacts request hatası:', error);
+              }
+            }, 300);
+          }
+          
           contactsHook.loadContacts(sessionId, false).then(() => {
             // Sadece sohbet listesi boşsa yükle
             if (chatsHook.chats.length === 0) {
@@ -442,7 +483,7 @@ export default function WhatsAppMultiAccount() {
     if (!messagesHook.message.trim() || !activeAccount || !chatsHook.selectedChat || isSending) return;
     
     // WebSocket yoksa mesaj gönderilemez
-    if (!sendRequest) {
+    if (!sendRequestRef.current) {
       alert('Mesaj gönderilemedi: WebSocket bağlantısı yok');
       return;
     }
@@ -456,7 +497,7 @@ export default function WhatsAppMultiAccount() {
     
     try {
       // WebSocket üzerinden sendMessage request'i gönder
-      await sendRequest('sendMessage', {
+      await sendRequestRef.current!('sendMessage', {
         sessionId: activeAccount.id,
         jid: chatsHook.selectedChat.id,
         message: messageText,
@@ -573,9 +614,9 @@ export default function WhatsAppMultiAccount() {
       let response;
       
       // WebSocket varsa WebSocket kullan, yoksa API fallback
-      if (sendRequest) {
+      if (sendRequestRef.current) {
         // WebSocket üzerinden sendMessage request'i gönder
-        response = await sendRequest('sendMessage', {
+        response = await sendRequestRef.current('sendMessage', {
           sessionId: activeAccount.id,
           jid: chatsHook.selectedChat.id,
           message: textToSend,
@@ -640,9 +681,9 @@ export default function WhatsAppMultiAccount() {
       let response;
       
       // WebSocket varsa WebSocket kullan, yoksa API fallback
-      if (sendRequest) {
+      if (sendRequestRef.current) {
         try {
-          response = await sendRequest('forwardMessage', {
+          response = await sendRequestRef.current('forwardMessage', {
             sessionId: activeAccount.id,
             fromJid: fromJid,
             toJid: toJid,
@@ -791,10 +832,10 @@ export default function WhatsAppMultiAccount() {
   };
 
   const handleStarMessage = async (msg: Message, star: boolean) => {
-    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequestRef.current) return;
     
     try {
-      await sendRequest('starMessage', {
+      await sendRequestRef.current('starMessage', {
         sessionId: activeAccount.id,
         jid: chatsHook.selectedChat.id,
         messageId: msg.id || '',
@@ -824,10 +865,10 @@ export default function WhatsAppMultiAccount() {
   };
 
   const handlePinMessage = async (msg: Message, type: number, time: number = 86400) => {
-    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequestRef.current) return;
     
     try {
-      await sendRequest('pinMessage', {
+      await sendRequestRef.current('pinMessage', {
         sessionId: activeAccount.id,
         jid: chatsHook.selectedChat.id,
         messageKey: msg.key || { id: msg.id, remoteJid: chatsHook.selectedChat.id },
@@ -1007,13 +1048,13 @@ export default function WhatsAppMultiAccount() {
   };
 
   const handleSendReaction = async (msg: Message, emoji: string) => {
-    if (!activeAccount || !chatsHook.selectedChat || !sendRequest) return;
+    if (!activeAccount || !chatsHook.selectedChat || !sendRequestRef.current) return;
     
     try {
       // Backend message.key.id bekliyor, önce key.id'yi dene, yoksa msg.id kullan
       const messageId = msg.key?.id || msg.id || '';
       
-      await sendRequest('sendReaction', {
+      await sendRequestRef.current('sendReaction', {
         sessionId: activeAccount.id,
         jid: chatsHook.selectedChat.id,
         messageId: messageId,
@@ -1181,7 +1222,6 @@ export default function WhatsAppMultiAccount() {
     messagesInitialLoadRef: messagesHook.messagesInitialLoadRef,
     chatProfilePictures,
     chats: chatsHook.chats,
-    selectedChat: chatsHook.selectedChat,
     setChats: chatsHook.setChats,
     setMessages: messagesHook.setMessages,
     setChatProfilePictures,
@@ -1315,9 +1355,24 @@ export default function WhatsAppMultiAccount() {
   }, [showForwardSelector, activeAccount?.id]);
 
   // Seçili sohbet değiştiğinde mesajları yükle ve profil resmini güncelle
+  const prevSelectedChatIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (activeAccount && chatsHook.selectedChat) {
       const selectedChatId = chatsHook.selectedChat.id;
+      const prevSelectedChatId = prevSelectedChatIdRef.current;
+      
+      // Kişi değiştiğinde mesaj listesini sıfırla
+      if (prevSelectedChatId && prevSelectedChatId !== selectedChatId) {
+        console.log(`[Kişi Değişti] ${prevSelectedChatId} -> ${selectedChatId}, mesaj listesi sıfırlanıyor...`);
+        messagesHook.setMessages([]);
+        
+        // İlk yükleme flag'ini sıfırla (yeni kişi için mesajların yüklenmesini sağla)
+        const messagesKey = `${activeAccount.id}-${selectedChatId}`;
+        messagesHook.messagesInitialLoadRef.current.delete(messagesKey);
+      }
+      
+      // Ref'i güncelle
+      prevSelectedChatIdRef.current = selectedChatId;
       
       // Önce cache'den yükle (hızlı gösterim için)
       const loadedFromCache = messagesHook.loadMessagesFromCache(activeAccount.id, selectedChatId);
@@ -1359,7 +1414,9 @@ export default function WhatsAppMultiAccount() {
         }
       }
     } else {
+      // Seçili sohbet yoksa mesajları temizle
       messagesHook.setMessages([]);
+      prevSelectedChatIdRef.current = null;
     }
   }, [activeAccount?.id, chatsHook.selectedChat?.id]); // chatProfilePictures dependency array'den çıkarıldı
 
@@ -1602,8 +1659,8 @@ export default function WhatsAppMultiAccount() {
                 let response;
                 
                 // WebSocket varsa WebSocket kullan, yoksa API fallback
-                if (sendRequest) {
-                  response = await sendRequest('sendMessage', {
+                if (sendRequestRef.current) {
+                  response = await sendRequestRef.current('sendMessage', {
                     sessionId: activeAccount.id,
                     jid: chatsHook.selectedChat.id,
                     message: msg.text,

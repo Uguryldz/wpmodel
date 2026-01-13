@@ -125,6 +125,29 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
           isSelectedChat = true;
         }
       }
+      
+      // Gönderilen mesajlar için daha esnek eşleştirme (fromMe kontrolü)
+      if (!isSelectedChat && chatMessages.length > 0) {
+        const hasFromMe = chatMessages.some((m: any) => {
+          const fromMe = m.fromMe !== undefined 
+            ? Boolean(m.fromMe) 
+            : (m.key?.fromMe === true || m.key?.fromMe === 'true' || m.key?.fromMe === 1);
+          return fromMe;
+        });
+        
+        // Eğer gönderilen mesaj varsa ve chat ID'leri normalize edilmiş formatta eşleşiyorsa, seçili chat olarak kabul et
+        if (hasFromMe) {
+          const normalizedSelectedChatId = standardizeChatId(currentSelectedChat.id);
+          if (normalizedChatId === normalizedSelectedChatId) {
+            isSelectedChat = true;
+            console.log('[WebSocket] ✅ Gönderilen mesaj için chat ID eşleştirmesi yapıldı:', {
+              normalizedChatId,
+              normalizedSelectedChatId,
+              selectedChatId: currentSelectedChat.id
+            });
+          }
+        }
+      }
     }
     
     // Silinen mesajları filtrele (messageStubType === 0 veya messageStubParameters varsa)
@@ -168,6 +191,7 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
     }
     
     // Debug: Eşleşme kontrolü (gönderilen mesajlar için)
+    // Gönderilen mesajlar için daha esnek eşleştirme yap
     if (currentSelectedChat && !isSelectedChat && chatMessages.length > 0) {
         const hasFromMe = chatMessages.some((m: any) => {
           const fromMe = m.fromMe !== undefined 
@@ -175,18 +199,31 @@ export const handleMessagesUpsert = (data: WebSocketEvent, context: WebSocketCon
             : (m.key?.fromMe === true || m.key?.fromMe === 'true' || m.key?.fromMe === 1);
           return fromMe;
         });
+        
         if (hasFromMe) {
-          console.log('[WebSocket] ⚠️ Gönderilen mesaj seçili chat ile eşleşmedi:', {
-            normalizedChatId,
-            selectedChatId: currentSelectedChat.id,
-            msgPhone: extractPhoneFromJid(normalizedChatId),
-            selectedPhone: extractPhoneFromJid(currentSelectedChat.id),
-            messages: chatMessages.map((m: any) => ({
-              id: m.id || m.key?.id,
-              from: m.from || m.key?.remoteJid,
-              fromMe: m.fromMe !== undefined ? Boolean(m.fromMe) : (m.key?.fromMe === true || m.key?.fromMe === 'true' || m.key?.fromMe === 1)
-            }))
-          });
+          // Gönderilen mesajlar için daha esnek eşleştirme: normalize edilmiş chat ID'leri karşılaştır
+          const normalizedSelectedChatId = standardizeChatId(currentSelectedChat.id);
+          if (normalizedChatId === normalizedSelectedChatId) {
+            isSelectedChat = true;
+            console.log('[WebSocket] ✅ Gönderilen mesaj için chat ID eşleştirmesi yapıldı (esnek):', {
+              normalizedChatId,
+              normalizedSelectedChatId,
+              selectedChatId: currentSelectedChat.id
+            });
+          } else {
+            console.log('[WebSocket] ⚠️ Gönderilen mesaj seçili chat ile eşleşmedi:', {
+              normalizedChatId,
+              normalizedSelectedChatId,
+              selectedChatId: currentSelectedChat.id,
+              msgPhone: extractPhoneFromJid(normalizedChatId),
+              selectedPhone: extractPhoneFromJid(currentSelectedChat.id),
+              messages: chatMessages.map((m: any) => ({
+                id: m.id || m.key?.id,
+                from: m.from || m.key?.remoteJid,
+                fromMe: m.fromMe !== undefined ? Boolean(m.fromMe) : (m.key?.fromMe === true || m.key?.fromMe === 'true' || m.key?.fromMe === 1)
+              }))
+            });
+          }
         }
     }
     

@@ -43,7 +43,6 @@ interface UseWebSocketProps {
   messagesInitialLoadRef: React.MutableRefObject<Map<string, boolean>>;
   chatProfilePictures: Map<string, string>;
   chats: Chat[];
-  selectedChat: Chat | null;
   // Callbacks
   setChats: React.Dispatch<React.SetStateAction<Chat[]>>;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -65,7 +64,6 @@ export function useWebSocket({
   messagesInitialLoadRef,
   chatProfilePictures,
   chats,
-  selectedChat,
   setChats,
   setMessages,
   setChatProfilePictures,
@@ -102,6 +100,7 @@ export function useWebSocket({
     errorHandlerRef.current = errorHandler;
 
     // WebSocket context - handler'lara geçirilecek
+    // selectedChat bilgisini selectedChatRef'ten al (useMessages.ts'deki gibi)
     const context: WebSocketContext = {
       activeAccountRef,
       selectedChatRef,
@@ -111,7 +110,7 @@ export function useWebSocket({
       messagesInitialLoadRef,
       chatProfilePictures,
       chats,
-      selectedChat,
+      selectedChat: selectedChatRef.current, // Ref'ten al (güncel değer)
       setChats,
       setMessages,
       setChatProfilePictures,
@@ -139,7 +138,18 @@ export function useWebSocket({
       
       // State değişikliklerini izle
       onStateChange: (state) => {
+        const prevState = connectionState.status;
         setConnectionState(state);
+        
+        // Bağlantı durumu değişikliklerini log'la
+        if (prevState !== state.status) {
+          console.log(`[WebSocket] 🔌 Bağlantı durumu değişti: ${prevState} -> ${state.status}`, {
+            reconnectAttempts: state.reconnectAttempts,
+            lastError: state.lastError,
+            connectedAt: state.connectedAt,
+            disconnectedAt: state.disconnectedAt
+          });
+        }
       },
       
       // Mesajları işle
@@ -147,7 +157,7 @@ export function useWebSocket({
         try {
           // Context'i güncelle (ref'ler her zaman güncel)
           context.chats = chats;
-          context.selectedChat = selectedChat;
+          context.selectedChat = selectedChatRef.current; // Ref'ten al (güncel değer)
           context.chatProfilePictures = chatProfilePictures;
 
           // Response mesajları - reaction response'larını özel olarak işle
