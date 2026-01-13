@@ -2744,12 +2744,22 @@ export const startSocket = (instance) => {
   });
 
   // Grup metadata cache'i güncelle (README'ye göre best practice)
-  instance.sock.ev.on('groups.update', async ([event]) => {
+  instance.sock.ev.on('groups.update', async (events) => {
     try {
-      const metadata = await instance.sock.groupMetadata(event.id);
-      groupCache.set(event.id, metadata);
+      // events bir array olabilir veya direkt obje olabilir
+      const eventArray = Array.isArray(events) ? events : [events];
+      for (const event of eventArray) {
+        if (event && event.id) {
+          try {
+            const metadata = await instance.sock.groupMetadata(event.id);
+            groupCache.set(event.id, metadata);
+          } catch (error) {
+            logger.error({ error, groupId: event.id }, "Grup metadata cache'lenemedi");
+          }
+        }
+      }
     } catch (error) {
-      logger.error({ error, groupId: event.id }, "Grup metadata cache'lenemedi");
+      logger.error({ error }, "groups.update event handler hatası");
     }
   });
 
