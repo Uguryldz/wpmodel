@@ -28,6 +28,7 @@ export interface Chat {
   lastMessage: string;
   time: string;
   isMuted?: boolean;
+  ephemeralDuration?: number | null; // Geçici mesajlar süresi (saniye)
 }
 
 // Message Types
@@ -64,6 +65,13 @@ export interface Message {
   participant?: string;
   messageStubType?: number;
   messageStubParameters?: any;
+  isForwarded?: boolean; // İletilen mesaj
+  quotedMessage?: {      // Alıntılanan mesaj
+    id?: string;
+    from?: string;
+    text?: string;
+    body?: string;
+  };
 }
 
 // Contact Types
@@ -134,4 +142,3 @@ export interface AttachmentOption {
 
 // Filter Types
 export type ChatFilter = 'all' | 'unread' | 'groups' | 'archived';
-

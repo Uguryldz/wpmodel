@@ -78,10 +78,33 @@ export function useChats() {
   /**
    * Chat seç
    */
-  const selectChat = useCallback((chatId: string | null) => {
+  const selectChat = useCallback(async (chatId: string | null) => {
     dispatch({ type: 'SET_SELECTED_CHAT', payload: chatId });
-  }, [dispatch]);
-  
+    
+    if (chatId && activeAccount?.id) {
+      const chat = chats.find(c => c.id === chatId);
+      if (chat && chat.unreadCount > 0) {
+        dispatch({
+          type: 'UPDATE_CHAT',
+          payload: { id: chatId, unreadCount: 0 },
+        });
+        
+        try {
+          await api.markChatRead(activeAccount.id, chatId, true);
+        } catch (error: any) {
+          console.error('[useChats] ❌ Mark as read hatası:', error);
+          // Hata olursa UI'ı eski haline getir
+          if (chat) {
+            dispatch({
+              type: 'UPDATE_CHAT',
+              payload: { id: chatId, unreadCount: chat.unreadCount },
+            });
+          }
+        }
+      }
+    }
+  }, [dispatch, chats, activeAccount?.id]);
+    
   /**
    * Chat filtresini değiştir
    */
