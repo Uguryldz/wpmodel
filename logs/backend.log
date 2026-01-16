@@ -3,5 +3,3 @@
 API hazır: http://localhost:3007
 Swagger dokümanı: http://localhost:3007/docs
 WebSocket hazır: ws://localhost:3007/ws
-[shutdown] Prisma bağlantısı kapatılıyor...
-[shutdown] Prisma bağlantısı kapatıldı

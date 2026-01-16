@@ -12,4 +12,6 @@ prisma/dev.db-journal
 # Build outputs
 dist/
 .vite/
+/logs
+
 
