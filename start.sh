@@ -5,6 +5,11 @@
 
 set -e
 
+# NVM'i yükle ve Node.js 20'yi kullan
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 20 > /dev/null 2>&1 || nvm use default
+
 LOG_DIR="./logs"
 mkdir -p "$LOG_DIR"
 
