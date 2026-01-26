@@ -195,6 +195,7 @@ wss.on("connection", (ws, req) => {
   let isAlive = true;
 
   // Ping gönder (her 30 saniyede bir)
+  // NOT: Frontend'deki heartbeat ile uyumlu olmalı (30 saniye)
   pingInterval = setInterval(() => {
     if (ws.readyState === 1) { // WebSocket.OPEN
       try {
@@ -202,12 +203,14 @@ wss.on("connection", (ws, req) => {
         ws.ping();
         
         // Pong gelmezse bağlantıyı kapat
+        // Timeout'u 20 saniyeye çıkarıyoruz - fullhistory çekilirken 
+        // veya yüksek yük altında pong gecikebilir
         pongTimeout = setTimeout(() => {
           if (!isAlive) {
             console.warn("[WebSocket] ⚠️ Pong alınamadı, bağlantı kapatılıyor");
             ws.terminate();
           }
-        }, 10000); // 10 saniye içinde pong gelmezse kapat
+        }, 20000); // 20 saniye içinde pong gelmezse kapat (önceden 10 saniyeydi)
       } catch (error) {
         console.error("[WebSocket] Ping gönderme hatası:", error);
       }

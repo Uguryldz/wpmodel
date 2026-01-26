@@ -1,5 +1,7 @@
 [start] Mevcut session'lar restore ediliyor...
-[restoreSessions] auth_info klasörü bulunamadı, restore edilecek session yok
+[restoreSessions] 0 session klasörü bulundu: []
+[restoreSessions] 0 geçerli session restore edilecek (0 temp + 0 account session işaretlendi - KVKK uyumlu)
+[restoreSessions] Tüm session'lar restore edildi
 API hazır: http://localhost:3007
 Swagger dokümanı: http://localhost:3007/docs
 WebSocket hazır: ws://localhost:3007/ws

@@ -415,7 +415,9 @@ export const bindSocketEvents = (instance) => {
   instance.eventListeners.set("chats.set", chatsSetListener);
 
   // messaging-history.set event'i: WhatsApp Web'in varsayılan sohbet geçmişini sağlar
-  // Bu event syncFullHistory: true ile tetiklenir ve tüm chat'leri içerir
+  // NOT: syncFullHistory: false yaptığımız için bu event artık gelmeyecek
+  // Bu sayede WhatsApp'ın 3-4 saat sonra otomatik olarak tekrar fullhistory çekmesi engellendi
+  // Sadece chats.set ve messages.set event'leri ilk bağlantıda gelecek
   const messagingHistorySetListener = async (history) => {
     console.log(`[${sessionId}] messaging-history.set event geldi`);
     
@@ -974,7 +976,9 @@ export const bindSocketEvents = (instance) => {
   instance.eventListeners.set("contacts.upsert", contactsUpsertListener);
 
   // Messages - Prisma'ya kaydet
-  // messages.set event'i: WhatsApp cihazındaki TÜM mesaj geçmişini sağlar (syncFullHistory: true ile)
+  // messages.set event'i: WhatsApp cihazındaki TÜM mesaj geçmişini sağlar
+  // NOT: syncFullHistory: false yaptığımız için bu event sadece ilk bağlantıda gelecek
+  // WhatsApp'ın 3-4 saat sonra otomatik olarak tekrar fullhistory çekmesi engellendi
   const messagesSetListener = async ({ messages }) => {
     if (!messages || !Array.isArray(messages)) {
       console.log(`[${sessionId}] messages.set event: messages array değil veya boş`);
@@ -2543,9 +2547,13 @@ export const bindSocketEvents = (instance) => {
         logger.info({ sessionId, retryDelay, attempt: instance.reconnectAttempts }, 
           "Yeniden bağlanma planlanıyor");
         
-        instance.reconnectTimer = setTimeout(() => {
+        instance.reconnectTimer = setTimeout(async () => {
           console.log(`[${instance.id}] Yeniden bağlanma deneniyor (deneme: ${instance.reconnectAttempts})...`);
-          startSocket(instance);
+          try {
+            await startSocket(instance);
+          } catch (error) {
+            logger.error({ error, sessionId: instance.id }, "Yeniden bağlanma sırasında hata");
+          }
         }, retryDelay);
       } else {
         // Yeniden bağlanma yapılmayacaksa, reconnect sayacını sıfırla
@@ -2660,7 +2668,7 @@ export const bindSocketEvents = (instance) => {
  * Socket oluştur ve event'leri bağla
  * Baileys README'ye göre optimize edilmiş config
  */
-export const startSocket = (instance) => {
+export const startSocket = async (instance) => {
   const { authState, waVersion } = instance;
   if (!authState || !waVersion) {
     throw new Error("Kimlik doğrulama durumu yüklenemedi.");
@@ -2678,18 +2686,37 @@ export const startSocket = (instance) => {
   // stdTTL: 5 dakika (300 saniye) - README'deki örnekle aynı
   const groupCache = new NodeCache({ stdTTL: 5 * 60, useClones: false });
 
+  // Storage'daki authState'e göre karar ver (DB kontrolü yok)
+  // Mantık: İlk QR bağlantısında (authState.creds.me yoksa) fullhistory çekilecek
+  // Sonrasında (authState.creds.me varsa) sadece yeni mesajlar gelecek
+  // NOT: syncFullHistory: false olsa bile, chats.upsert ve messages.upsert event'leri gelecek
+  // (yeni mesajlar için), ama chats.set ve messages.set event'leri gelmeyecek (tüm geçmiş için)
+  // Bu sayede WhatsApp'ın 3-4 saat sonra otomatik olarak tekrar fullhistory çekmesi engellenecek
+  const isFirstConnection = !authState.creds?.me;
+  const shouldSyncFullHistory = isFirstConnection;
+  
+  if (isFirstConnection) {
+    console.log(`[${sessionId}] 📥 İlk QR bağlantısı tespit edildi (authState.creds.me yok) - syncFullHistory: true (fullhistory çekilecek)`);
+  } else {
+    console.log(`[${sessionId}] ✅ Daha önce QR ile bağlanmış (authState.creds.me mevcut) - syncFullHistory: false (sadece yeni mesajlar gelecek)`);
+  }
+
   instance.sock = makeWASocket({
     auth: authState,
     version: waVersion,
     // Browser config (README'ye göre öneriliyor - desktop connection için)
     browser: Browsers.macOS('Desktop'),
     printQRInTerminal: false,
-    // Tüm contact/sohbet senkronu için history sync açık
-    syncFullHistory: true,
+    // syncFullHistory: Sadece ilk bağlantıda true, sonrasında false
+    // İlk bağlantıda fullhistory çekilecek, sonrasında WhatsApp'ın 3-4 saat sonra
+    // otomatik olarak tekrar fullhistory çekmesi engellenecek
+    syncFullHistory: shouldSyncFullHistory,
     // Tüm chat'lerin sync edilmesi için shouldSyncHistory callback'i
+    // syncFullHistory: true ise tüm chat'leri sync et
     shouldSyncHistory: (msg) => {
-      // Tüm chat'leri sync et
-      return true;
+      // İlk bağlantıda (syncFullHistory: true) tüm chat'leri sync et
+      // Sonraki bağlantılarda (syncFullHistory: false) sadece yeni mesajlar için sync yap
+      return shouldSyncFullHistory;
     },
     // Tüm chat'lerin yüklenmesi için
     shouldIgnoreJid: (jid) => {
@@ -2718,8 +2745,8 @@ export const startSocket = (instance) => {
     logger: logger.child({ sessionId }),
     // 2. retryRequestDelay - İstek tekrar deneme gecikmesi (ms)
     retryRequestDelay: 250,
-    // 3. connectTimeoutMs - Bağlantı timeout süresi (60 saniye)
-    connectTimeoutMs: 60000,
+    // 3. connectTimeoutMs - Bağlantı timeout süresi (120 saniye - fullhistory çekilirken daha uzun süre gerekebilir)
+    connectTimeoutMs: 120000,
     // 4. maxMsgRetryCount - Mesaj gönderme retry sayısı
     maxMsgRetryCount: 5,
     // ORTA ÖNCELİK - Eksik özellikler
@@ -2727,8 +2754,9 @@ export const startSocket = (instance) => {
     generateHighQualityLinkPreview: true,
     // 6. defaultQueryTimeoutMs - Varsayılan query timeout süresi (60 saniye)
     defaultQueryTimeoutMs: 60000,
-    // 7. keepAliveIntervalMs - Keep-alive ping interval (10 saniye)
-    keepAliveIntervalMs: 10000,
+    // 7. keepAliveIntervalMs - Keep-alive ping interval (30 saniye - websocket bağlantısını korumak için)
+    // 10 saniye çok sık ve WhatsApp sunucuları tarafından rate limit'e takılabilir
+    keepAliveIntervalMs: 30000,
     // 8. qrTimeout - QR kod timeout süresi (60 saniye)
     qrTimeout: 60000,
     // DÜŞÜK ÖNCELİK - Eksik özellikler

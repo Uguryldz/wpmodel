@@ -145,7 +145,7 @@ export const startConnection = async (accountId) => {
 
     // Socket'i başlat (QR üretimi burada tetiklenecek)
     try {
-      startSocket(instance);
+      await startSocket(instance);
     } catch (socketError) {
       logger.error({ error: socketError, accountId }, "Socket başlatma hatası");
       throw new Error(`Socket başlatılamadı: ${socketError.message}`);
@@ -192,7 +192,7 @@ export const requestPairingCode = async (accountId, phoneNumber) => {
   // Eğer socket yoksa, önce socket oluştur (ama QR gösterme)
   if (!instance.sock) {
     const { startSocket } = await import("./socket.js");
-    startSocket(instance);
+    await startSocket(instance);
   }
 
   // Phone number'ı temizle (+ ve () ve - karakterlerini kaldır)
