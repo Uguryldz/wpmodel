@@ -147,12 +147,18 @@ export const markChatRead = async (accountId, jid, markRead = true, lastMessage 
   const sock = ensureSocket(accountId);
   const normalizedJid = normalizeJid(jid);
   const sessionId = getAccountId(accountId);
+  const phoneMapId = await getPhoneMapIdFromSessionId(sessionId);
+  if (!phoneMapId) {
+    logger.warn({ sessionId }, "markChatRead: phoneMapId bulunamadı");
+    throw new Error("phoneMapId bulunamadı");
+  }
 
   // Eğer lastMessage verilmemişse, en son mesajı bul
   if (!lastMessage) {
     const messages = await prisma.message.findMany({
       where: {
-        sessionId,
+        //sessionId,
+        phoneMapId: phoneMapId,
         remoteJid: normalizedJid,
       },
       orderBy: { messageTimestamp: 'desc' },

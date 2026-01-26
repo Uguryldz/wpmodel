@@ -13,7 +13,7 @@ export function useContacts() {
   const [searchTerm, setSearchTerm] = useState('');
   
   const { contacts, isLoadingContacts } = state;
-  
+  const contactsArray = Array.from(contacts.values());
   /**
    * Kişileri yükle
    */
@@ -78,7 +78,8 @@ export function useContacts() {
             dispatch({ type: 'SET_CONTACTS', payload: contactsMap });
           } else if (contacts && typeof contacts === 'object') {
             // Object ise values'ları al
-            const contactsArray = Object.values(contacts);
+            //const contactsArray = Object.values(contacts);
+            
             contactsArray.forEach((contact: any) => {
               if (contact && contact.id) {
                 contactsMap.set(contact.id, contact);
@@ -155,11 +156,6 @@ export function useContacts() {
       const phoneNormalized = normalizePhoneNumber(phone);
       
       if (phoneNormalized.includes(searchNormalized) || phone.includes(search)) {
-        return true;
-      }
-      
-      // ID araması
-      if (contact.id.toLowerCase().includes(search)) {
         return true;
       }
       

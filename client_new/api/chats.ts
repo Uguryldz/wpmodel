@@ -56,7 +56,7 @@ export async function markChatRead(
   jid: string,
   read: boolean
 ): Promise<void> {
-  return apiPost(`/${sessionId}/chats/${encodeURIComponent(jid)}/read`, { read });
+  return apiPost(`/${sessionId}/chats/${encodeURIComponent(jid)}/mark-read`, { markRead: read });
 }
 
 /**

@@ -142,7 +142,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...acc,
         active: acc.id === action.payload,
       }));
-      return { ...state, accounts: newAccounts, activeAccountId: action.payload };
+      return { ...state, accounts: newAccounts, activeAccountId: action.payload, chats: [],selectedChatId: null,messages: [],contacts: new Map(), isLoadingChats: false,isLoadingMessages: false,isLoadingContacts: false,
+      };
     }
     
     case 'UPDATE_ACCOUNT': {
@@ -1474,6 +1475,8 @@ export function formatChats(
   contacts: Map<string, Contact>,
   profilePictures: Map<string, string>
 ): Chat[] {
+  
+  // Önce tüm chat'leri formatla
   return rawChats.map((chat: any) => {
     const chatId = standardizeChatId(chat.id);
     const contact = contacts.get(chatId);
@@ -1534,11 +1537,43 @@ function formatMessage(msg: any): Message {
     };
   }
   
-  // Status'u belirle (eğer yoksa)
-  let status = msg.status;
+  // Status'u belirle
+  let status = msg.status || msg.message?.status;
+  
+  // Sayısal status değerlerini string'e çevir (Prisma schema: 0=pending, 1=server_ack, 2=delivery, 3=read)
+  if (typeof status === 'number') {
+    const statusMap: Record<number, string> = {
+      0: 'pending',
+      1: 'sent',      // server_ack -> sent
+      2: 'delivered', // delivery -> delivered
+      3: 'read',      // read -> read
+    };
+    status = statusMap[status] || 'pending';
+  }
+  
+  // Status normalize et (büyük/küçük harf farkını düzelt)
+  if (status && typeof status === 'string') {
+    status = status.toLowerCase();
+  }
+  
+  // Eğer status hala yoksa, readReceipt ve deliveredReceipt property'lerini kontrol et
   if (!status && fromMe) {
-    // Kendi gönderdiğimiz mesajlar için varsayılan status
-    status = 'pending';
+    if (msg.readReceipt || msg.readTimestamp) {
+      status = 'read';
+    } else if (msg.deliveredReceipt || msg.deliveredTimestamp) {
+      status = 'delivered';
+    } else {
+      // Mesajın yaşını kontrol et
+      const messageAge = Date.now() - (timestamp > 1000000000000 ? timestamp : timestamp * 1000);
+      const oneMinuteAgo = 60 * 1000; // 1 dakika
+      
+      // Eski mesajlar için varsayılan olarak 'sent', yeni mesajlar için 'pending'
+      if (messageAge > oneMinuteAgo) {
+        status = 'sent'; // Eski mesajlar muhtemelen gönderilmiştir
+      } else {
+        status = 'pending'; // Yeni mesajlar henüz gönderiliyor olabilir
+      }
+    }
   }
   
   console.log('[AppContext] formatMessage:', {

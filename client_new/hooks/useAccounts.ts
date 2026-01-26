@@ -1,8 +1,8 @@
 // ============================================
-// useAccounts Hook
+// useAccounts Hook - FIXED VERSION
 // ============================================
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import * as api from '../api';
 import { COLORS } from '../constants';
@@ -14,10 +14,14 @@ export function useAccounts() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [isLoadingQR, setIsLoadingQR] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const [newAccountName, setNewAccountName] = useState('');
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [editingAccountName, setEditingAccountName] = useState('');
+  
+  // Hesap adını ref ile tut
+  const accountNameRef = useRef('');
   
   const { accounts, activeAccountId } = state;
   const activeAccount = accounts.find(a => a.id === activeAccountId) || accounts.find(a => a.active) || null;
@@ -111,7 +115,9 @@ export function useAccounts() {
     setShowAddModal(true);
     setQrCode(null);
     setIsLoadingQR(true);
+    setIsScanning(false);
     setNewAccountName('');
+    accountNameRef.current = '';
     
     try {
       // Unique ID oluştur
@@ -126,44 +132,105 @@ export function useAccounts() {
       if (qrValue) {
         const qrUrl = await QRCode.toDataURL(qrValue);
         setQrCode(qrUrl);
+        setIsLoadingQR(false);
       }
       
-      // SSE ile QR kod dinle
-      const unsubscribe = api.subscribeToQR(accountId, async (data) => {
-        if (data.qr || data.lastQr) {
-          const qrUrl = await QRCode.toDataURL(data.qr || data.lastQr);
-          setQrCode(qrUrl);
-          setIsLoadingQR(false);
-        }
-        
-        if (data.status === 'open') {
-          // Hesap bağlandı
-          const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
-          const accountName = newAccountName.trim() || `Hesap ${Object.keys(accountNames).length + 1}`;
-          accountNames[accountId] = accountName;
-          localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
-          
-          unsubscribe();
-          setShowAddModal(false);
-          setQrCode(null);
-          setPendingAccountId(null);
-          loadAccounts();
-          showToast('Hesap başarıyla eklendi', 'success');
-        }
-      });
+      // SSE ile QR kod dinle - DOĞRU ENDPOINT
+      const eventSource = new EventSource(`/sessions/${accountId}/add-sse`);
       
-      setIsLoadingQR(false);
+      eventSource.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[useAccounts] SSE Event:', data);
+          
+          // QR kod güncellemesi
+          if (data.qr || data.lastQr) {
+            const qrValue = data.qr || data.lastQr;
+            const qrUrl = await QRCode.toDataURL(qrValue);
+            setQrCode(qrUrl);
+            setIsLoadingQR(false);
+            setIsScanning(false);
+          }
+          
+          // QR kod tarandı - Backend'den gelen event'ler
+          // Backend "connection: 'connecting'" gönderiyor
+          if (data.connection === 'connecting' && !data.qr && !data.lastQr) {
+            console.log('[useAccounts] QR kod tarandı, bağlanıyor...');
+            setIsScanning(true);
+            setIsLoadingQR(false);
+          }
+          
+          // Hesap bağlandı - Backend "connection: 'open'" veya "status: 'open'" gönderiyor
+          if (data.status === 'open' || data.connection === 'open') {
+            console.log('[useAccounts] Hesap başarıyla bağlandı');
+            
+            // Güncel hesap adını al (ref'ten)
+            const accountNames = JSON.parse(localStorage.getItem('whatsapp_account_names') || '{}');
+            const finalAccountName = accountNameRef.current.trim() || `Hesap ${Object.keys(accountNames).length + 1}`;
+            accountNames[accountId] = finalAccountName;
+            localStorage.setItem('whatsapp_account_names', JSON.stringify(accountNames));
+            
+            // SSE'yi kapat
+            eventSource.close();
+            
+            // Modal'ı kapat
+            setIsScanning(false);
+            setShowAddModal(false);
+            setQrCode(null);
+            setPendingAccountId(null);
+            
+            // Hesapları yeniden yükle
+            await loadAccounts();
+            showToast('Hesap başarıyla eklendi', 'success');
+          }
+        } catch (error) {
+          console.error('[useAccounts] SSE Parse error:', error);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('[useAccounts] SSE Error:', error);
+        eventSource.close();
+        setIsLoadingQR(false);
+        setIsScanning(false);
+      };
+      
+      // Cleanup için SSE'yi instance'da sakla
+      (window as any).__currentSSE = eventSource;
+      
     } catch (error: any) {
       console.error('[useAccounts] Hesap ekleme hatası:', error);
       showToast(error.message || 'Hesap eklenemedi', 'error');
       setIsLoadingQR(false);
+      setIsScanning(false);
     }
-  }, [loadAccounts, newAccountName, showToast]);
+  }, [loadAccounts, showToast]);
+  
+  /**
+   * Hesap adı değiştiğinde ref'i güncelle
+   */
+  const handleAccountNameChange = useCallback((name: string) => {
+    setNewAccountName(name);
+    accountNameRef.current = name;
+  }, []);
   
   /**
    * Modal'ı kapat
    */
   const closeAddModal = useCallback(async () => {
+    // Scanning durumunda kapatmaya izin verme
+    if (isScanning) {
+      console.log('[useAccounts] Bağlantı kurulurken modal kapatılamaz');
+      showToast('Bağlantı kurulurken kapatılamaz', 'warning');
+      return;
+    }
+    
+    // SSE'yi kapat
+    if ((window as any).__currentSSE) {
+      (window as any).__currentSSE.close();
+      (window as any).__currentSSE = null;
+    }
+    
     if (pendingAccountId) {
       try {
         const status = await api.getSessionStatus(pendingAccountId);
@@ -179,7 +246,10 @@ export function useAccounts() {
     setQrCode(null);
     setPendingAccountId(null);
     setIsLoadingQR(false);
-  }, [pendingAccountId]);
+    setIsScanning(false);
+    setNewAccountName('');
+    accountNameRef.current = '';
+  }, [pendingAccountId, isScanning, showToast]);
   
   /**
    * Hesabı sil
@@ -217,7 +287,10 @@ export function useAccounts() {
     setEditingAccountId(null);
     setEditingAccountName('');
   }, [dispatch]);
-  
+  const startEditingAccount = (account: Account) => {
+    setEditingAccountId(account.id);
+    setEditingAccountName(account.name);
+  };
   /**
    * Çıkış yap
    */
@@ -238,9 +311,10 @@ export function useAccounts() {
     showAddModal,
     qrCode,
     isLoadingQR,
+    isScanning,
     pendingAccountId,
     newAccountName,
-    setNewAccountName,
+    setNewAccountName: handleAccountNameChange, // Ref'i güncelleyen versiyonu kullan
     editingAccountId,
     setEditingAccountId,
     editingAccountName,
@@ -251,7 +325,7 @@ export function useAccounts() {
     closeAddModal,
     deleteAccount,
     renameAccount,
+    startEditingAccount,
     logout,
   };
 }
-

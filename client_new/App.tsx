@@ -16,6 +16,7 @@ import {
 } from './components';
 import type { Message, Contact } from './types';
 import { cn } from './utils';
+import { sendMediaMessage } from './api/media';
 
 export function App() {
   const { state, dispatch } = useApp();
@@ -57,6 +58,51 @@ export function App() {
     } else {
       // Normal send
       await messages.sendMessage();
+    }
+  };
+  // Handle media send
+  const handleMediaSend = async (
+    file: File,
+    type: 'image' | 'video' | 'audio' | 'document',
+    caption?: string
+  ) => {
+    if (!accounts.activeAccount?.id || !chats.selectedChat?.id) {
+      console.error('Hesap veya chat seçilmemiş');
+      return;
+    }
+
+    try {
+      await sendMediaMessage(
+        accounts.activeAccount.id,
+        chats.selectedChat.id,
+        file,
+        file.type,
+        caption,
+        {
+          ptt: type === 'audio', // Sesli mesaj için
+        }
+      );
+
+      // Toast göster
+      dispatch({
+        type: 'ADD_TOAST',
+        payload: {
+          id: Date.now().toString(),
+          message: 'Medya gönderildi',
+          type: 'success',
+        },
+      });
+    } catch (error: any) {
+      console.error('Medya gönderme hatası:', error);
+      dispatch({
+        type: 'ADD_TOAST',
+        payload: {
+          id: Date.now().toString(),
+          message: error.message || 'Medya gönderilemedi',
+          type: 'error',
+        },
+      });
+      throw error;
     }
   };
   
@@ -107,23 +153,29 @@ export function App() {
         onMuteChat={chats.muteChat}
         onArchiveChat={chats.archiveChat}
         onDeleteChat={chats.deleteChat}
+        onRenameAccount={accounts.renameAccount}
+        editingAccountId={accounts.editingAccountId}
+        editingAccountName={accounts.editingAccountName}    
+        onEditingAccountNameChange={accounts.setEditingAccountName}
+        onStartEditingAccount={accounts.startEditingAccount}
       />
       
       {/* Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Chat Header */}
-        {chats.selectedChat && (
+        {/* {chats.selectedChat && (
           <ChatHeader
             chat={chats.selectedChat}
             profilePicture={state.profilePictures.get(chats.selectedChat.id)}
           />
-        )}
+        )} */}
         
         {/* Message List */}
         <MessageList
           chat={chats.selectedChat}
           messages={messages.messages}
           isLoading={messages.isLoadingMessages}
+          sessionId={accounts.activeAccount?.id}
           onReply={(msg) => setReplyingTo(msg)}
           onEdit={handleEdit}
           onDelete={(msg, forEveryone) => messages.deleteMessage(msg, forEveryone)}
@@ -134,6 +186,13 @@ export function App() {
           onStar={(msg, star) => messages.starMessage(msg, star)}
           onCopy={messages.copyMessage}
           onReaction={(msg, emoji) => messages.sendReaction(msg, emoji)}
+          onPinChat={chats.pinChat}
+          onMuteChat={chats.muteChat}
+          onArchiveChat={chats.archiveChat}
+          onDeleteChat={chats.deleteChat}
+          onSetDisappearingMessages={(chat, duration) => {
+            console.log('Set disappearing:', duration);
+          }}
         />
         
         {/* Message Input */}
@@ -142,6 +201,7 @@ export function App() {
             value={messages.messageInput}
             onChange={messages.setMessageInput}
             onSend={handleSendMessage}
+            onMediaSend={handleMediaSend}
             disabled={!accounts.activeAccount || accounts.activeAccount.status !== 'open'}
             isSending={messages.isSendingMessage}
             placeholder={
@@ -173,6 +233,7 @@ export function App() {
         isOpen={accounts.showAddModal}
         qrCode={accounts.qrCode}
         isLoading={accounts.isLoadingQR}
+        isScanning={accounts.isScanning}
         accountName={accounts.newAccountName}
         onAccountNameChange={accounts.setNewAccountName}
         onClose={accounts.closeAddModal}
@@ -214,38 +275,38 @@ export function App() {
 }
 
 // Chat Header Component
-function ChatHeader({
-  chat,
-  profilePicture,
-}: {
-  chat: { id: string; name: string; profilePicture?: string | null };
-  profilePicture?: string;
-}) {
-  return (
-    <div className="bg-gray-100 border-b px-4 py-3 flex items-center gap-3">
-      {/* Avatar */}
-      {chat.profilePicture || profilePicture ? (
-        <img
-          src={chat.profilePicture || profilePicture}
-          alt={chat.name}
-          className="w-10 h-10 rounded-full object-cover"
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-bold">
-          {chat.name.charAt(0).toUpperCase()}
-        </div>
-      )}
+// function ChatHeader({
+//   chat,
+//   profilePicture,
+// }: {
+//   chat: { id: string; name: string; profilePicture?: string | null };
+//   profilePicture?: string;
+// }) {
+//   return (
+//     <div className="bg-gray-100 border-b px-4 py-3 flex items-center gap-3">
+//       {/* Avatar */}
+//       {chat.profilePicture || profilePicture ? (
+//         <img
+//           src={chat.profilePicture || profilePicture}
+//           alt={chat.name}
+//           className="w-10 h-10 rounded-full object-cover"
+//         />
+//       ) : (
+//         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-bold">
+//           {chat.name.charAt(0).toUpperCase()}
+//         </div>
+//       )}
       
-      {/* Info */}
-      <div className="flex-1">
-        <h2 className="font-semibold text-gray-800">{chat.name}</h2>
-        <p className="text-xs text-gray-500">
-          {chat.id.includes('@g.us') ? 'Grup' : 'Kişi'}
-        </p>
-      </div>
-    </div>
-  );
-}
+//       {/* Info */}
+//       <div className="flex-1">
+//         <h2 className="font-semibold text-gray-800">{chat.name}</h2>
+//         <p className="text-xs text-gray-500">
+//           {chat.id.includes('@g.us') ? 'Grup' : 'Kişi'}
+//         </p>
+//       </div>
+//     </div>
+//   );
+// }
 
 // Connection Indicator Component
 function ConnectionIndicator({ status }: { status: string }) {
