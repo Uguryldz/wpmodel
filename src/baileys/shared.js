@@ -83,8 +83,16 @@ export const updateInstanceSessionId = (instance, whatsappJid) => {
     return instance?.id || DEFAULT_ACCOUNT_ID;
   }
   
-  const newSessionId = getSessionIdFromWhatsAppJid(whatsappJid);
   const oldSessionId = instance.id;
+  
+  // ÇOKLU HESAP DESTEĞİ: account- ile başlayan session'lar için session ID güncelleme yapma
+  // Her hesap kendi sessionId'si ile çalışmalı (account-xxx formatında)
+  if (oldSessionId.startsWith('account-')) {
+    logger.debug({ oldSessionId, whatsappJid }, "Account session ID korunuyor (çoklu hesap desteği)");
+    return oldSessionId; // Account session ID'sini koru
+  }
+  
+  const newSessionId = getSessionIdFromWhatsAppJid(whatsappJid);
   
   // Eğer yeni session ID farklıysa ve geçerli bir numara ise
   if (newSessionId !== oldSessionId && newSessionId !== DEFAULT_ACCOUNT_ID) {
@@ -141,6 +149,7 @@ export const getOrCreateInstance = (accountId) => {
       waVersion: null,
       reconnectTimer: null,
       reconnectAttempts: 0, // Baileys.wiki best practice: reconnect counter
+      connectionHealthCheckInterval: null, // Connection health check interval (uzun süreli bağlantılar için)
       chatsStore: new Map(),
       contactsStore: new Map(),
       messagesStore: new Map(),
@@ -184,21 +193,30 @@ export const removeInstance = (accountId) => {
   const instance = instances.get(id);
   if (!instance) return;
 
-  // Tüm timer'ları temizle
+  // Tüm timer'ları temizle (memory leak önleme)
   if (instance.reconnectTimer) {
     clearTimeout(instance.reconnectTimer);
+    instance.reconnectTimer = null;
+  }
+  
+  if (instance.connectionHealthCheckInterval) {
+    clearInterval(instance.connectionHealthCheckInterval);
+    instance.connectionHealthCheckInterval = null;
   }
   
   if (instance.chatsUpsertTimer) {
     clearTimeout(instance.chatsUpsertTimer);
+    instance.chatsUpsertTimer = null;
   }
   
   if (instance.syncChatsInterval) {
     clearInterval(instance.syncChatsInterval);
+    instance.syncChatsInterval = null;
   }
   
   if (instance.syncChatsTimeout) {
     clearTimeout(instance.syncChatsTimeout);
+    instance.syncChatsTimeout = null;
   }
   
   if (instance.connectionTimers) {

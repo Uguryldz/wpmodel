@@ -1,6 +1,6 @@
 // Session management functions
 import { readdir } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { rm } from "fs/promises";
 import { 
   useMultiFileAuthState, 
@@ -243,52 +243,22 @@ export const restoreSessions = async () => {
       }
     }
 
-    // Account- ile başlayan session'ları kontrol et ve bağlantı kurulmamış olanları temizle
+    // Account- ile başlayan session'ları restore et (auth_info silinmeyecek)
+    // NOT: Sistem yeniden başlatıldığında tüm account session'lar restore edilmeli
+    // Bağlantı kurulmamış olsa bile, session restore edilmeli (daha sonra bağlanabilir)
     const accountSessions = sessionIds.filter(sessionId => 
       sessionId.startsWith('account-')
     );
 
-    const accountSessionsToCleanup = [];
-    for (const accountSessionId of accountSessions) {
-      try {
-        const instance = getOrCreateInstance(accountSessionId);
-        await initBaileys(accountSessionId);
-        
-        // Kısa bir süre bekle ve bağlantı durumunu kontrol et
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Eğer WhatsApp JID yoksa (bağlantı kurulmamışsa), işaretle
-        if (!instance.whatsappJid && instance.connectionState?.status !== 'open') {
-          accountSessionsToCleanup.push(accountSessionId);
-          console.log(`[restoreSessions] 🗑️ Account session bağlantı kurulmamış, işaretlenecek: ${accountSessionId}`);
-        } else {
-          console.log(`[restoreSessions] ✅ Account session bağlantı kurulmuş, restore edilecek: ${accountSessionId}`);
-        }
-      } catch (error) {
-        // Hata varsa da işaretle (muhtemelen geçersiz session) - KVKK uyumlu
-        accountSessionsToCleanup.push(accountSessionId);
-        console.log(`[restoreSessions] 🗑️ Account session hata nedeniyle işaretlenecek: ${accountSessionId}`);
-      }
-    }
+    console.log(`[restoreSessions] ${accountSessions.length} account session bulundu, tümü restore edilecek (auth_info korunacak)`);
 
-    // Account session'ları işaretle (isDeleted=1) - KVKK uyumlu
-    for (const accountSessionId of accountSessionsToCleanup) {
-      try {
-        await deleteSession(accountSessionId);
-        console.log(`[restoreSessions] ✅ Account session işaretlendi: ${accountSessionId}`);
-      } catch (error) {
-        console.error(`[restoreSessions] ❌ Account session işaretlenemedi (${accountSessionId}):`, error);
-        logger.error({ error, sessionId: accountSessionId }, "Account session işaretlenemedi");
-      }
-    }
-
-    // Tüm geçerli session'ları restore et (temp ve bağlantı kurulmamış account session'lar hariç)
-    // Not: isDeleted=1 olan session'lar da filtrelenmeli
+    // Tüm geçerli session'ları restore et (sadece temp session'lar hariç)
+    // NOT: Account session'lar bağlantı kurulmamış olsa bile restore edilecek
     const validSessionIds = sessionIds.filter(sessionId => 
-      !tempSessionsToCleanup.includes(sessionId) && !accountSessionsToCleanup.includes(sessionId)
+      !tempSessionsToCleanup.includes(sessionId)
     );
 
-    console.log(`[restoreSessions] ${validSessionIds.length} geçerli session restore edilecek (${tempSessionsToCleanup.length} temp + ${accountSessionsToCleanup.length} account session işaretlendi - KVKK uyumlu)`);
+    console.log(`[restoreSessions] ${validSessionIds.length} geçerli session restore edilecek (${tempSessionsToCleanup.length} temp session işaretlendi - KVKK uyumlu)`);
 
     // Session'ları restore et ve WhatsApp JID'lerini topla
     const sessionsByJid = new Map(); // whatsappJid -> [sessionIds]
@@ -297,88 +267,125 @@ export const restoreSessions = async () => {
       try {
         console.log(`[restoreSessions] Session restore ediliyor: ${sessionId}`);
         await initBaileys(sessionId);
-        // Restore edilen session'lar için otomatik olarak bağlantıyı başlat
-        await startConnection(sessionId);
         
-        // Bağlantının kurulmasını bekle (maksimum 30 saniye)
         const instance = getOrCreateInstance(sessionId);
-        let waitCount = 0;
-        const maxWait = 60; // 60 * 500ms = 30 saniye
         
-        while (instance.connectionState?.status !== "open" && waitCount < maxWait) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          waitCount++;
+        // Auth state kontrolü - eğer auth state varsa (daha önce bağlanmışsa), bağlantıyı başlat
+        const hasAuthState = instance.authState?.creds?.me;
+        
+        if (hasAuthState) {
+          // Daha önce bağlanmış session - otomatik olarak bağlantıyı başlat
+          console.log(`[restoreSessions] ✅ Session daha önce bağlanmış, bağlantı başlatılıyor: ${sessionId}`);
+          await startConnection(sessionId);
           
-          // WhatsApp JID'yi kontrol et (bağlantı açıldığında set edilir)
-          if (instance.whatsappJid) {
-            if (!sessionsByJid.has(instance.whatsappJid)) {
-              sessionsByJid.set(instance.whatsappJid, []);
+          // Bağlantının kurulmasını bekle (maksimum 30 saniye)
+          let waitCount = 0;
+          const maxWait = 60; // 60 * 500ms = 30 saniye
+          
+          while (instance.connectionState?.status !== "open" && waitCount < maxWait) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            waitCount++;
+            
+            // WhatsApp JID'yi kontrol et (bağlantı açıldığında set edilir)
+            if (instance.whatsappJid) {
+              if (!sessionsByJid.has(instance.whatsappJid)) {
+                sessionsByJid.set(instance.whatsappJid, []);
+              }
+              sessionsByJid.get(instance.whatsappJid).push({
+                sessionId,
+                status: instance.connectionState?.status || "close",
+                instance,
+              });
             }
-            sessionsByJid.get(instance.whatsappJid).push({
-              sessionId,
-              status: instance.connectionState?.status || "close",
-              instance,
-            });
           }
-        }
-        
-        if (instance.connectionState?.status === "open") {
-          console.log(`[restoreSessions] ✅ Session restore edildi ve bağlantı kuruldu: ${sessionId}`);
           
-          // WhatsApp JID'yi kontrol et
-          if (instance.whatsappJid) {
-            if (!sessionsByJid.has(instance.whatsappJid)) {
-              sessionsByJid.set(instance.whatsappJid, []);
+          if (instance.connectionState?.status === "open") {
+            console.log(`[restoreSessions] ✅ Session restore edildi ve bağlantı kuruldu: ${sessionId}`);
+            
+            // WhatsApp JID'yi kontrol et
+            if (instance.whatsappJid) {
+              if (!sessionsByJid.has(instance.whatsappJid)) {
+                sessionsByJid.set(instance.whatsappJid, []);
+              }
+              sessionsByJid.get(instance.whatsappJid).push({
+                sessionId,
+                status: instance.connectionState?.status || "open",
+                instance,
+              });
             }
-            sessionsByJid.get(instance.whatsappJid).push({
-              sessionId,
-              status: instance.connectionState?.status || "open",
-              instance,
-            });
+          } else {
+            console.log(`[restoreSessions] ⚠️ Session restore edildi ama bağlantı henüz kurulmadı: ${sessionId} (durum: ${instance.connectionState?.status})`);
           }
         } else {
-          console.log(`[restoreSessions] ⚠️ Session restore edildi ama bağlantı henüz kurulmadı: ${sessionId} (durum: ${instance.connectionState?.status})`);
+          // Daha önce bağlanmamış session - sadece restore et, bağlantıyı başlatma
+          // Kullanıcı manuel olarak bağlantıyı başlatabilir
+          console.log(`[restoreSessions] ✅ Session restore edildi (henüz bağlanmamış, QR gerekli): ${sessionId}`);
+          instance.connectionState.status = "close";
         }
       } catch (error) {
         console.error(`[restoreSessions] ❌ Session restore edilemedi (${sessionId}):`, error);
         logger.error({ error, sessionId }, "Session restore edilemedi");
+        // Hata olsa bile session'ı restore et (auth_info korunacak)
+        try {
+          const instance = getOrCreateInstance(sessionId);
+          instance.connectionState.status = "error";
+          instance.connectionState.lastError = error.message || "Restore hatası";
+        } catch (innerError) {
+          logger.error({ error: innerError, sessionId }, "Instance oluşturulamadı");
+        }
       }
     }
 
-    // Aynı WhatsApp hesabı için birden fazla session varsa, eski session'ları kapat
+    // ÇOKLU HESAP DESTEĞİ: Aynı WhatsApp hesabı için birden fazla session kontrolü
+    // Account session'lar için aynı numara kontrolü yapma (her hesap kendi sessionId'si ile çalışmalı)
     for (const [whatsappJid, sessions] of sessionsByJid.entries()) {
       if (sessions.length > 1) {
-        // En iyi durumda olanı seç (open > connecting > initializing > close)
-        const statusPriority = {
-          'open': 4,
-          'connecting': 3,
-          'initializing': 2,
-          'close': 1,
-        };
+        // Account session'ları filtrele
+        const accountSessions = sessions.filter(s => s.sessionId.startsWith('account-'));
+        const nonAccountSessions = sessions.filter(s => !s.sessionId.startsWith('account-'));
         
-        sessions.sort((a, b) => {
-          const priorityA = statusPriority[a.status] || 0;
-          const priorityB = statusPriority[b.status] || 0;
-          if (priorityB !== priorityA) {
-            return priorityB - priorityA;
-          }
-          // Aynı durumdaysa, en yeni sessionId'yi seç
-          return b.sessionId.localeCompare(a.sessionId);
-        });
+        // Eğer sadece account session'lar varsa, hepsini tut (çoklu hesap desteği)
+        if (accountSessions.length === sessions.length) {
+          console.log(`[restoreSessions] ✅ Aynı WhatsApp hesabı (${whatsappJid}) için ${sessions.length} account session bulundu - hepsi tutuluyor (çoklu hesap desteği)`);
+          continue; // Account session'lar için aynı numara kontrolü yapma
+        }
         
-        const keepSession = sessions[0];
-        const closeSessions = sessions.slice(1);
+        // Account olmayan session'lar için normal mantık (en iyi durumda olanı seç)
+        const sessionsToProcess = nonAccountSessions.length > 0 ? nonAccountSessions : sessions;
         
-        console.log(`[restoreSessions] ⚠️ Aynı WhatsApp hesabı (${whatsappJid}) için ${sessions.length} session bulundu. ${keepSession.sessionId} tutuluyor, ${closeSessions.length} session kapatılıyor.`);
-        
-        for (const closeSession of closeSessions) {
-          try {
-            if (closeSession.instance && closeSession.instance.sock) {
-              await closeSession.instance.sock.logout();
-              console.log(`[restoreSessions] ✅ Eski session kapatıldı: ${closeSession.sessionId}`);
+        if (sessionsToProcess.length > 1) {
+          // En iyi durumda olanı seç (open > connecting > initializing > close)
+          const statusPriority = {
+            'open': 4,
+            'connecting': 3,
+            'initializing': 2,
+            'close': 1,
+          };
+          
+          sessionsToProcess.sort((a, b) => {
+            const priorityA = statusPriority[a.status] || 0;
+            const priorityB = statusPriority[b.status] || 0;
+            if (priorityB !== priorityA) {
+              return priorityB - priorityA;
             }
-          } catch (error) {
-            logger.error({ error, sessionId: closeSession.sessionId }, "Eski session kapatılamadı");
+            // Aynı durumdaysa, en yeni sessionId'yi seç
+            return b.sessionId.localeCompare(a.sessionId);
+          });
+          
+          const keepSession = sessionsToProcess[0];
+          const closeSessions = sessionsToProcess.slice(1);
+          
+          console.log(`[restoreSessions] ⚠️ Aynı WhatsApp hesabı (${whatsappJid}) için ${sessionsToProcess.length} non-account session bulundu. ${keepSession.sessionId} tutuluyor, ${closeSessions.length} session kapatılıyor.`);
+          
+          for (const closeSession of closeSessions) {
+            try {
+              if (closeSession.instance && closeSession.instance.sock) {
+                await closeSession.instance.sock.logout();
+                console.log(`[restoreSessions] ✅ Eski session kapatıldı: ${closeSession.sessionId}`);
+              }
+            } catch (error) {
+              logger.error({ error, sessionId: closeSession.sessionId }, "Eski session kapatılamadı");
+            }
           }
         }
       }
@@ -436,13 +443,68 @@ export const deleteSession = async (accountId) => {
 
 /**
  * Tüm session'ları listele
+ * NOT: auth_info klasöründeki tüm session'lar listelenir (isDeleted kontrolü yapılmaz)
+ * Sistem yeniden başlatıldığında tüm hesaplar otomatik geri yüklenir
  */
 export const listSessions = () => {
-  const sessions = Array.from(instances.values()).map((instance) => ({
+  // Memory'deki instance'ları al
+  const memorySessions = Array.from(instances.values()).map((instance) => ({
     id: instance?.id || null,
     status: instance?.connectionState?.status || 'close',
     whatsappJid: instance?.whatsappJid || null,
   }));
+  
+  // auth_info klasöründeki tüm session'ları da kontrol et
+  // Eğer memory'de yoksa ama auth_info'da varsa, instance oluştur
+  const authSessions = [];
+  if (existsSync(AUTH_FOLDER)) {
+    try {
+      const sessionDirs = readdirSync(AUTH_FOLDER, { withFileTypes: true });
+      const sessionIds = sessionDirs
+        .filter(dirent => dirent.isDirectory())
+        .map(dirent => dirent.name)
+        .filter(sessionId => !sessionId.startsWith('temp-')); // Temp session'ları filtrele
+      
+      for (const sessionId of sessionIds) {
+        // Eğer memory'de yoksa, instance oluştur
+        if (!instances.has(sessionId)) {
+          try {
+            const instance = getOrCreateInstance(sessionId);
+            // initBaileys çağrılmadan önce instance oluşturulmuş olur
+            // Ama bağlantı başlatılmaz (kullanıcı manuel başlatabilir)
+            authSessions.push({
+              id: instance?.id || sessionId,
+              status: instance?.connectionState?.status || 'close',
+              whatsappJid: instance?.whatsappJid || null,
+            });
+          } catch (error) {
+            // Hata olsa bile session'ı ekle
+            logger.error({ error, sessionId }, "Instance oluşturulamadı (listSessions)");
+            authSessions.push({
+              id: sessionId,
+              status: 'error',
+              whatsappJid: null,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.error({ error }, "auth_info klasörü okunamadı (listSessions)");
+    }
+  }
+  
+  // Memory ve auth_info session'larını birleştir
+  const allSessions = [...memorySessions, ...authSessions];
+  
+  // Duplicate'leri kaldır (id'ye göre)
+  const uniqueSessions = new Map();
+  for (const session of allSessions) {
+    if (session.id && !uniqueSessions.has(session.id)) {
+      uniqueSessions.set(session.id, session);
+    }
+  }
+  
+  const sessions = Array.from(uniqueSessions.values());
   
   const sessionsByWhatsAppJid = new Map();
   const sessionsWithoutJid = [];
@@ -452,6 +514,7 @@ export const listSessions = () => {
     'connecting': 3,
     'initializing': 2,
     'close': 1,
+    'error': 0,
   };
   
   for (const session of sessions) {

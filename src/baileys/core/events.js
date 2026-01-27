@@ -1863,9 +1863,42 @@ export const bindSocketEvents = (instance) => {
       connectionState.disconnectReason = null;
       // Bağlantı başarılı olduğunda reconnect counter'ı sıfırla (Baileys.wiki best practice)
       instance.reconnectAttempts = 0;
+      // Reconnect timer'ı temizle (başarılı bağlantı sonrası)
+      if (instance.reconnectTimer) {
+        clearTimeout(instance.reconnectTimer);
+        instance.reconnectTimer = null;
+      }
       // Bağlantı açıldığında chats.set event'ini beklemek için flag'i reset et
       instance.chatsSetReceived = false;
       instance.chatsUpsertTimer = null;
+      
+      // Connection health check - Uzun süreli bağlantılar için (günlerce çalışma)
+      // Her 5 dakikada bir bağlantı sağlığını kontrol et
+      if (instance.connectionHealthCheckInterval) {
+        clearInterval(instance.connectionHealthCheckInterval);
+      }
+      instance.connectionHealthCheckInterval = setInterval(() => {
+        // Bağlantı açık mı kontrol et
+        if (instance.sock && instance.connectionState?.status === 'open') {
+          try {
+            // Socket'in hala açık olduğunu kontrol et
+            // Eğer socket kapalıysa, connection.update event'i tetiklenecek
+            if (!instance.sock || !instance.sock.user) {
+              logger.warn({ sessionId }, "Connection health check: Socket kapalı görünüyor");
+              // Connection.update event'i otomatik olarak tetiklenecek
+            }
+          } catch (error) {
+            logger.error({ error, sessionId }, "Connection health check hatası");
+          }
+        } else {
+          // Bağlantı açık değilse health check'i durdur
+          if (instance.connectionHealthCheckInterval) {
+            clearInterval(instance.connectionHealthCheckInterval);
+            instance.connectionHealthCheckInterval = null;
+          }
+        }
+      }, 5 * 60 * 1000); // 5 dakika
+      
       console.log(`[${instance.id}] WhatsApp bağlantısı hazır ✅`);
       
       // WebSocket'e bildir
@@ -1884,61 +1917,87 @@ export const bindSocketEvents = (instance) => {
           instance.whatsappJid = whatsappJid;
           
           if (whatsappJid) {
-            // Session ID'yi WhatsApp numarasına göre güncelle (Türkiye formatı)
-            const newSessionId = updateInstanceSessionId(instance, whatsappJid);
-            if (newSessionId !== sessionId) {
-              logger.info({ oldSessionId: sessionId, newSessionId, whatsappJid }, "Session ID güncellendi (WhatsApp numarasına göre)");
-              
-              // Datastore'un sessionId'sini de güncelle
-              if (instance.datastore) {
-                instance.datastore.sessionId = newSessionId;
-              }
-              
-              // sessionId değişkenini güncelle (bu scope'ta kullanılan)
-              sessionId = newSessionId;
-            }
-            // Aynı WhatsApp numarası için aktif session'ları bul (memory'den)
-            const activeOldSessionId = findActiveSessionByWhatsAppJid(whatsappJid);
+            // ÇOKLU HESAP DESTEĞİ: account- ile başlayan session'lar için session ID güncelleme yapma
+            // Her hesap kendi sessionId'si ile çalışmalı (account-xxx formatında)
+            // Sadece temp- veya default session'lar için session ID güncelleme yap
+            const isAccountSession = sessionId.startsWith('account-');
             
-            // Eğer bu numara için başka bir aktif session varsa, eski session'ı kapat
-            if (activeOldSessionId && activeOldSessionId !== sessionId) {
-              logger.warn(
-                { oldSessionId: activeOldSessionId, newSessionId: sessionId, whatsappJid },
-                "Aynı WhatsApp hesabı için aktif session tespit edildi, eski session kapatılıyor"
-              );
-              
-              try {
-                const oldInstance = instances.get(activeOldSessionId);
-                if (oldInstance && oldInstance.sock) {
-                  // Eski session'ı logout yap
-                  await oldInstance.sock.logout();
-                  logger.info({ oldSessionId: activeOldSessionId }, "Eski session logout yapıldı");
+            if (!isAccountSession) {
+              // Temp veya default session için session ID'yi WhatsApp numarasına göre güncelle
+              const newSessionId = updateInstanceSessionId(instance, whatsappJid);
+              if (newSessionId !== sessionId) {
+                logger.info({ oldSessionId: sessionId, newSessionId, whatsappJid }, "Session ID güncellendi (WhatsApp numarasına göre)");
+                
+                // Datastore'un sessionId'sini de güncelle
+                if (instance.datastore) {
+                  instance.datastore.sessionId = newSessionId;
                 }
-              } catch (error) {
-                logger.error({ error, oldSessionId: activeOldSessionId }, "Eski session kapatılamadı");
+                
+                // sessionId değişkenini güncelle (bu scope'ta kullanılan)
+                sessionId = newSessionId;
               }
+            } else {
+              // Account session için session ID korunmalı (çoklu hesap desteği)
+              logger.info({ sessionId, whatsappJid }, "Account session ID korunuyor (çoklu hesap desteği)");
             }
             
-            // Aynı WhatsApp numarası için eski sessionId'yi bul (veritabanından)
-            const oldSessionId = await findSessionByWhatsAppJid(whatsappJid);
+            // ÇOKLU HESAP DESTEĞİ: Aynı WhatsApp numarası için eski session'ı kapatma mantığı
+            // Sadece aynı sessionId formatında (account- ile başlamayan) session'lar için çalışmalı
+            // Account session'lar birbirini etkilememeli
+            if (!isAccountSession) {
+              // Aynı WhatsApp numarası için aktif session'ları bul (memory'den)
+              const activeOldSessionId = findActiveSessionByWhatsAppJid(whatsappJid);
+              
+              // Eğer bu numara için başka bir aktif session varsa ve account- ile başlamıyorsa, eski session'ı kapat
+              if (activeOldSessionId && activeOldSessionId !== sessionId && !activeOldSessionId.startsWith('account-')) {
+                logger.warn(
+                  { oldSessionId: activeOldSessionId, newSessionId: sessionId, whatsappJid },
+                  "Aynı WhatsApp hesabı için aktif session tespit edildi, eski session kapatılıyor"
+                );
+                
+                try {
+                  const oldInstance = instances.get(activeOldSessionId);
+                  if (oldInstance && oldInstance.sock) {
+                    // Eski session'ı logout yap
+                    await oldInstance.sock.logout();
+                    logger.info({ oldSessionId: activeOldSessionId }, "Eski session logout yapıldı");
+                  }
+                } catch (error) {
+                  logger.error({ error, oldSessionId: activeOldSessionId }, "Eski session kapatılamadı");
+                }
+              }
+            } else {
+              // Account session için aynı numara kontrolü yapma (çoklu hesap desteği)
+              logger.debug({ sessionId, whatsappJid }, "Account session - aynı numara kontrolü atlandı (çoklu hesap desteği)");
+            }
+            
+            // ÇOKLU HESAP DESTEĞİ: Veri taşıma mantığı
+            // Account session'lar için veri taşıma yapma (her hesap kendi verileriyle çalışmalı)
+            if (!isAccountSession) {
+              // Aynı WhatsApp numarası için eski sessionId'yi bul (veritabanından)
+              const oldSessionId = await findSessionByWhatsAppJid(whatsappJid);
 
-            // Eğer bu numara için başka bir sessionId varsa, verileri taşı
-            if (oldSessionId && oldSessionId !== sessionId) {
-              logger.info(
-                { oldSessionId, newSessionId: sessionId, whatsappJid },
-                "Aynı WhatsApp hesabı için farklı sessionId tespit edildi, veriler taşınıyor"
-              );
+              // Eğer bu numara için başka bir sessionId varsa ve account- ile başlamıyorsa, verileri taşı
+              if (oldSessionId && oldSessionId !== sessionId && !oldSessionId.startsWith('account-')) {
+                logger.info(
+                  { oldSessionId, newSessionId: sessionId, whatsappJid },
+                  "Aynı WhatsApp hesabı için farklı sessionId tespit edildi, veriler taşınıyor"
+                );
 
-              // Verileri yeni sessionId'ye taşı
-              await migrateSessionData(oldSessionId, sessionId);
+                // Verileri yeni sessionId'ye taşı
+                await migrateSessionData(oldSessionId, sessionId);
 
-              // Eski sessionId mapping'ini sil
-              await prisma.session.deleteMany({
-                where: {
-                  id: { startsWith: `whatsapp-${whatsappJid}-` },
-                  sessionId: oldSessionId,
-                },
-              });
+                // Eski sessionId mapping'ini sil
+                await prisma.session.deleteMany({
+                  where: {
+                    id: { startsWith: `whatsapp-${whatsappJid}-` },
+                    sessionId: oldSessionId,
+                  },
+                });
+              }
+            } else {
+              // Account session için veri taşıma yapma (çoklu hesap desteği)
+              logger.debug({ sessionId, whatsappJid }, "Account session - veri taşıma atlandı (çoklu hesap desteği)");
             }
 
             // WhatsApp numarasını sessionId ile eşleştir
@@ -2448,6 +2507,13 @@ export const bindSocketEvents = (instance) => {
 
     if (connection === "close") {
       connectionState.status = "close";
+      
+      // Connection health check interval'ını temizle (bağlantı kapandığında)
+      if (instance.connectionHealthCheckInterval) {
+        clearInterval(instance.connectionHealthCheckInterval);
+        instance.connectionHealthCheckInterval = null;
+      }
+      
       const error = lastDisconnect?.error;
       const boomError = Boom.isBoom(error) ? error : null;
       const statusCode = boomError?.output?.statusCode;
@@ -2540,19 +2606,47 @@ export const bindSocketEvents = (instance) => {
 
       if (shouldReconnect) {
         clearTimeout(instance.reconnectTimer);
-        // Exponential backoff: 2 saniye base, her başarısız bağlantıda 2 katına çık (max 30 saniye)
-        const retryDelay = Math.min(2000 * Math.pow(2, instance.reconnectAttempts || 0), 30000);
-        instance.reconnectAttempts = (instance.reconnectAttempts || 0) + 1;
         
-        logger.info({ sessionId, retryDelay, attempt: instance.reconnectAttempts }, 
+        // Max reconnect attempts limiti (günlerce çalışma için)
+        const MAX_RECONNECT_ATTEMPTS = 10; // Max 10 deneme, sonra dur
+        const currentAttempts = instance.reconnectAttempts || 0;
+        
+        if (currentAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          logger.error({ sessionId, attempts: currentAttempts }, 
+            "Max reconnect attempts limitine ulaşıldı, yeniden bağlanma durduruldu");
+          connectionState.status = "error";
+          connectionState.lastError = `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`;
+          
+          // WebSocket'e bildir
+          if (wsBroadcastFn) {
+            wsBroadcastFn({
+              type: "connection.update",
+              sessionId,
+              connection: "close",
+              statusCode: statusCode,
+              disconnectReason: "max_reconnect_attempts",
+              shouldReconnect: false,
+              error: connectionState.lastError,
+            });
+          }
+          return;
+        }
+        
+        // Exponential backoff: 2 saniye base, her başarısız bağlantıda 2 katına çık (max 30 saniye)
+        const retryDelay = Math.min(2000 * Math.pow(2, currentAttempts), 30000);
+        instance.reconnectAttempts = currentAttempts + 1;
+        
+        logger.info({ sessionId, retryDelay, attempt: instance.reconnectAttempts, maxAttempts: MAX_RECONNECT_ATTEMPTS }, 
           "Yeniden bağlanma planlanıyor");
         
         instance.reconnectTimer = setTimeout(async () => {
-          console.log(`[${instance.id}] Yeniden bağlanma deneniyor (deneme: ${instance.reconnectAttempts})...`);
+          console.log(`[${instance.id}] Yeniden bağlanma deneniyor (deneme: ${instance.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
           try {
             await startSocket(instance);
+            // Başarılı reconnect sonrası reconnectAttempts sıfırlanacak (connection.open event'inde)
           } catch (error) {
             logger.error({ error, sessionId: instance.id }, "Yeniden bağlanma sırasında hata");
+            // Hata durumunda connection.update event'i tekrar tetiklenecek ve reconnect devam edecek
           }
         }, retryDelay);
       } else {

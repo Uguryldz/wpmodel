@@ -181,6 +181,20 @@ const wss = new WebSocketServer({
   perMessageDeflate: false,
   // WebSocket bağlantısını sürekli açık tutmak için timeout'ları artır
   maxPayload: 100 * 1024 * 1024, // 100MB max payload
+  // WebSocket upgrade timeout'u artır (reverse proxy için)
+  handshakeTimeout: 10000, // 10 saniye
+});
+
+// WebSocket server error handler - upgrade hatalarını yakala
+wss.on('error', (error) => {
+  // EPIPE ve ECONNRESET hataları normal (bağlantı kapandıktan sonra yazma denemesi)
+  if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') {
+    console.error('[WebSocket Server] ❌ WebSocket server hatası:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
+    });
+  }
 });
 
 // WebSocket bağlantılarını sakla
@@ -212,7 +226,10 @@ wss.on("connection", (ws, req) => {
           }
         }, 20000); // 20 saniye içinde pong gelmezse kapat (önceden 10 saniyeydi)
       } catch (error) {
-        console.error("[WebSocket] Ping gönderme hatası:", error);
+        // EPIPE ve ECONNRESET hataları normal (bağlantı kapandıktan sonra yazma denemesi)
+        if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') {
+          console.error("[WebSocket] Ping gönderme hatası:", error);
+        }
       }
     }
   }, 30000); // 30 saniyede bir ping gönder
@@ -226,7 +243,7 @@ wss.on("connection", (ws, req) => {
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
     wsClients.delete(ws);
     
     // Interval'leri temizle
@@ -238,10 +255,22 @@ wss.on("connection", (ws, req) => {
       clearTimeout(pongTimeout);
       pongTimeout = null;
     }
+    
+    // Normal kapanış kodları (1000, 1001) dışındaki kapanışları log'la
+    if (code !== 1000 && code !== 1001) {
+      console.log(`[WebSocket] 🔌 Bağlantı kapandı: ${code} - ${reason?.toString() || 'Neden belirtilmedi'}`);
+    }
   });
 
   ws.on("error", (error) => {
-    console.error("[WebSocket] ❌ Hata:", error);
+    // EPIPE ve ECONNRESET hataları normal (bağlantı kapandıktan sonra yazma denemesi)
+    if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') {
+      console.error("[WebSocket] ❌ Hata:", {
+        message: error.message,
+        code: error.code,
+        stack: error.stack,
+      });
+    }
     
     // Interval'leri temizle
     if (pingInterval) {
@@ -3290,6 +3319,35 @@ app.use((err, _req, res, _next) => {
       code: err.code
     })
   });
+});
+
+// Process error handler'ları src/shared.js'de tanımlı
+// Burada sadece HTTP ve WebSocket server error handler'ları var
+
+// WebSocket server error handler
+wss.on('error', (error) => {
+  console.error('[WebSocket Server] ❌ WebSocket server hatası:', {
+    message: error.message,
+    stack: error.stack,
+    name: error.name,
+    code: error.code,
+  });
+});
+
+// HTTP server error handler
+server.on('error', (error) => {
+  console.error('[HTTP Server] ❌ HTTP server hatası:', {
+    message: error.message,
+    stack: error.stack,
+    name: error.name,
+    code: error.code,
+  });
+  
+  // EADDRINUSE hatası - port zaten kullanılıyor
+  if (error.code === 'EADDRINUSE') {
+    console.error(`[HTTP Server] ⚠️ Port ${PORT} zaten kullanılıyor!`);
+    process.exit(1);
+  }
 });
 
 const start = async () => {
