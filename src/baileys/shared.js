@@ -149,6 +149,7 @@ export const getOrCreateInstance = (accountId) => {
       waVersion: null,
       reconnectTimer: null,
       reconnectAttempts: 0, // Baileys.wiki best practice: reconnect counter
+      hardResetScheduled: false, // Max reconnect sonrasında full reset planlandı mı
       connectionHealthCheckInterval: null, // Connection health check interval (uzun süreli bağlantılar için)
       chatsStore: new Map(),
       contactsStore: new Map(),

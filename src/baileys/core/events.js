@@ -18,6 +18,8 @@ import {
   saveMessages,
   saveMessagesToPrisma,
   extractText,
+  getOrCreateInstance,
+  removeInstance,
 } from "../shared.js";
 
 /**
@@ -2613,7 +2615,7 @@ export const bindSocketEvents = (instance) => {
         
         if (currentAttempts >= MAX_RECONNECT_ATTEMPTS) {
           logger.error({ sessionId, attempts: currentAttempts }, 
-            "Max reconnect attempts limitine ulaşıldı, yeniden bağlanma durduruldu");
+            "Max reconnect attempts limitine ulaşıldı, normal reconnect döngüsü durduruldu");
           connectionState.status = "error";
           connectionState.lastError = `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`;
           
@@ -2629,6 +2631,45 @@ export const bindSocketEvents = (instance) => {
               error: connectionState.lastError,
             });
           }
+
+          // Bazı durumlarda (ör: connection_closed / connection_lost / timed_out) 
+          // process restart'ı beklemek yerine instance bazlı "hard reset" deneyelim.
+          const isTransientDisconnect =
+            disconnectReason === "connection_closed" ||
+            disconnectReason === "connection_lost" ||
+            disconnectReason === "timed_out" ||
+            disconnectReason === "unavailable_service" ||
+            disconnectReason === "restart_required";
+
+          if (isTransientDisconnect && !instance.hardResetScheduled) {
+            instance.hardResetScheduled = true;
+
+            const HARD_RESET_DELAY_MS = 5000; // 5 saniye bekle, sonra full reset dene
+            logger.warn(
+              { sessionId, delayMs: HARD_RESET_DELAY_MS },
+              "Max reconnect sonrası hard reset planlandı (instance yeniden oluşturulacak)"
+            );
+
+            setTimeout(async () => {
+              try {
+                logger.info({ sessionId }, "Hard reset başlatılıyor: mevcut instance temizleniyor");
+                removeInstance(sessionId);
+
+                const newInstance = getOrCreateInstance(sessionId);
+                newInstance.hardResetScheduled = false;
+                newInstance.reconnectAttempts = 0;
+
+                logger.info({ sessionId }, "Hard reset sonrası socket yeniden başlatılıyor");
+                await startSocket(newInstance);
+              } catch (hardResetError) {
+                logger.error(
+                  { error: hardResetError, sessionId },
+                  "Hard reset sonrasında socket yeniden başlatılamadı"
+                );
+              }
+            }, HARD_RESET_DELAY_MS);
+          }
+
           return;
         }
         
